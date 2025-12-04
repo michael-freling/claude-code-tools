@@ -8,6 +8,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var templateDir string
+
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
 		os.Exit(1)
@@ -21,11 +23,22 @@ func newRootCmd() *cobra.Command {
 		Long:  `A CLI tool to generate Claude Code prompts from templates for skills, agents, and commands.`,
 	}
 
+	rootCmd.PersistentFlags().StringVarP(&templateDir, "template-dir", "t", "", "directory containing custom templates (default: use embedded templates)")
+
 	rootCmd.AddCommand(newAgentsCmd())
 	rootCmd.AddCommand(newCommandsCmd())
 	rootCmd.AddCommand(newSkillsCmd())
 
 	return rootCmd
+}
+
+func createGenerator() (*generator.Generator, error) {
+	if templateDir == "" {
+		return generator.NewGenerator()
+	}
+
+	fsys := os.DirFS(templateDir)
+	return generator.NewGeneratorWithFS(fsys)
 }
 
 func newAgentsCmd() *cobra.Command {
@@ -35,7 +48,7 @@ func newAgentsCmd() *cobra.Command {
 		Long:  `Generate prompt for a specific agent by name, or use "list" to show available agents.`,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			gen, err := generator.NewGenerator()
+			gen, err := createGenerator()
 			if err != nil {
 				return fmt.Errorf("failed to create generator: %w", err)
 			}
@@ -66,7 +79,7 @@ func newCommandsCmd() *cobra.Command {
 		Long:  `Generate prompt for a specific command by name, or use "list" to show available commands.`,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			gen, err := generator.NewGenerator()
+			gen, err := createGenerator()
 			if err != nil {
 				return fmt.Errorf("failed to create generator: %w", err)
 			}
@@ -97,7 +110,7 @@ func newSkillsCmd() *cobra.Command {
 		Long:  `Generate prompt for a specific skill by name, or use "list" to show available skills.`,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			gen, err := generator.NewGenerator()
+			gen, err := createGenerator()
 			if err != nil {
 				return fmt.Errorf("failed to create generator: %w", err)
 			}
