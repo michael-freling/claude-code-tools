@@ -1,0 +1,41 @@
+{{/* Shared rules used across agent prompt templates */}}
+
+{{define "COMMON_RULES"}}
+An subagent follows these rules at least:
+
+- Read a guideline file **.claude/docs/guideline.md**
+- Simplicity is the most important thing.
+- When installing applications, libraries, or tools, always check and use the most latest and stable version with compatibility with existing systems.
+- DO NOT IGNORE pre-commits errors and fix them properly.
+- DO NOT SKIP test failures. Fix those test cases to pass
+- DO NOT USE general terms like shared, common, utils or info for naming variables, functions, classes, tables, and so on.
+- Set proper owners and permissions instead of setting 777 to files or directories
+{{end}}
+
+{{define "CODING_RULES"}}
+- Write the code with minimal comments — only high-level explanations of purpose, architecture, or non-obvious decisions. No line-by-line comments
+- Delete assignments of the default or zero values.
+- Delete deadcodes.
+- Every error must be checked or returned.
+- **Prefer to continue or return early** than nesting code
+   - "if is bad, else is worse"
+- Reuse the existing codes as much as possible, and avoid duplicating codes.
+
+- **Use table-driven testing**
+   - Split happy and error test sets if complicated
+   - Reduces code duplication and improves maintainability
+- **Define test inputs as test case fields**, not as function arguments
+- Write code that operates identically across dev, test, and production. Avoid environment-specific logic in core logic. Use configuration or dependency injection instead of branching code. Use test doubles externally, not via conditionals in production code. No hacks, no assumptions, no global state. Always default to production-safe behavior.
+{{end}}
+
+{{define "GOLANG_RULES"}}
+- Go tests must always use want/got (never expected/actual).
+- All checks should use **assert** when the test can continue, and **require** when the test should stop.
+- Use **go.uber.org/gomock** for all mocks
+{{end}}
+
+{{define "TYPESCRIPT_RULES"}}
+- Only use useMemo when there is a real performance need—specifically when a computation is expensive or when memoization prevents unnecessary child re-renders. If useMemo isn't justified, do not add it. When you do use it, add a brief explanation of why it's needed.
+- Do not output SVG, base64, XML, or any embedded asset data. Use placeholder components or import statements only
+- Implement UI components based on a mobile-first approach
+{{end}}

@@ -1,0 +1,27 @@
+### Slash commands: feature, fix, and refactor
+
+Create following Claude Code commands, to write an instruction to Claude Code for each workflow.
+The overview of each command is following:
+
+1. **feature** command: add or update a feature.
+
+**feature and refactor commands**
+
+1. Analyze existing codebase and architecture.
+2. Create new design and plan changes for new feature or refactoring.
+3. Get a review for the design and the plan.
+4. Confirm the design, whether backward compatibility is required or not, and plan to the user to see if the plan is good. Do not start until you get an approval.
+5. Once you get an approval, make sure you update a local main branch is the same as the remote main branch. If not, recreate the local main branch.
+6. If there are multiple phases
+    1. Create an epic PR to the default branch with an empty commit.
+    2. For each phase, subagents must make each change in a worktree. New worktree msut be under `../worktrees`. And create a sub PR to the branch of the epic PR.
+    3. Fix any CI errors until CI passes. To confirm the result of CI, wait for a long time because CI is slow. For example, wait for a minute to start a job, and wait for at least every 5 minutes to complete.
+7. If there is a single phase subagents must make each change in a worktree. New worktree must be under `../worktrees`. Then create a PR and fix any CI errors until CI passes while waiting for a long time.
+
+
+#### The details of all commands.
+##### Parameters
+
+Each slach command has parameters from a user, which describes what kind of changes the user wants to make. For slash command arguments:
+- Only use $ARGUMENTS (or $1, $2 etc.) without additional explanation
+- The argument-hint in frontmatter is sufficient to guide users

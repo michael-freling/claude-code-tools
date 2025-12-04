@@ -1,0 +1,14 @@
+Create a command to create new PR from another big PR which needs to be split.
+
+The new PR should be consist of two parts of PRs:
+1. A parent PR, which has to be created at first, and probably with an empty commit against the default branch.
+2. Child PRs, that are against the parent PR. Include the link or PR number of the parent PR in the description of each child PR.
+
+After all child PRs are created, the description of a parent PR should be updated to include all of PR numbers or the links of child PRs for document purposes.
+
+Child PRs are split based on the meaningful parts of the original PR, which can be easily reviewed.
+It might be split based on a set of some commits for reviewing.
+But if the original commits contain a lot of noisy commits, each PR might be from a set of some files.
+
+Follow the following Claude Code Command rules:
+{{template "CLAUDE_CODE_COMMAND_RULES"}}

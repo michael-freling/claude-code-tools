@@ -1,0 +1,24 @@
+# Claude Code Slash Command and Skill Guidelines for Coding
+
+This is coding rules to generate Claude Codes' commands and skills.
+
+The commands and skills have to be created with following documents:
+
+## General Claude Code's slash commands and skill guides
+
+1. Create the slash commands of Claude Code by analyzing the usages and best practices on the Internet at first, including https://code.claude.com/docs/en/slash-commands
+    1. Add `$ARGUMENTS` or `$1`, `$2` for each parameter
+    2. Add `allowed-tools`, `argument-hint`, and `description` for each slash command at least.
+2. Create the skills of Claude Code by analyzing the usages and best practices on the Internet at first, including https://code.claude.com/docs/en/skills
+    1. Add `name`, `allowed-tools` and `description` frontmatter
+    2. Add `examples.md` for complex examples
+    3. Add `Version History`
+3. Ask users to install all MCP servers that users should install on each slash command or skill.
+
+
+### Slash command: document-guideline
+
+Create a Claude Code's slash command `document-guideline` to write a document `.claude/docs/guideline.md` by following codes
+
+1. Architect sub agent must analyze codebase and output a guideline
+2. Guideline must include at least an architecture, API designs, data models, design patterns, coding conventions, and coding best practices.
