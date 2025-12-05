@@ -95,7 +95,7 @@ func TestEngine_List(t *testing.T) {
 		{
 			name:     "list commands returns multiple templates",
 			itemType: ItemTypeCommand,
-			wantLen:  6,
+			wantLen:  7,
 		},
 		{
 			name:     "list skills returns multiple templates",
@@ -145,6 +145,7 @@ func TestEngine_List_ValidateKnownTemplates(t *testing.T) {
 				"refactor",
 				"document-guideline",
 				"split-pr",
+				"workflow",
 			},
 		},
 		{

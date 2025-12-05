@@ -1,0 +1,415 @@
+---
+description: Complete development workflow with iterative planning, implementation, refactoring, and PR splitting
+argument-hint: "describe the change (feature or bug fix)"
+allowed-tools: ["*"]
+---
+
+# Workflow
+
+$ARGUMENTS
+
+## Overview
+
+This command orchestrates a complete development workflow:
+
+1. **Planning**: Analyze codebase and create comprehensive plan with iterative user feedback
+2. **Implementation**: Execute changes via feature or fix workflow
+3. **Refactoring**: Apply code quality improvements
+4. **PR Split**: Split large PRs into reviewable chunks
+
+## Configuration
+
+- **Max Planning Iterations**: 5 (plan revision attempts before suggesting to pause and clarify requirements)
+
+## Prerequisites
+
+- GitHub CLI (`gh`) installed and authenticated
+- Git configured with proper credentials
+- Understanding of worktree-based development
+
+---
+
+## Phase 1: Planning (Architect Agent)
+
+### 1.1 Analyze Existing Codebase
+
+Use the software-architect agent to analyze the current codebase:
+
+- Architecture and design patterns
+- Relevant components and modules
+- Existing conventions and standards
+- Integration points and dependencies
+
+Consult `.claude/docs/guideline.md` for project-specific patterns if it exists.
+
+### 1.2 Determine Context Type
+
+Ask the user explicitly:
+
+```
+Is this a **feature** (new functionality) or a **bug fix** (fixing existing issue)?
+
+Please respond with:
+- "feature" - for new features, enhancements, or additions
+- "fix" - for bug fixes, error corrections, or issue resolutions
+```
+
+Wait for user response before proceeding.
+
+### 1.3 Create Comprehensive Plan
+
+Develop a detailed plan including:
+
+1. **Summary**: One-paragraph overview of the change
+2. **Context Type**: Feature or Bug Fix (from user response)
+3. **Architecture Changes**: Components affected, design patterns to use
+4. **Implementation Phases**: Break work into logical phases if complex
+5. **Testing Strategy**: Unit tests, integration tests, manual testing needed
+6. **Backward Compatibility**: Analysis of breaking changes (prefer breaking compatibility unless explicitly prohibited)
+7. **Risks**: Potential issues and mitigation strategies
+8. **Estimated Complexity**: Small / Medium / Large
+
+---
+
+## Phase 2: Confirmation Loop
+
+### 2.1 Present Plan to User
+
+**IMPORTANT**: Present the complete plan to the user and wait for response.
+
+Format the presentation as:
+
+```
+## Proposed Plan
+
+[Full plan contents from Phase 1.3]
+
+---
+
+**Please review the plan above and respond with:**
+- **"yes"** or **"approve"** - Approve plan and proceed to implementation
+- **"no"** or provide feedback - I'll revise the plan based on your feedback
+- **"stop"** or **"cancel"** - End the workflow
+
+Your response:
+```
+
+**Do NOT proceed** until user responds.
+
+### 2.2 Handle User Response
+
+**If user responds "yes", "approve", "ok", "lgtm", or similar approval**:
+- Proceed to Phase 3: Implementation
+
+**If user responds "no", provides feedback, or requests changes**:
+- Go to Step 2.3 (Process Feedback)
+
+**If user responds "stop", "cancel", or "exit"**:
+- End workflow gracefully
+- Summarize what was accomplished (planning phase)
+
+### 2.3 Process Feedback and Improve Plan
+
+When user provides feedback:
+
+1. **Acknowledge Feedback**: Summarize user's concerns and requested changes
+2. **Improve Plan**: Revise the plan based on feedback, specifically addressing each point raised
+3. **Track Iteration**: Increment plan version (e.g., "Plan v2", "Plan v3")
+
+### 2.4 Re-Present Improved Plan
+
+Present the revised plan with:
+- Summary of changes made in this revision
+- Explicit responses to each feedback point
+- Updated plan contents
+
+Return to Step 2.1 (wait for user response).
+
+### 2.5 Iteration Limit
+
+After 5 iterations without approval, include this note:
+
+```
+**Note**: This is revision #[N]. If the plan still doesn't meet your needs, consider:
+- Are requirements clear and specific enough?
+- Would it help to break this into smaller separate changes?
+- Should we pause and gather more information first?
+
+You can continue providing feedback, or type "stop" to pause the workflow.
+```
+
+Continue accepting feedback beyond 5 iterations if user wishes to proceed.
+
+---
+
+## Phase 3: Implementation
+
+Once the plan is approved, proceed with implementation.
+
+### 3.1 Update Local Main Branch
+
+Ensure the local main branch is synchronized with remote:
+
+```bash
+git fetch origin
+git checkout main
+git reset --hard origin/main
+```
+
+### 3.2 Set Up Development Environment
+
+Based on the approved plan phases:
+
+**If there are multiple phases:**
+
+1. Create an epic PR to the default branch with an empty commit:
+   ```bash
+   git checkout -b epic/[description]
+   git commit --allow-empty -m "Epic: [description]"
+   git push -u origin epic/[description]
+   gh pr create --title "Epic: [description]" --body "Parent PR for [description]. Child PRs will be listed here."
+   ```
+
+2. For each phase, create a git worktree under `../worktrees`:
+   ```bash
+   git worktree add ../worktrees/[description]-phase-N epic/[description]
+   cd ../worktrees/[description]-phase-N
+   git checkout -b [description]-phase-N
+   ```
+
+3. Create sub PRs targeting the epic PR branch for each phase
+
+**If there is a single phase:**
+
+1. Create a git worktree under `../worktrees` for the implementation:
+   ```bash
+   git worktree add ../worktrees/[description] main
+   cd ../worktrees/[description]
+   git checkout -b [description]
+   ```
+
+Worktree names should be descriptive of the change being made.
+
+### 3.3 Execute Implementation
+
+For each task in the approved plan, use the appropriate Software Engineer agent:
+
+a. **Write Code with Tests**
+   - Use the appropriate engineer agent (golang-engineer, typescript-engineer, etc.)
+   - Invoke the `coding` skill for iterative TDD development
+   - Implement feature code and corresponding tests
+   - Maintain consistency with existing patterns
+   - Keep changes simple and focused
+
+b. **Review Changes**
+   - Use the appropriate code reviewer agent to review implementation
+   - Validate code quality and standards
+   - Ensure tests are adequate
+
+c. **Commit Changes**
+   - Commit each incremental change before moving to next task
+   - Use descriptive commit messages
+
+### 3.4 Create GitHub PR
+
+Once all implementation is complete:
+
+1. Push changes to remote
+2. Create a GitHub Pull Request
+3. Fix any CI errors until CI passes
+
+**IMPORTANT - CI Wait Times**: CI is slow, so wait appropriately:
+- Wait for at least 1 minute for CI jobs to start
+- Wait for at least 5 minutes between checks for CI job completion
+- Do not assume CI has finished without waiting and checking actual results
+
+---
+
+## Phase 4: Refactoring
+
+After implementation completes, automatically proceed with refactoring.
+
+### 4.1 Analyze Implementation for Improvements
+
+Review the implementation changes for:
+- Code duplication (DRY violations)
+- Complex or nested logic that could be simplified
+- Opportunities for early returns
+- Dead code or unused imports
+- Missing or inadequate error handling
+- Code organization improvements
+
+**If no refactoring opportunities are found:**
+- Document "No refactoring needed - code is already clean" in the PR
+- Skip steps 4.2 and 4.3
+- Proceed directly to Phase 5 (PR Split)
+
+### 4.2 Apply Refactoring (if needed)
+
+Use the appropriate Software Engineer agent to:
+
+1. Remove code duplication
+2. Simplify complex logic
+3. Improve code organization
+4. Clean up unused code
+5. Enhance readability
+
+Follow the `coding` skill for iterative development with reviews.
+
+### 4.3 Commit and Update PR
+
+1. Commit refactoring changes with clear commit messages
+2. Push to the same PR branch
+3. Verify CI still passes after refactoring
+
+---
+
+## Phase 5: PR Split
+
+After refactoring completes, automatically check if PR should be split.
+
+### 5.1 Analyze PR Size
+
+Check the PR metrics:
+
+```bash
+gh pr view [PR_NUMBER] --json additions,deletions,changedFiles
+```
+
+### 5.2 Split Criteria
+
+**Split the PR if:**
+- Total lines changed (additions + deletions) > 100 lines, OR
+- Number of files changed > 10 files
+
+**Keep PR as-is if:**
+- Total lines changed <= 100 lines, AND
+- Number of files changed <= 10 files
+
+### 5.3 Execute PR Split (if criteria met)
+
+If splitting is needed, follow the /split-pr workflow:
+
+1. **Create Parent PR**:
+   - Create a new branch from main: `epic/[description]-split`
+   - Create an empty commit
+   - Push and create parent PR against main
+
+2. **Create Child PRs**:
+   - For each logical grouping of changes (e.g., by feature module, file type, or dependency order):
+     - Create a worktree under `../worktrees`
+     - Cherry-pick or checkout relevant changes
+     - Create child PR targeting the parent PR branch
+   - Split based on meaningful, reviewable units (each child should be independently reviewable)
+
+3. **Update Parent PR Description**:
+   - List all child PRs with their descriptions
+   - Document the review order
+   - Note that parent PR merges after all children
+
+### 5.4 Provide Summary
+
+When workflow completes, present to user:
+
+**If PR was split:**
+```
+## Workflow Complete
+
+**Parent PR**: #[number] - [title]
+**Child PRs**:
+1. #[number] - [title]
+2. #[number] - [title]
+...
+
+**Review Order**: Review child PRs in order listed, then merge parent PR last.
+```
+
+**If PR was not split:**
+```
+## Workflow Complete
+
+**PR**: #[number] - [title]
+**Status**: Ready for review
+
+The PR is under the split threshold (<=100 lines and <=10 files), kept as single PR.
+```
+
+### 5.5 Cleanup Worktrees
+
+After workflow completes (and after PRs are merged), clean up worktrees:
+
+```bash
+# List all worktrees
+git worktree list
+
+# Remove each worktree created during this workflow
+git worktree remove ../worktrees/[worktree-name]
+```
+
+---
+
+## Guidelines
+
+### General Principles
+
+- Follow general coding guidelines (DRY, fail-fast, simplicity)
+- Adhere to project-specific guidelines from `.claude/docs/guideline.md` if it exists
+- Use appropriate language/framework skills
+- Maintain test coverage
+- Prefer breaking backward compatibility unless explicitly prohibited
+
+### Subagent Usage
+
+Per project guidelines, only subagents work on tasks:
+- **Architect Agent**: Planning and design (Phase 1)
+- **Software Engineer Agents**: Implementation and refactoring (Phases 3, 4)
+- **Code Reviewer Agents**: Review between commits (Phases 3, 4)
+
+### Worktree Usage
+
+- All implementation happens in worktrees under `../worktrees`
+- Use descriptive worktree names
+- Clean up worktrees after PR is merged
+
+### CI Wait Times
+
+- Wait at least 1 minute for CI jobs to start
+- Wait at least 5 minutes between completion checks
+- Be patient - don't assume failure prematurely
+
+### Commit Messages
+
+- Use descriptive commit messages explaining the "why"
+- Reference the change context in commits
+
+---
+
+## Troubleshooting
+
+### Plan Doesn't Converge After Multiple Iterations
+
+If after 5+ iterations the plan still isn't approved:
+- Consider if requirements are clear enough
+- Break into smaller, more focused changes
+- Pause and gather more detailed specifications from stakeholders
+
+### CI Keeps Failing
+
+- Check CI logs for specific error messages
+- Fix errors one at a time
+- Ensure tests pass locally before pushing
+- Wait appropriate time between CI checks
+
+### Implementation Deviates from Plan
+
+- If significant deviation is needed, pause and update plan
+- Document why changes were necessary
+- Ensure refactoring phase addresses any introduced issues
+
+### Worktree Conflicts
+
+- Ensure main branch is up to date before creating worktrees
+- Resolve conflicts promptly
+- Keep worktree branches rebased on target branch
+
+{{template "CODING_RULES"}}

@@ -82,7 +82,7 @@ func TestGenerator_List(t *testing.T) {
 		{
 			name:     "returns available commands",
 			itemType: ItemTypeCommand,
-			wantLen:  6,
+			wantLen:  7,
 		},
 		{
 			name:     "returns available skills",
