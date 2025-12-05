@@ -131,6 +131,50 @@ func (m *MockPromptGenerator) GeneratePRSplitPrompt(metrics *PRMetrics) (string,
 	return args.String(0), args.Error(1)
 }
 
+func (m *MockPromptGenerator) GenerateFixPreCommitPrompt(errors string) (string, error) {
+	args := m.Called(errors)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockPromptGenerator) GenerateFixCIPrompt(failures string) (string, error) {
+	args := m.Called(failures)
+	return args.String(0), args.Error(1)
+}
+
+// MockPreCommitChecker is a mock implementation of PreCommitChecker
+type MockPreCommitChecker struct {
+	mock.Mock
+}
+
+func (m *MockPreCommitChecker) RunPreCommit(ctx context.Context) (*PreCommitResult, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*PreCommitResult), args.Error(1)
+}
+
+// MockCIChecker is a mock implementation of CIChecker
+type MockCIChecker struct {
+	mock.Mock
+}
+
+func (m *MockCIChecker) CheckCI(ctx context.Context, prNumber int) (*CIResult, error) {
+	args := m.Called(ctx, prNumber)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*CIResult), args.Error(1)
+}
+
+func (m *MockCIChecker) WaitForCI(ctx context.Context, prNumber int, timeout time.Duration) (*CIResult, error) {
+	args := m.Called(ctx, prNumber, timeout)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*CIResult), args.Error(1)
+}
+
 // MockOutputParser is a mock implementation of OutputParser
 type MockOutputParser struct {
 	mock.Mock
@@ -421,13 +465,13 @@ func TestOrchestrator_executeConfirmation(t *testing.T) {
 func TestOrchestrator_executeImplementation(t *testing.T) {
 	tests := []struct {
 		name          string
-		setupMocks    func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockOutputParser)
+		setupMocks    func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockOutputParser, *MockPreCommitChecker)
 		wantErr       bool
 		wantNextPhase Phase
 	}{
 		{
-			name: "successfully implements plan",
-			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser) {
+			name: "successfully implements plan with pre-commit passing",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, pc *MockPreCommitChecker) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
 				pg.On("GenerateImplementationPrompt", mock.Anything).Return("implementation prompt", nil)
@@ -438,6 +482,35 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\"}", nil)
 				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented"}, nil)
 				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
+				pc.On("RunPreCommit", mock.Anything).Return(&PreCommitResult{Passed: true}, nil)
+			},
+			wantErr:       false,
+			wantNextPhase: PhaseRefactoring,
+		},
+		{
+			name: "retries when pre-commit fails then succeeds",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, pc *MockPreCommitChecker) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
+
+				pg.On("GenerateImplementationPrompt", mock.Anything).Return("implementation prompt", nil).Once()
+				exec.On("Execute", mock.Anything, mock.Anything).Return(&ExecuteResult{
+					Output:   "```json\n{\"summary\": \"implemented\"}\n```",
+					ExitCode: 0,
+				}, nil).Times(2)
+				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\"}", nil).Times(2)
+				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented"}, nil).Times(2)
+				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil).Times(2)
+
+				pc.On("RunPreCommit", mock.Anything).Return(&PreCommitResult{
+					Passed: false,
+					Output: "check failed",
+					Errors: []string{"formatting error"},
+				}, nil).Once()
+
+				pg.On("GenerateFixPreCommitPrompt", mock.Anything).Return("fix prompt", nil).Once()
+
+				pc.On("RunPreCommit", mock.Anything).Return(&PreCommitResult{Passed: true}, nil).Once()
 			},
 			wantErr:       false,
 			wantNextPhase: PhaseRefactoring,
@@ -450,15 +523,17 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 			mockExec := new(MockClaudeExecutor)
 			mockPG := new(MockPromptGenerator)
 			mockOP := new(MockOutputParser)
+			mockPC := new(MockPreCommitChecker)
 
-			tt.setupMocks(mockSM, mockExec, mockPG, mockOP)
+			tt.setupMocks(mockSM, mockExec, mockPG, mockOP, mockPC)
 
 			o := &Orchestrator{
-				stateManager:    mockSM,
-				executor:        mockExec,
-				promptGenerator: mockPG,
-				parser:          mockOP,
-				config:          DefaultConfig("/tmp/workflows"),
+				stateManager:     mockSM,
+				executor:         mockExec,
+				promptGenerator:  mockPG,
+				parser:           mockOP,
+				config:           DefaultConfig("/tmp/workflows"),
+				preCommitChecker: mockPC,
 			}
 
 			state := &WorkflowState{
@@ -486,6 +561,7 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 			mockExec.AssertExpectations(t)
 			mockPG.AssertExpectations(t)
 			mockOP.AssertExpectations(t)
+			mockPC.AssertExpectations(t)
 		})
 	}
 }

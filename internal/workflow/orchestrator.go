@@ -13,11 +13,14 @@ import (
 
 // Config holds configuration for the orchestrator
 type Config struct {
-	BaseDir    string
-	MaxLines   int
-	MaxFiles   int
-	Timeouts   PhaseTimeouts
-	ClaudePath string
+	BaseDir         string
+	MaxLines        int
+	MaxFiles        int
+	Timeouts        PhaseTimeouts
+	ClaudePath      string
+	CICheckInterval time.Duration
+	CICheckTimeout  time.Duration
+	MaxFixAttempts  int
 }
 
 // PhaseTimeouts holds timeout durations for each phase
@@ -31,10 +34,13 @@ type PhaseTimeouts struct {
 // DefaultConfig returns default configuration
 func DefaultConfig(baseDir string) *Config {
 	return &Config{
-		BaseDir:    baseDir,
-		MaxLines:   100,
-		MaxFiles:   10,
-		ClaudePath: "claude",
+		BaseDir:         baseDir,
+		MaxLines:        100,
+		MaxFiles:        10,
+		ClaudePath:      "claude",
+		CICheckInterval: 30 * time.Second,
+		CICheckTimeout:  30 * time.Minute,
+		MaxFixAttempts:  10,
 		Timeouts: PhaseTimeouts{
 			Planning:       5 * time.Minute,
 			Implementation: 30 * time.Minute,
@@ -46,12 +52,14 @@ func DefaultConfig(baseDir string) *Config {
 
 // Orchestrator manages workflow execution
 type Orchestrator struct {
-	stateManager    StateManager
-	executor        ClaudeExecutor
-	promptGenerator PromptGenerator
-	parser          OutputParser
-	config          *Config
-	confirmFunc     func(plan *Plan) (bool, string, error)
+	stateManager     StateManager
+	executor         ClaudeExecutor
+	promptGenerator  PromptGenerator
+	parser           OutputParser
+	config           *Config
+	confirmFunc      func(plan *Plan) (bool, string, error)
+	preCommitChecker PreCommitChecker
+	ciChecker        CIChecker
 }
 
 // NewOrchestrator creates orchestrator with default config
@@ -77,14 +85,18 @@ func NewOrchestratorWithConfig(config *Config) (*Orchestrator, error) {
 	executor := NewClaudeExecutorWithPath(config.ClaudePath)
 	stateManager := NewStateManager(config.BaseDir)
 	parser := NewOutputParser()
+	preCommitChecker := NewPreCommitChecker(config.BaseDir)
+	ciChecker := NewCIChecker(config.BaseDir, config.CICheckInterval)
 
 	return &Orchestrator{
-		stateManager:    stateManager,
-		executor:        executor,
-		promptGenerator: promptGen,
-		parser:          parser,
-		config:          config,
-		confirmFunc:     defaultConfirmFunc,
+		stateManager:     stateManager,
+		executor:         executor,
+		promptGenerator:  promptGen,
+		parser:           parser,
+		config:           config,
+		confirmFunc:      defaultConfirmFunc,
+		preCommitChecker: preCommitChecker,
+		ciChecker:        ciChecker,
 	}, nil
 }
 
@@ -305,13 +317,12 @@ func (o *Orchestrator) executeConfirmation(ctx context.Context, state *WorkflowS
 	return o.transitionPhase(state, PhaseImplementation)
 }
 
-// executeImplementation runs the implementation phase
+// executeImplementation runs the implementation phase with error-fixing loop
 func (o *Orchestrator) executeImplementation(ctx context.Context, state *WorkflowState) error {
 	fmt.Printf("\n%s\n", Bold(FormatPhase(PhaseImplementation, 5)))
 	fmt.Println(strings.Repeat("-", len(FormatPhase(PhaseImplementation, 5))))
 
 	phaseState := state.Phases[PhaseImplementation]
-	phaseState.Attempts++
 	now := time.Now()
 	phaseState.StartedAt = &now
 
@@ -324,53 +335,91 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 		return o.failWorkflow(state, fmt.Errorf("failed to load plan: %w", err))
 	}
 
-	prompt, err := o.promptGenerator.GenerateImplementationPrompt(plan)
-	if err != nil {
-		return o.failWorkflow(state, fmt.Errorf("failed to generate implementation prompt: %w", err))
+	var lastError string
+	for attempt := 1; attempt <= o.config.MaxFixAttempts; attempt++ {
+		phaseState.Attempts = attempt
+
+		var prompt string
+		if attempt == 1 {
+			prompt, err = o.promptGenerator.GenerateImplementationPrompt(plan)
+			if err != nil {
+				return o.failWorkflow(state, fmt.Errorf("failed to generate implementation prompt: %w", err))
+			}
+		} else {
+			prompt, err = o.promptGenerator.GenerateFixPreCommitPrompt(lastError)
+			if err != nil {
+				return o.failWorkflow(state, fmt.Errorf("failed to generate fix prompt: %w", err))
+			}
+			fmt.Printf("\n%s Attempt %d/%d to fix pre-commit errors\n", Yellow("⚠"), attempt, o.config.MaxFixAttempts)
+		}
+
+		spinner := NewSpinner("Implementing changes...")
+		spinner.Start()
+
+		result, err := o.executor.Execute(ctx, ExecuteConfig{
+			Prompt:  prompt,
+			Timeout: o.config.Timeouts.Implementation,
+		})
+
+		if err != nil {
+			spinner.Fail("Implementation failed")
+			return o.failWorkflow(state, fmt.Errorf("failed to execute implementation: %w", err))
+		}
+
+		jsonStr, err := o.parser.ExtractJSON(result.Output)
+		if err != nil {
+			spinner.Fail("Failed to parse implementation output")
+			return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from implementation output: %w", err))
+		}
+
+		summary, err := o.parser.ParseImplementationSummary(jsonStr)
+		if err != nil {
+			spinner.Fail("Failed to parse implementation summary")
+			return o.failWorkflow(state, fmt.Errorf("failed to parse implementation summary: %w", err))
+		}
+
+		if err := o.stateManager.SavePhaseOutput(state.Name, PhaseImplementation, summary); err != nil {
+			spinner.Fail("Failed to save implementation output")
+			return o.failWorkflow(state, fmt.Errorf("failed to save implementation output: %w", err))
+		}
+
+		spinner.Success("Implementation complete")
+
+		checkSpinner := NewSpinner("Running pre-commit checks...")
+		checkSpinner.Start()
+
+		preCommitResult, err := o.preCommitChecker.RunPreCommit(ctx)
+		if err != nil {
+			checkSpinner.Fail("Pre-commit check failed")
+			return o.failWorkflow(state, fmt.Errorf("failed to run pre-commit: %w", err))
+		}
+
+		if preCommitResult.Passed {
+			checkSpinner.Success("Pre-commit checks passed")
+			return o.transitionPhase(state, PhaseRefactoring)
+		}
+
+		checkSpinner.Fail("Pre-commit checks failed")
+		lastError = formatPreCommitErrors(preCommitResult)
+		fmt.Println(Red("\nPre-commit errors:"))
+		for _, errMsg := range preCommitResult.Errors {
+			fmt.Printf("  %s %s\n", Red("✗"), errMsg)
+		}
+
+		if err := o.stateManager.SaveState(state.Name, state); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
 	}
 
-	spinner := NewSpinner("Implementing changes...")
-	spinner.Start()
-
-	result, err := o.executor.Execute(ctx, ExecuteConfig{
-		Prompt:  prompt,
-		Timeout: o.config.Timeouts.Implementation,
-	})
-
-	if err != nil {
-		spinner.Fail("Implementation failed")
-		return o.failWorkflow(state, fmt.Errorf("failed to execute implementation: %w", err))
-	}
-
-	jsonStr, err := o.parser.ExtractJSON(result.Output)
-	if err != nil {
-		spinner.Fail("Failed to parse implementation output")
-		return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from implementation output: %w", err))
-	}
-
-	summary, err := o.parser.ParseImplementationSummary(jsonStr)
-	if err != nil {
-		spinner.Fail("Failed to parse implementation summary")
-		return o.failWorkflow(state, fmt.Errorf("failed to parse implementation summary: %w", err))
-	}
-
-	if err := o.stateManager.SavePhaseOutput(state.Name, PhaseImplementation, summary); err != nil {
-		spinner.Fail("Failed to save implementation output")
-		return o.failWorkflow(state, fmt.Errorf("failed to save implementation output: %w", err))
-	}
-
-	spinner.Success("Implementation complete")
-
-	return o.transitionPhase(state, PhaseRefactoring)
+	return o.failWorkflow(state, fmt.Errorf("exceeded maximum fix attempts (%d) for pre-commit errors", o.config.MaxFixAttempts))
 }
 
-// executeRefactoring runs the refactoring phase
+// executeRefactoring runs the refactoring phase with error-fixing loop
 func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowState) error {
 	fmt.Printf("\n%s\n", Bold(FormatPhase(PhaseRefactoring, 5)))
 	fmt.Println(strings.Repeat("-", len(FormatPhase(PhaseRefactoring, 5))))
 
 	phaseState := state.Phases[PhaseRefactoring]
-	phaseState.Attempts++
 	now := time.Now()
 	phaseState.StartedAt = &now
 
@@ -383,42 +432,85 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 		return o.failWorkflow(state, fmt.Errorf("failed to load plan: %w", err))
 	}
 
-	prompt, err := o.promptGenerator.GenerateRefactoringPrompt(plan)
-	if err != nil {
-		return o.failWorkflow(state, fmt.Errorf("failed to generate refactoring prompt: %w", err))
+	var lastError string
+	for attempt := 1; attempt <= o.config.MaxFixAttempts; attempt++ {
+		phaseState.Attempts = attempt
+
+		var prompt string
+		if attempt == 1 {
+			prompt, err = o.promptGenerator.GenerateRefactoringPrompt(plan)
+			if err != nil {
+				return o.failWorkflow(state, fmt.Errorf("failed to generate refactoring prompt: %w", err))
+			}
+		} else {
+			prompt, err = o.promptGenerator.GenerateFixPreCommitPrompt(lastError)
+			if err != nil {
+				return o.failWorkflow(state, fmt.Errorf("failed to generate fix prompt: %w", err))
+			}
+			fmt.Printf("\n%s Attempt %d/%d to fix pre-commit errors\n", Yellow("⚠"), attempt, o.config.MaxFixAttempts)
+		}
+
+		spinner := NewSpinner("Refactoring code...")
+		spinner.Start()
+
+		result, err := o.executor.Execute(ctx, ExecuteConfig{
+			Prompt:  prompt,
+			Timeout: o.config.Timeouts.Refactoring,
+		})
+
+		if err != nil {
+			spinner.Fail("Refactoring failed")
+			return o.failWorkflow(state, fmt.Errorf("failed to execute refactoring: %w", err))
+		}
+
+		jsonStr, err := o.parser.ExtractJSON(result.Output)
+		if err != nil {
+			spinner.Fail("Failed to parse refactoring output")
+			return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from refactoring output: %w", err))
+		}
+
+		summary, err := o.parser.ParseRefactoringSummary(jsonStr)
+		if err != nil {
+			spinner.Fail("Failed to parse refactoring summary")
+			return o.failWorkflow(state, fmt.Errorf("failed to parse refactoring summary: %w", err))
+		}
+
+		if err := o.stateManager.SavePhaseOutput(state.Name, PhaseRefactoring, summary); err != nil {
+			spinner.Fail("Failed to save refactoring output")
+			return o.failWorkflow(state, fmt.Errorf("failed to save refactoring output: %w", err))
+		}
+
+		spinner.Success("Refactoring complete")
+
+		checkSpinner := NewSpinner("Running pre-commit checks...")
+		checkSpinner.Start()
+
+		preCommitResult, err := o.preCommitChecker.RunPreCommit(ctx)
+		if err != nil {
+			checkSpinner.Fail("Pre-commit check failed")
+			return o.failWorkflow(state, fmt.Errorf("failed to run pre-commit: %w", err))
+		}
+
+		if preCommitResult.Passed {
+			checkSpinner.Success("Pre-commit checks passed")
+			break
+		}
+
+		checkSpinner.Fail("Pre-commit checks failed")
+		lastError = formatPreCommitErrors(preCommitResult)
+		fmt.Println(Red("\nPre-commit errors:"))
+		for _, errMsg := range preCommitResult.Errors {
+			fmt.Printf("  %s %s\n", Red("✗"), errMsg)
+		}
+
+		if err := o.stateManager.SaveState(state.Name, state); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+
+		if attempt == o.config.MaxFixAttempts {
+			return o.failWorkflow(state, fmt.Errorf("exceeded maximum fix attempts (%d) for pre-commit errors", o.config.MaxFixAttempts))
+		}
 	}
-
-	spinner := NewSpinner("Refactoring code...")
-	spinner.Start()
-
-	result, err := o.executor.Execute(ctx, ExecuteConfig{
-		Prompt:  prompt,
-		Timeout: o.config.Timeouts.Refactoring,
-	})
-
-	if err != nil {
-		spinner.Fail("Refactoring failed")
-		return o.failWorkflow(state, fmt.Errorf("failed to execute refactoring: %w", err))
-	}
-
-	jsonStr, err := o.parser.ExtractJSON(result.Output)
-	if err != nil {
-		spinner.Fail("Failed to parse refactoring output")
-		return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from refactoring output: %w", err))
-	}
-
-	summary, err := o.parser.ParseRefactoringSummary(jsonStr)
-	if err != nil {
-		spinner.Fail("Failed to parse refactoring summary")
-		return o.failWorkflow(state, fmt.Errorf("failed to parse refactoring summary: %w", err))
-	}
-
-	if err := o.stateManager.SavePhaseOutput(state.Name, PhaseRefactoring, summary); err != nil {
-		spinner.Fail("Failed to save refactoring output")
-		return o.failWorkflow(state, fmt.Errorf("failed to save refactoring output: %w", err))
-	}
-
-	spinner.Success("Refactoring complete")
 
 	metrics, err := o.getPRMetrics(ctx)
 	if err != nil {
@@ -659,4 +751,18 @@ func defaultConfirmFunc(plan *Plan) (bool, string, error) {
 	fmt.Println(Green("✓") + " Feedback received. Replanning with your suggestions...")
 
 	return false, feedback, nil
+}
+
+// formatPreCommitErrors formats pre-commit errors for the fix prompt
+func formatPreCommitErrors(result *PreCommitResult) string {
+	var builder strings.Builder
+	builder.WriteString("Pre-commit checks failed with the following errors:\n\n")
+	builder.WriteString(result.Output)
+	builder.WriteString("\n\nErrors detected:\n")
+	for _, err := range result.Errors {
+		builder.WriteString("- ")
+		builder.WriteString(err)
+		builder.WriteString("\n")
+	}
+	return builder.String()
 }

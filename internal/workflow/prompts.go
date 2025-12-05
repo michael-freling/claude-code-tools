@@ -14,6 +14,8 @@ type PromptGenerator interface {
 	GenerateImplementationPrompt(plan *Plan) (string, error)
 	GenerateRefactoringPrompt(plan *Plan) (string, error)
 	GeneratePRSplitPrompt(metrics *PRMetrics) (string, error)
+	GenerateFixPreCommitPrompt(errors string) (string, error)
+	GenerateFixCIPrompt(failures string) (string, error)
 }
 
 type promptGenerator struct {
@@ -40,6 +42,8 @@ func (p *promptGenerator) loadTemplates() error {
 		"implementation.tmpl",
 		"refactoring.tmpl",
 		"pr-split.tmpl",
+		"fix-precommit.tmpl",
+		"fix-ci.tmpl",
 	}
 
 	for _, name := range templateNames {
@@ -137,6 +141,44 @@ func (p *promptGenerator) GeneratePRSplitPrompt(metrics *PRMetrics) (string, err
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, metrics); err != nil {
 		return "", fmt.Errorf("failed to execute pr-split template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+// GenerateFixPreCommitPrompt generates a prompt for fixing pre-commit errors
+func (p *promptGenerator) GenerateFixPreCommitPrompt(errors string) (string, error) {
+	if errors == "" {
+		return "", fmt.Errorf("errors cannot be empty")
+	}
+
+	tmpl, ok := p.templates["fix-precommit.tmpl"]
+	if !ok {
+		return "", fmt.Errorf("fix-precommit template not loaded")
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, errors); err != nil {
+		return "", fmt.Errorf("failed to execute fix-precommit template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+// GenerateFixCIPrompt generates a prompt for fixing CI failures
+func (p *promptGenerator) GenerateFixCIPrompt(failures string) (string, error) {
+	if failures == "" {
+		return "", fmt.Errorf("failures cannot be empty")
+	}
+
+	tmpl, ok := p.templates["fix-ci.tmpl"]
+	if !ok {
+		return "", fmt.Errorf("fix-ci template not loaded")
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, failures); err != nil {
+		return "", fmt.Errorf("failed to execute fix-ci template: %w", err)
 	}
 
 	return buf.String(), nil
