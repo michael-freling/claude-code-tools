@@ -1,0 +1,57 @@
+You are implementing the following plan:
+
+## Plan Summary
+{{.Summary}}
+
+## Architecture
+{{.Architecture.Overview}}
+
+Components:
+{{range .Architecture.Components}}- {{.}}
+{{end}}
+
+## Phases
+{{range .Phases}}
+### {{.Name}}
+{{.Description}}
+Estimated: {{.EstimatedFiles}} files, {{.EstimatedLines}} lines
+{{end}}
+
+## Work Streams
+{{range .WorkStreams}}
+### {{.Name}}
+{{range .Tasks}}- {{.}}
+{{end}}{{if .DependsOn}}
+Dependencies: {{range .DependsOn}}{{.}} {{end}}
+{{end}}
+{{end}}
+
+## Risks to Consider
+{{range .Risks}}- {{.}}
+{{end}}
+
+## Instructions
+1. Implement all components according to the plan
+2. Follow existing codebase patterns and conventions
+3. Write comprehensive tests for all new code
+4. Ensure all error cases are handled
+5. Add appropriate documentation
+
+## Output Format
+After completing the implementation, output a summary as JSON in a code block:
+```json
+{
+  "filesChanged": ["file1.go", "file2.go"],
+  "linesAdded": 350,
+  "linesRemoved": 20,
+  "testsAdded": 15,
+  "summary": "Brief summary of what was implemented",
+  "nextSteps": ["optional", "next", "steps"]
+}
+```
+
+Focus on:
+- Clean, maintainable code
+- Comprehensive error handling
+- Table-driven tests with good coverage
+- Clear comments only where necessary

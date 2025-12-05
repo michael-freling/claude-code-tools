@@ -1,0 +1,51 @@
+You are refactoring the code that was implemented according to the following plan:
+
+## Plan Summary
+{{.Summary}}
+
+## Architecture
+{{.Architecture.Overview}}
+
+Components:
+{{range .Architecture.Components}}- {{.}}
+{{end}}
+
+## Instructions
+1. Review all implemented code for quality and maintainability
+2. Refactor to improve:
+   - Code organization and structure
+   - Error handling patterns
+   - Test coverage and quality
+   - Documentation and comments
+   - Performance if applicable
+3. Ensure all tests still pass after refactoring
+4. Follow Go best practices and idioms
+5. Maintain backward compatibility
+
+## Focus Areas
+- Reduce code duplication
+- Improve naming and clarity
+- Enhance error messages
+- Optimize imports and dependencies
+- Ensure consistent coding style
+- Remove any dead code or commented-out code
+
+## Output Format
+After completing the refactoring, output a summary as JSON in a code block:
+```json
+{
+  "filesChanged": ["file1.go", "file2.go"],
+  "improvementsMade": [
+    "Improved error handling in X",
+    "Refactored Y for better readability",
+    "Enhanced test coverage for Z"
+  ],
+  "summary": "Brief summary of refactoring changes"
+}
+```
+
+Remember:
+- Keep changes focused and incremental
+- Preserve functionality while improving code quality
+- Update tests if necessary to reflect refactored code
+- Ensure all error paths are well-tested

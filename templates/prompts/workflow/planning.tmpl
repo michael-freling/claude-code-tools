@@ -1,0 +1,57 @@
+You are analyzing a codebase to create an implementation plan.
+
+## Task
+Type: {{.Type}}
+Description: {{.Description}}
+{{if .Feedback}}
+## Previous Feedback
+The following feedback was provided on the previous plan:
+{{range .Feedback}}- {{.}}
+{{end}}
+Please address this feedback in your updated plan.
+{{end}}
+
+## Instructions
+1. Analyze the codebase structure and patterns
+2. Design the implementation approach
+3. Break down into phases with estimates
+4. Identify potential risks and challenges
+5. Ensure the plan is thorough but realistic
+
+## Output Format
+Output your plan as JSON in a code block:
+```json
+{
+  "summary": "A one paragraph summary of what will be implemented",
+  "contextType": "{{.Type}}",
+  "architecture": {
+    "overview": "High-level architectural approach and design decisions",
+    "components": ["list", "of", "key", "components"]
+  },
+  "phases": [
+    {
+      "name": "Phase name",
+      "description": "What this phase accomplishes",
+      "estimatedFiles": 5,
+      "estimatedLines": 100
+    }
+  ],
+  "workStreams": [
+    {
+      "name": "Work stream name",
+      "tasks": ["task 1", "task 2"],
+      "dependsOn": ["optional", "dependencies"]
+    }
+  ],
+  "risks": ["risk 1", "risk 2"],
+  "complexity": "small|medium|large",
+  "estimatedTotalLines": 300,
+  "estimatedTotalFiles": 10
+}
+```
+
+Be thorough but realistic in your estimates. Consider:
+- Code complexity and patterns already in the codebase
+- Testing requirements
+- Documentation needs
+- Integration with existing systems

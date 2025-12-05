@@ -1,0 +1,62 @@
+You need to split the current changes into multiple pull requests for easier review.
+
+## Change Metrics
+- Lines Changed: {{.LinesChanged}}
+- Files Changed: {{.FilesChanged}}
+
+{{if .FilesAdded}}
+### Files Added
+{{range .FilesAdded}}- {{.}}
+{{end}}
+{{end}}
+
+{{if .FilesModified}}
+### Files Modified
+{{range .FilesModified}}- {{.}}
+{{end}}
+{{end}}
+
+{{if .FilesDeleted}}
+### Files Deleted
+{{range .FilesDeleted}}- {{.}}
+{{end}}
+{{end}}
+
+## Instructions
+1. Analyze the changes and identify logical groups
+2. Create a parent PR that will track the overall feature
+3. Split changes into child PRs that:
+   - Are independently reviewable
+   - Have clear boundaries
+   - Can be merged sequentially
+   - Each address a specific aspect of the change
+
+## Guidelines
+- Each child PR should be <100 lines or <10 files when possible
+- Child PRs should have dependencies in the right order
+- Parent PR should reference all child PRs
+- Each PR should have a clear, descriptive title and description
+
+## Output Format
+Output the PR split plan as JSON in a code block:
+```json
+{
+  "parentPR": {
+    "number": 0,
+    "url": "",
+    "title": "Parent PR title describing the overall feature",
+    "description": "Parent PR description with links to child PRs"
+  },
+  "childPRs": [
+    {
+      "number": 0,
+      "url": "",
+      "title": "Child PR 1 title",
+      "description": "Child PR 1 description"
+    }
+  ],
+  "summary": "Brief summary of the split strategy"
+}
+```
+
+After creating the PRs, fill in the actual PR numbers and URLs in the JSON output.
