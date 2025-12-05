@@ -97,15 +97,12 @@ func newStartCmd() *cobra.Command {
 				return fmt.Errorf("failed to create orchestrator: %w", err)
 			}
 
-			fmt.Printf("Starting workflow '%s' (type: %s)...\n", name, workflowType)
-			fmt.Printf("Description: %s\n\n", description)
-
 			ctx := context.Background()
 			if err := orchestrator.Start(ctx, name, description, wfType); err != nil {
-				return fmt.Errorf("workflow failed: %w", err)
+				fmt.Printf("\n%s %s\n", workflow.Red("✗"), err.Error())
+				return err
 			}
 
-			fmt.Printf("\nWorkflow '%s' completed successfully!\n", name)
 			return nil
 		},
 	}
@@ -134,17 +131,34 @@ func newListCmd() *cobra.Command {
 			}
 
 			if len(workflows) == 0 {
-				fmt.Println("No workflows found.")
+				fmt.Println(workflow.Yellow("No workflows found."))
 				return nil
 			}
 
-			fmt.Println("NAME\tTYPE\tPHASE\tSTATUS\tCREATED\tUPDATED")
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\n",
+				workflow.Bold("NAME"),
+				workflow.Bold("TYPE"),
+				workflow.Bold("PHASE"),
+				workflow.Bold("STATUS"),
+				workflow.Bold("CREATED"),
+				workflow.Bold("UPDATED"),
+			)
 			for _, wf := range workflows {
+				statusStr := wf.Status
+				switch wf.Status {
+				case "completed":
+					statusStr = workflow.Green(wf.Status)
+				case "failed":
+					statusStr = workflow.Red(wf.Status)
+				default:
+					statusStr = workflow.Yellow(wf.Status)
+				}
+
 				fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\n",
 					wf.Name,
 					wf.Type,
 					wf.CurrentPhase,
-					wf.Status,
+					statusStr,
 					wf.CreatedAt.Format("2006-01-02 15:04"),
 					wf.UpdatedAt.Format("2006-01-02 15:04"),
 				)
@@ -174,69 +188,7 @@ func newStatusCmd() *cobra.Command {
 				return fmt.Errorf("failed to get workflow status: %w", err)
 			}
 
-			fmt.Printf("Workflow: %s\n", state.Name)
-			fmt.Printf("Type: %s\n", state.Type)
-			fmt.Printf("Description: %s\n", state.Description)
-			fmt.Printf("Current Phase: %s\n", state.CurrentPhase)
-			fmt.Printf("Created: %s\n", state.CreatedAt.Format("2006-01-02 15:04:05"))
-			fmt.Printf("Updated: %s\n\n", state.UpdatedAt.Format("2006-01-02 15:04:05"))
-
-			fmt.Println("Phases:")
-			phases := []workflow.Phase{
-				workflow.PhasePlanning,
-				workflow.PhaseConfirmation,
-				workflow.PhaseImplementation,
-				workflow.PhaseRefactoring,
-				workflow.PhasePRSplit,
-			}
-
-			for _, phase := range phases {
-				phaseState := state.Phases[phase]
-				if phaseState == nil {
-					continue
-				}
-
-				fmt.Printf("  %s: %s", phase, phaseState.Status)
-				if phaseState.Attempts > 0 {
-					fmt.Printf(" (attempts: %d)", phaseState.Attempts)
-				}
-				if phaseState.StartedAt != nil {
-					fmt.Printf(" - started: %s", phaseState.StartedAt.Format("15:04:05"))
-				}
-				if phaseState.CompletedAt != nil {
-					fmt.Printf(" - completed: %s", phaseState.CompletedAt.Format("15:04:05"))
-				}
-				fmt.Println()
-
-				if len(phaseState.Feedback) > 0 {
-					fmt.Println("    Feedback:")
-					for _, fb := range phaseState.Feedback {
-						fmt.Printf("      - %s\n", fb)
-					}
-				}
-
-				if phaseState.Metrics != nil {
-					fmt.Printf("    Metrics: %d lines, %d files\n",
-						phaseState.Metrics.LinesChanged,
-						phaseState.Metrics.FilesChanged,
-					)
-				}
-			}
-
-			if state.Error != nil {
-				fmt.Printf("\nError: %s\n", state.Error.Message)
-				fmt.Printf("Phase: %s\n", state.Error.Phase)
-				fmt.Printf("Timestamp: %s\n", state.Error.Timestamp.Format("2006-01-02 15:04:05"))
-				fmt.Printf("Recoverable: %v\n", state.Error.Recoverable)
-			}
-
-			plan, err := orchestrator.Status(name)
-			if err == nil && plan != nil {
-				planPath := fmt.Sprintf("%s/%s/plan.json", baseDir, name)
-				if _, err := os.Stat(planPath); err == nil {
-					fmt.Printf("\nPlan: %s\n", planPath)
-				}
-			}
+			fmt.Println(workflow.FormatWorkflowStatus(state))
 
 			return nil
 		},
@@ -257,14 +209,12 @@ func newResumeCmd() *cobra.Command {
 				return fmt.Errorf("failed to create orchestrator: %w", err)
 			}
 
-			fmt.Printf("Resuming workflow '%s'...\n\n", name)
-
 			ctx := context.Background()
 			if err := orchestrator.Resume(ctx, name); err != nil {
-				return fmt.Errorf("workflow failed: %w", err)
+				fmt.Printf("\n%s %s\n", workflow.Red("✗"), err.Error())
+				return err
 			}
 
-			fmt.Printf("\nWorkflow '%s' completed successfully!\n", name)
 			return nil
 		},
 	}
@@ -287,11 +237,11 @@ func newDeleteCmd() *cobra.Command {
 			}
 
 			if !force {
-				fmt.Printf("Are you sure you want to delete workflow '%s'? (y/n): ", name)
+				fmt.Printf("%s ", workflow.Yellow("Are you sure you want to delete workflow '"+name+"'? (y/n):"))
 				var response string
 				fmt.Scanln(&response)
 				if response != "y" && response != "yes" {
-					fmt.Println("Deletion cancelled.")
+					fmt.Println(workflow.Yellow("Deletion cancelled."))
 					return nil
 				}
 			}
@@ -300,7 +250,7 @@ func newDeleteCmd() *cobra.Command {
 				return fmt.Errorf("failed to delete workflow: %w", err)
 			}
 
-			fmt.Printf("Workflow '%s' deleted successfully.\n", name)
+			fmt.Printf("%s Workflow '%s' deleted successfully.\n", workflow.Green("✓"), name)
 			return nil
 		},
 	}
@@ -337,21 +287,21 @@ func newCleanCmd() *cobra.Command {
 			}
 
 			if len(completedWorkflows) == 0 {
-				fmt.Println("No completed workflows to clean.")
+				fmt.Println(workflow.Yellow("No completed workflows to clean."))
 				return nil
 			}
 
-			fmt.Printf("Found %d completed workflow(s):\n", len(completedWorkflows))
+			fmt.Printf("%s Found %d completed workflow(s):\n", workflow.Cyan("ℹ"), len(completedWorkflows))
 			for _, name := range completedWorkflows {
-				fmt.Printf("  - %s\n", name)
+				fmt.Printf("  %s %s\n", workflow.Green("✓"), name)
 			}
 
 			if !force {
-				fmt.Print("\nDelete all completed workflows? (y/n): ")
+				fmt.Print(workflow.Yellow("\nDelete all completed workflows? (y/n): "))
 				var response string
 				fmt.Scanln(&response)
 				if response != "y" && response != "yes" {
-					fmt.Println("Clean cancelled.")
+					fmt.Println(workflow.Yellow("Clean cancelled."))
 					return nil
 				}
 			}
@@ -361,9 +311,9 @@ func newCleanCmd() *cobra.Command {
 				return fmt.Errorf("failed to clean workflows: %w", err)
 			}
 
-			fmt.Printf("\nDeleted %d workflow(s):\n", len(deleted))
+			fmt.Printf("\n%s Deleted %d workflow(s):\n", workflow.Green("✓"), len(deleted))
 			for _, name := range deleted {
-				fmt.Printf("  - %s\n", name)
+				fmt.Printf("  %s %s\n", workflow.Green("✓"), name)
 			}
 
 			return nil

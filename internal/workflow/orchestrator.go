@@ -165,8 +165,18 @@ func (o *Orchestrator) Clean() ([]string, error) {
 
 // runWorkflow executes the workflow state machine
 func (o *Orchestrator) runWorkflow(ctx context.Context, state *WorkflowState) error {
+	fmt.Println(Bold(Cyan("Claude Workflow Orchestrator")))
+	fmt.Println(strings.Repeat("=", 30))
+	fmt.Printf("\n%s: %s\n", Bold("Workflow"), state.Name)
+	fmt.Printf("%s: %s\n", Bold("Type"), state.Type)
+	fmt.Printf("%s: %s\n", Bold("Description"), state.Description)
+
 	for {
 		if state.CurrentPhase == PhaseCompleted || state.CurrentPhase == PhaseFailed {
+			if state.CurrentPhase == PhaseCompleted {
+				elapsed := time.Since(state.CreatedAt)
+				fmt.Printf("\n%s Workflow completed in %s\n", Green("✓"), FormatDuration(elapsed))
+			}
 			return nil
 		}
 
@@ -175,6 +185,10 @@ func (o *Orchestrator) runWorkflow(ctx context.Context, state *WorkflowState) er
 		}
 
 		if state.CurrentPhase == PhaseCompleted || state.CurrentPhase == PhaseFailed {
+			if state.CurrentPhase == PhaseCompleted {
+				elapsed := time.Since(state.CreatedAt)
+				fmt.Printf("\n%s Workflow completed in %s\n", Green("✓"), FormatDuration(elapsed))
+			}
 			return nil
 		}
 	}
@@ -200,6 +214,9 @@ func (o *Orchestrator) executePhase(ctx context.Context, state *WorkflowState) e
 
 // executePlanning runs the planning phase
 func (o *Orchestrator) executePlanning(ctx context.Context, state *WorkflowState) error {
+	fmt.Printf("\n%s\n", Bold(FormatPhase(PhasePlanning, 5)))
+	fmt.Println(strings.Repeat("-", len(FormatPhase(PhasePlanning, 5))))
+
 	phaseState := state.Phases[PhasePlanning]
 	phaseState.Attempts++
 	now := time.Now()
@@ -214,38 +231,51 @@ func (o *Orchestrator) executePlanning(ctx context.Context, state *WorkflowState
 		return o.failWorkflow(state, fmt.Errorf("failed to generate planning prompt: %w", err))
 	}
 
+	spinner := NewSpinner("Invoking Claude Code to analyze codebase...")
+	spinner.Start()
+
 	result, err := o.executor.Execute(ctx, ExecuteConfig{
 		Prompt:  prompt,
 		Timeout: o.config.Timeouts.Planning,
 	})
 
 	if err != nil {
+		spinner.Fail("Planning failed")
 		return o.failWorkflow(state, fmt.Errorf("failed to execute planning: %w", err))
 	}
 
 	jsonStr, err := o.parser.ExtractJSON(result.Output)
 	if err != nil {
+		spinner.Fail("Failed to parse planning output")
 		return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from planning output: %w", err))
 	}
 
 	plan, err := o.parser.ParsePlan(jsonStr)
 	if err != nil {
+		spinner.Fail("Failed to parse plan")
 		return o.failWorkflow(state, fmt.Errorf("failed to parse plan: %w", err))
 	}
 
 	if err := o.stateManager.SavePlan(state.Name, plan); err != nil {
+		spinner.Fail("Failed to save plan")
 		return o.failWorkflow(state, fmt.Errorf("failed to save plan: %w", err))
 	}
 
 	if err := o.stateManager.SavePhaseOutput(state.Name, PhasePlanning, plan); err != nil {
+		spinner.Fail("Failed to save planning output")
 		return o.failWorkflow(state, fmt.Errorf("failed to save planning output: %w", err))
 	}
+
+	spinner.Success("Plan created")
 
 	return o.transitionPhase(state, PhaseConfirmation)
 }
 
 // executeConfirmation runs the confirmation phase
 func (o *Orchestrator) executeConfirmation(ctx context.Context, state *WorkflowState) error {
+	fmt.Printf("\n%s\n", Bold(FormatPhase(PhaseConfirmation, 5)))
+	fmt.Println(strings.Repeat("-", len(FormatPhase(PhaseConfirmation, 5))))
+
 	phaseState := state.Phases[PhaseConfirmation]
 	phaseState.Attempts++
 	now := time.Now()
@@ -277,6 +307,9 @@ func (o *Orchestrator) executeConfirmation(ctx context.Context, state *WorkflowS
 
 // executeImplementation runs the implementation phase
 func (o *Orchestrator) executeImplementation(ctx context.Context, state *WorkflowState) error {
+	fmt.Printf("\n%s\n", Bold(FormatPhase(PhaseImplementation, 5)))
+	fmt.Println(strings.Repeat("-", len(FormatPhase(PhaseImplementation, 5))))
+
 	phaseState := state.Phases[PhaseImplementation]
 	phaseState.Attempts++
 	now := time.Now()
@@ -296,34 +329,46 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 		return o.failWorkflow(state, fmt.Errorf("failed to generate implementation prompt: %w", err))
 	}
 
+	spinner := NewSpinner("Implementing changes...")
+	spinner.Start()
+
 	result, err := o.executor.Execute(ctx, ExecuteConfig{
 		Prompt:  prompt,
 		Timeout: o.config.Timeouts.Implementation,
 	})
 
 	if err != nil {
+		spinner.Fail("Implementation failed")
 		return o.failWorkflow(state, fmt.Errorf("failed to execute implementation: %w", err))
 	}
 
 	jsonStr, err := o.parser.ExtractJSON(result.Output)
 	if err != nil {
+		spinner.Fail("Failed to parse implementation output")
 		return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from implementation output: %w", err))
 	}
 
 	summary, err := o.parser.ParseImplementationSummary(jsonStr)
 	if err != nil {
+		spinner.Fail("Failed to parse implementation summary")
 		return o.failWorkflow(state, fmt.Errorf("failed to parse implementation summary: %w", err))
 	}
 
 	if err := o.stateManager.SavePhaseOutput(state.Name, PhaseImplementation, summary); err != nil {
+		spinner.Fail("Failed to save implementation output")
 		return o.failWorkflow(state, fmt.Errorf("failed to save implementation output: %w", err))
 	}
+
+	spinner.Success("Implementation complete")
 
 	return o.transitionPhase(state, PhaseRefactoring)
 }
 
 // executeRefactoring runs the refactoring phase
 func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowState) error {
+	fmt.Printf("\n%s\n", Bold(FormatPhase(PhaseRefactoring, 5)))
+	fmt.Println(strings.Repeat("-", len(FormatPhase(PhaseRefactoring, 5))))
+
 	phaseState := state.Phases[PhaseRefactoring]
 	phaseState.Attempts++
 	now := time.Now()
@@ -343,28 +388,37 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 		return o.failWorkflow(state, fmt.Errorf("failed to generate refactoring prompt: %w", err))
 	}
 
+	spinner := NewSpinner("Refactoring code...")
+	spinner.Start()
+
 	result, err := o.executor.Execute(ctx, ExecuteConfig{
 		Prompt:  prompt,
 		Timeout: o.config.Timeouts.Refactoring,
 	})
 
 	if err != nil {
+		spinner.Fail("Refactoring failed")
 		return o.failWorkflow(state, fmt.Errorf("failed to execute refactoring: %w", err))
 	}
 
 	jsonStr, err := o.parser.ExtractJSON(result.Output)
 	if err != nil {
+		spinner.Fail("Failed to parse refactoring output")
 		return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from refactoring output: %w", err))
 	}
 
 	summary, err := o.parser.ParseRefactoringSummary(jsonStr)
 	if err != nil {
+		spinner.Fail("Failed to parse refactoring summary")
 		return o.failWorkflow(state, fmt.Errorf("failed to parse refactoring summary: %w", err))
 	}
 
 	if err := o.stateManager.SavePhaseOutput(state.Name, PhaseRefactoring, summary); err != nil {
+		spinner.Fail("Failed to save refactoring output")
 		return o.failWorkflow(state, fmt.Errorf("failed to save refactoring output: %w", err))
 	}
+
+	spinner.Success("Refactoring complete")
 
 	metrics, err := o.getPRMetrics(ctx)
 	if err != nil {
@@ -391,6 +445,9 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 
 // executePRSplit runs the PR split phase
 func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState) error {
+	fmt.Printf("\n%s\n", Bold(FormatPhase(PhasePRSplit, 5)))
+	fmt.Println(strings.Repeat("-", len(FormatPhase(PhasePRSplit, 5))))
+
 	phaseState := state.Phases[PhasePRSplit]
 	phaseState.Attempts++
 	now := time.Now()
@@ -409,28 +466,37 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 		return o.failWorkflow(state, fmt.Errorf("failed to generate PR split prompt: %w", err))
 	}
 
+	spinner := NewSpinner("Splitting PR into manageable pieces...")
+	spinner.Start()
+
 	result, err := o.executor.Execute(ctx, ExecuteConfig{
 		Prompt:  prompt,
 		Timeout: o.config.Timeouts.PRSplit,
 	})
 
 	if err != nil {
+		spinner.Fail("PR split failed")
 		return o.failWorkflow(state, fmt.Errorf("failed to execute PR split: %w", err))
 	}
 
 	jsonStr, err := o.parser.ExtractJSON(result.Output)
 	if err != nil {
+		spinner.Fail("Failed to parse PR split output")
 		return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from PR split output: %w", err))
 	}
 
 	prResult, err := o.parser.ParsePRSplitResult(jsonStr)
 	if err != nil {
+		spinner.Fail("Failed to parse PR split result")
 		return o.failWorkflow(state, fmt.Errorf("failed to parse PR split result: %w", err))
 	}
 
 	if err := o.stateManager.SavePhaseOutput(state.Name, PhasePRSplit, prResult); err != nil {
+		spinner.Fail("Failed to save PR split output")
 		return o.failWorkflow(state, fmt.Errorf("failed to save PR split output: %w", err))
 	}
+
+	spinner.Success("PR split complete")
 
 	return o.transitionPhase(state, PhaseCompleted)
 }
@@ -558,17 +624,12 @@ func isRecoverableError(err error) bool {
 
 // defaultConfirmFunc is the default confirmation function that reads from stdin
 func defaultConfirmFunc(plan *Plan) (bool, string, error) {
-	fmt.Println("\n=== Workflow Plan ===")
-	fmt.Printf("Summary: %s\n", plan.Summary)
-	fmt.Printf("Complexity: %s\n", plan.Complexity)
-	fmt.Printf("Estimated Lines: %d\n", plan.EstimatedTotalLines)
-	fmt.Printf("Estimated Files: %d\n", plan.EstimatedTotalFiles)
-	fmt.Println("\nPhases:")
-	for _, phase := range plan.Phases {
-		fmt.Printf("  - %s: %s\n", phase.Name, phase.Description)
-	}
-	fmt.Println("\n=====================")
-	fmt.Print("\nApprove this plan? (yes/no/feedback): ")
+	fmt.Println()
+	fmt.Println(FormatPlanSummary(plan))
+	fmt.Println()
+	fmt.Println(Cyan("Full plan saved to: .claude/workflow/<name>/plan.md"))
+	fmt.Println()
+	fmt.Print(Bold("Approve this plan? [y/n/feedback]: "))
 
 	scanner := bufio.NewScanner(os.Stdin)
 	if !scanner.Scan() {
@@ -585,7 +646,7 @@ func defaultConfirmFunc(plan *Plan) (bool, string, error) {
 		return false, "", ErrUserCancelled
 	}
 
-	fmt.Print("Please provide your feedback: ")
+	fmt.Print(Yellow("Please provide your feedback: "))
 	if !scanner.Scan() {
 		return false, "", fmt.Errorf("failed to read feedback")
 	}
@@ -594,6 +655,8 @@ func defaultConfirmFunc(plan *Plan) (bool, string, error) {
 	if feedback == "" {
 		return false, "", fmt.Errorf("feedback cannot be empty")
 	}
+
+	fmt.Println(Green("✓") + " Feedback received. Replanning with your suggestions...")
 
 	return false, feedback, nil
 }
