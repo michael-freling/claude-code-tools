@@ -175,6 +175,14 @@ func (m *MockCIChecker) WaitForCI(ctx context.Context, prNumber int, timeout tim
 	return args.Get(0).(*CIResult), args.Error(1)
 }
 
+func (m *MockCIChecker) WaitForCIWithOptions(ctx context.Context, prNumber int, timeout time.Duration, opts CheckCIOptions) (*CIResult, error) {
+	args := m.Called(ctx, prNumber, timeout, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*CIResult), args.Error(1)
+}
+
 // MockOutputParser is a mock implementation of OutputParser
 type MockOutputParser struct {
 	mock.Mock
@@ -465,13 +473,13 @@ func TestOrchestrator_executeConfirmation(t *testing.T) {
 func TestOrchestrator_executeImplementation(t *testing.T) {
 	tests := []struct {
 		name          string
-		setupMocks    func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockOutputParser, *MockPreCommitChecker)
+		setupMocks    func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockOutputParser, *MockPreCommitChecker, *MockCIChecker)
 		wantErr       bool
 		wantNextPhase Phase
 	}{
 		{
 			name: "successfully implements plan with pre-commit passing",
-			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, pc *MockPreCommitChecker) {
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, pc *MockPreCommitChecker, ci *MockCIChecker) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
 				pg.On("GenerateImplementationPrompt", mock.Anything).Return("implementation prompt", nil)
@@ -483,13 +491,14 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented"}, nil)
 				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
 				pc.On("RunPreCommit", mock.Anything).Return(&PreCommitResult{Passed: true}, nil)
+				ci.On("WaitForCI", mock.Anything, 0, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
 			},
 			wantErr:       false,
 			wantNextPhase: PhaseRefactoring,
 		},
 		{
 			name: "retries when pre-commit fails then succeeds",
-			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, pc *MockPreCommitChecker) {
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, pc *MockPreCommitChecker, ci *MockCIChecker) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
 
@@ -511,6 +520,7 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 				pg.On("GenerateFixPreCommitPrompt", mock.Anything).Return("fix prompt", nil).Once()
 
 				pc.On("RunPreCommit", mock.Anything).Return(&PreCommitResult{Passed: true}, nil).Once()
+				ci.On("WaitForCI", mock.Anything, 0, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
 			},
 			wantErr:       false,
 			wantNextPhase: PhaseRefactoring,
@@ -524,8 +534,9 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 			mockPG := new(MockPromptGenerator)
 			mockOP := new(MockOutputParser)
 			mockPC := new(MockPreCommitChecker)
+			mockCI := new(MockCIChecker)
 
-			tt.setupMocks(mockSM, mockExec, mockPG, mockOP, mockPC)
+			tt.setupMocks(mockSM, mockExec, mockPG, mockOP, mockPC, mockCI)
 
 			o := &Orchestrator{
 				stateManager:     mockSM,
@@ -534,6 +545,7 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 				parser:           mockOP,
 				config:           DefaultConfig("/tmp/workflows"),
 				preCommitChecker: mockPC,
+				ciChecker:        mockCI,
 			}
 
 			state := &WorkflowState{

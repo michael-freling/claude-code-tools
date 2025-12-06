@@ -37,6 +37,20 @@ Dependencies: {{range .DependsOn}}{{.}} {{end}}
 4. Ensure all error cases are handled
 5. Add appropriate documentation
 
+## Verification Process
+After you implement the changes:
+1. Commit all your changes with descriptive commit messages
+2. Pre-commit hooks will automatically run to check code quality
+3. If pre-commit fails, you will receive the error output and must fix all issues
+4. After pre-commit passes, CI will run to verify the build and tests
+5. If CI fails, you will receive the failure details and must fix all issues
+6. This process continues until all checks pass
+
+Make sure your implementation:
+- Passes all linting and formatting checks
+- Compiles without errors
+- All tests pass
+
 ## Output Format
 After completing the implementation, output a summary as JSON in a code block:
 ```json

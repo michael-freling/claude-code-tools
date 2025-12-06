@@ -159,6 +159,12 @@ type WorkflowInfo struct {
 	Status       string       `json:"status"`
 }
 
+// CheckCIOptions configures CI checking behavior
+type CheckCIOptions struct {
+	SkipE2E        bool
+	E2ETestPattern string
+}
+
 // Error variables for common error conditions
 var (
 	ErrInvalidWorkflowName = errors.New("invalid workflow name")

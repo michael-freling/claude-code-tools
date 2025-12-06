@@ -394,16 +394,47 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 			return o.failWorkflow(state, fmt.Errorf("failed to run pre-commit: %w", err))
 		}
 
-		if preCommitResult.Passed {
-			checkSpinner.Success("Pre-commit checks passed")
+		if !preCommitResult.Passed {
+			checkSpinner.Fail("Pre-commit checks failed")
+			lastError = formatPreCommitErrors(preCommitResult)
+			fmt.Println(Red("\nPre-commit errors:"))
+			for _, errMsg := range preCommitResult.Errors {
+				fmt.Printf("  %s %s\n", Red("✗"), errMsg)
+			}
+
+			if err := o.stateManager.SaveState(state.Name, state); err != nil {
+				return fmt.Errorf("failed to save state: %w", err)
+			}
+			continue
+		}
+
+		checkSpinner.Success("Pre-commit checks passed")
+
+		ciSpinner := NewSpinner("Waiting for CI to complete...")
+		ciSpinner.Start()
+
+		ciResult, err := o.ciChecker.WaitForCI(ctx, 0, o.config.CICheckTimeout)
+		if err != nil {
+			ciSpinner.Fail("CI check failed")
+			return o.failWorkflow(state, fmt.Errorf("failed to check CI: %w", err))
+		}
+
+		if ciResult.Passed {
+			ciSpinner.Success("CI passed")
 			return o.transitionPhase(state, PhaseRefactoring)
 		}
 
-		checkSpinner.Fail("Pre-commit checks failed")
-		lastError = formatPreCommitErrors(preCommitResult)
-		fmt.Println(Red("\nPre-commit errors:"))
-		for _, errMsg := range preCommitResult.Errors {
-			fmt.Printf("  %s %s\n", Red("✗"), errMsg)
+		ciSpinner.Fail("CI failed")
+		lastError = formatCIErrors(ciResult)
+		fmt.Printf("\n%s\n", Red("CI failures detected:"))
+		for _, job := range ciResult.FailedJobs {
+			fmt.Printf("  %s %s\n", Red("✗"), job)
+		}
+		fmt.Printf("\n%s\n", ciResult.Output)
+
+		prompt, err = o.promptGenerator.GenerateFixCIPrompt(lastError)
+		if err != nil {
+			return o.failWorkflow(state, fmt.Errorf("failed to generate CI fix prompt: %w", err))
 		}
 
 		if err := o.stateManager.SaveState(state.Name, state); err != nil {
@@ -411,7 +442,7 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 		}
 	}
 
-	return o.failWorkflow(state, fmt.Errorf("exceeded maximum fix attempts (%d) for pre-commit errors", o.config.MaxFixAttempts))
+	return o.failWorkflow(state, fmt.Errorf("exceeded maximum fix attempts (%d)", o.config.MaxFixAttempts))
 }
 
 // executeRefactoring runs the refactoring phase with error-fixing loop
@@ -491,16 +522,51 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 			return o.failWorkflow(state, fmt.Errorf("failed to run pre-commit: %w", err))
 		}
 
-		if preCommitResult.Passed {
-			checkSpinner.Success("Pre-commit checks passed")
+		if !preCommitResult.Passed {
+			checkSpinner.Fail("Pre-commit checks failed")
+			lastError = formatPreCommitErrors(preCommitResult)
+			fmt.Println(Red("\nPre-commit errors:"))
+			for _, errMsg := range preCommitResult.Errors {
+				fmt.Printf("  %s %s\n", Red("✗"), errMsg)
+			}
+
+			if err := o.stateManager.SaveState(state.Name, state); err != nil {
+				return fmt.Errorf("failed to save state: %w", err)
+			}
+
+			if attempt == o.config.MaxFixAttempts {
+				return o.failWorkflow(state, fmt.Errorf("exceeded maximum fix attempts (%d) for pre-commit errors", o.config.MaxFixAttempts))
+			}
+			continue
+		}
+
+		checkSpinner.Success("Pre-commit checks passed")
+
+		ciSpinner := NewSpinner("Waiting for CI to complete...")
+		ciSpinner.Start()
+
+		ciResult, err := o.ciChecker.WaitForCI(ctx, 0, o.config.CICheckTimeout)
+		if err != nil {
+			ciSpinner.Fail("CI check failed")
+			return o.failWorkflow(state, fmt.Errorf("failed to check CI: %w", err))
+		}
+
+		if ciResult.Passed {
+			ciSpinner.Success("CI passed")
 			break
 		}
 
-		checkSpinner.Fail("Pre-commit checks failed")
-		lastError = formatPreCommitErrors(preCommitResult)
-		fmt.Println(Red("\nPre-commit errors:"))
-		for _, errMsg := range preCommitResult.Errors {
-			fmt.Printf("  %s %s\n", Red("✗"), errMsg)
+		ciSpinner.Fail("CI failed")
+		lastError = formatCIErrors(ciResult)
+		fmt.Printf("\n%s\n", Red("CI failures detected:"))
+		for _, job := range ciResult.FailedJobs {
+			fmt.Printf("  %s %s\n", Red("✗"), job)
+		}
+		fmt.Printf("\n%s\n", ciResult.Output)
+
+		prompt, err = o.promptGenerator.GenerateFixCIPrompt(lastError)
+		if err != nil {
+			return o.failWorkflow(state, fmt.Errorf("failed to generate CI fix prompt: %w", err))
 		}
 
 		if err := o.stateManager.SaveState(state.Name, state); err != nil {
@@ -508,7 +574,7 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 		}
 
 		if attempt == o.config.MaxFixAttempts {
-			return o.failWorkflow(state, fmt.Errorf("exceeded maximum fix attempts (%d) for pre-commit errors", o.config.MaxFixAttempts))
+			return o.failWorkflow(state, fmt.Errorf("exceeded maximum fix attempts (%d)", o.config.MaxFixAttempts))
 		}
 	}
 
@@ -535,13 +601,12 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 	return o.transitionPhase(state, PhaseCompleted)
 }
 
-// executePRSplit runs the PR split phase
+// executePRSplit runs the PR split phase with error-checking loop
 func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState) error {
 	fmt.Printf("\n%s\n", Bold(FormatPhase(PhasePRSplit, 5)))
 	fmt.Println(strings.Repeat("-", len(FormatPhase(PhasePRSplit, 5))))
 
 	phaseState := state.Phases[PhasePRSplit]
-	phaseState.Attempts++
 	now := time.Now()
 	phaseState.StartedAt = &now
 
@@ -553,42 +618,128 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 		return o.failWorkflow(state, fmt.Errorf("PR metrics not available"))
 	}
 
-	prompt, err := o.promptGenerator.GeneratePRSplitPrompt(phaseState.Metrics)
-	if err != nil {
-		return o.failWorkflow(state, fmt.Errorf("failed to generate PR split prompt: %w", err))
+	var prResult *PRSplitResult
+	var lastError string
+
+	for attempt := 1; attempt <= o.config.MaxFixAttempts; attempt++ {
+		phaseState.Attempts = attempt
+
+		var prompt string
+		var err error
+		if attempt == 1 {
+			prompt, err = o.promptGenerator.GeneratePRSplitPrompt(phaseState.Metrics)
+			if err != nil {
+				return o.failWorkflow(state, fmt.Errorf("failed to generate PR split prompt: %w", err))
+			}
+		} else {
+			prompt = lastError
+			fmt.Printf("\n%s Attempt %d/%d to fix errors\n", Yellow("⚠"), attempt, o.config.MaxFixAttempts)
+		}
+
+		spinner := NewSpinner("Splitting PR into manageable pieces...")
+		spinner.Start()
+
+		result, err := o.executor.Execute(ctx, ExecuteConfig{
+			Prompt:  prompt,
+			Timeout: o.config.Timeouts.PRSplit,
+		})
+
+		if err != nil {
+			spinner.Fail("PR split failed")
+			return o.failWorkflow(state, fmt.Errorf("failed to execute PR split: %w", err))
+		}
+
+		jsonStr, err := o.parser.ExtractJSON(result.Output)
+		if err != nil {
+			spinner.Fail("Failed to parse PR split output")
+			return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from PR split output: %w", err))
+		}
+
+		prResult, err = o.parser.ParsePRSplitResult(jsonStr)
+		if err != nil {
+			spinner.Fail("Failed to parse PR split result")
+			return o.failWorkflow(state, fmt.Errorf("failed to parse PR split result: %w", err))
+		}
+
+		if err := o.stateManager.SavePhaseOutput(state.Name, PhasePRSplit, prResult); err != nil {
+			spinner.Fail("Failed to save PR split output")
+			return o.failWorkflow(state, fmt.Errorf("failed to save PR split output: %w", err))
+		}
+
+		spinner.Success("PR split complete")
+
+		allPassed := true
+		for i, childPR := range prResult.ChildPRs {
+			isLastChild := (i == len(prResult.ChildPRs)-1)
+
+			fmt.Printf("\n%s Checking child PR #%d: %s\n", Bold("→"), childPR.Number, childPR.Title)
+
+			checkSpinner := NewSpinner("Running pre-commit checks...")
+			checkSpinner.Start()
+
+			preCommitResult, err := o.preCommitChecker.RunPreCommit(ctx)
+			if err != nil {
+				checkSpinner.Fail("Pre-commit check failed")
+				return o.failWorkflow(state, fmt.Errorf("failed to run pre-commit on child PR #%d: %w", childPR.Number, err))
+			}
+
+			if !preCommitResult.Passed {
+				checkSpinner.Fail("Pre-commit checks failed")
+				allPassed = false
+				lastError = formatPreCommitErrors(preCommitResult)
+				fmt.Println(Red("\nPre-commit errors:"))
+				for _, errMsg := range preCommitResult.Errors {
+					fmt.Printf("  %s %s\n", Red("✗"), errMsg)
+				}
+				break
+			}
+
+			checkSpinner.Success("Pre-commit checks passed")
+
+			opts := CheckCIOptions{
+				SkipE2E: !isLastChild,
+			}
+
+			ciSpinner := NewSpinner("Waiting for CI to complete...")
+			ciSpinner.Start()
+
+			ciResult, err := o.ciChecker.WaitForCIWithOptions(ctx, childPR.Number, o.config.CICheckTimeout, opts)
+			if err != nil {
+				ciSpinner.Fail("CI check failed")
+				return o.failWorkflow(state, fmt.Errorf("failed to check CI on child PR #%d: %w", childPR.Number, err))
+			}
+
+			if !ciResult.Passed {
+				ciSpinner.Fail("CI failed")
+				allPassed = false
+				if isLastChild {
+					fmt.Printf("%s\n", Yellow("Last child PR must pass e2e tests"))
+				}
+				lastError = formatCIErrors(ciResult)
+				fmt.Printf("\n%s\n", Red("CI failures detected:"))
+				for _, job := range ciResult.FailedJobs {
+					fmt.Printf("  %s %s\n", Red("✗"), job)
+				}
+				fmt.Printf("\n%s\n", ciResult.Output)
+				break
+			}
+
+			ciSpinner.Success("CI passed")
+			fmt.Printf("  %s Child PR #%d passed all checks\n", Green("✓"), childPR.Number)
+		}
+
+		if allPassed {
+			break
+		}
+
+		if err := o.stateManager.SaveState(state.Name, state); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+
+		if attempt == o.config.MaxFixAttempts {
+			return o.failWorkflow(state, fmt.Errorf("exceeded maximum fix attempts (%d)", o.config.MaxFixAttempts))
+		}
 	}
-
-	spinner := NewSpinner("Splitting PR into manageable pieces...")
-	spinner.Start()
-
-	result, err := o.executor.Execute(ctx, ExecuteConfig{
-		Prompt:  prompt,
-		Timeout: o.config.Timeouts.PRSplit,
-	})
-
-	if err != nil {
-		spinner.Fail("PR split failed")
-		return o.failWorkflow(state, fmt.Errorf("failed to execute PR split: %w", err))
-	}
-
-	jsonStr, err := o.parser.ExtractJSON(result.Output)
-	if err != nil {
-		spinner.Fail("Failed to parse PR split output")
-		return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from PR split output: %w", err))
-	}
-
-	prResult, err := o.parser.ParsePRSplitResult(jsonStr)
-	if err != nil {
-		spinner.Fail("Failed to parse PR split result")
-		return o.failWorkflow(state, fmt.Errorf("failed to parse PR split result: %w", err))
-	}
-
-	if err := o.stateManager.SavePhaseOutput(state.Name, PhasePRSplit, prResult); err != nil {
-		spinner.Fail("Failed to save PR split output")
-		return o.failWorkflow(state, fmt.Errorf("failed to save PR split output: %w", err))
-	}
-
-	spinner.Success("PR split complete")
 
 	return o.transitionPhase(state, PhaseCompleted)
 }
@@ -762,6 +913,20 @@ func formatPreCommitErrors(result *PreCommitResult) string {
 	for _, err := range result.Errors {
 		builder.WriteString("- ")
 		builder.WriteString(err)
+		builder.WriteString("\n")
+	}
+	return builder.String()
+}
+
+// formatCIErrors formats CI errors for the fix prompt
+func formatCIErrors(result *CIResult) string {
+	var builder strings.Builder
+	builder.WriteString("CI checks failed with the following errors:\n\n")
+	builder.WriteString(result.Output)
+	builder.WriteString("\n\nFailed jobs:\n")
+	for _, job := range result.FailedJobs {
+		builder.WriteString("- ")
+		builder.WriteString(job)
 		builder.WriteString("\n")
 	}
 	return builder.String()

@@ -213,3 +213,100 @@ func TestCIChecker_WaitForCI_Timeout(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, result)
 }
+
+func TestFilterE2EFailures(t *testing.T) {
+	tests := []struct {
+		name       string
+		result     *CIResult
+		e2ePattern string
+		want       *CIResult
+	}{
+		{
+			name: "no failures",
+			result: &CIResult{
+				Passed:     true,
+				Status:     "success",
+				FailedJobs: []string{},
+				Output:     "all passed",
+			},
+			e2ePattern: "e2e|E2E",
+			want: &CIResult{
+				Passed:     true,
+				Status:     "success",
+				FailedJobs: []string{},
+				Output:     "all passed",
+			},
+		},
+		{
+			name: "only e2e failures",
+			result: &CIResult{
+				Passed:     false,
+				Status:     "failure",
+				FailedJobs: []string{"test-e2e", "integration-test"},
+				Output:     "e2e tests failed",
+			},
+			e2ePattern: "e2e|integration",
+			want: &CIResult{
+				Passed:     true,
+				Status:     "failure",
+				FailedJobs: []string{},
+				Output:     "e2e tests failed",
+			},
+		},
+		{
+			name: "mixed failures with e2e",
+			result: &CIResult{
+				Passed:     false,
+				Status:     "failure",
+				FailedJobs: []string{"test-unit", "test-e2e", "lint"},
+				Output:     "multiple failures",
+			},
+			e2ePattern: "e2e|E2E",
+			want: &CIResult{
+				Passed:     false,
+				Status:     "failure",
+				FailedJobs: []string{"test-unit", "lint"},
+				Output:     "multiple failures",
+			},
+		},
+		{
+			name: "only non-e2e failures",
+			result: &CIResult{
+				Passed:     false,
+				Status:     "failure",
+				FailedJobs: []string{"test-unit", "lint"},
+				Output:     "unit tests failed",
+			},
+			e2ePattern: "e2e|E2E",
+			want: &CIResult{
+				Passed:     false,
+				Status:     "failure",
+				FailedJobs: []string{"test-unit", "lint"},
+				Output:     "unit tests failed",
+			},
+		},
+		{
+			name: "case insensitive e2e pattern",
+			result: &CIResult{
+				Passed:     false,
+				Status:     "failure",
+				FailedJobs: []string{"test-E2E", "test-Integration"},
+				Output:     "e2e tests failed",
+			},
+			e2ePattern: "e2e|E2E|integration|Integration",
+			want: &CIResult{
+				Passed:     true,
+				Status:     "failure",
+				FailedJobs: []string{},
+				Output:     "e2e tests failed",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := filterE2EFailures(tt.result, tt.e2ePattern)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

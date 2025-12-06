@@ -30,6 +30,20 @@ Components:
 - Ensure consistent coding style
 - Remove any dead code or commented-out code
 
+## Verification Process
+After you refactor the code:
+1. Commit all your changes with descriptive commit messages
+2. Pre-commit hooks will automatically run to check code quality
+3. If pre-commit fails, you will receive the error output and must fix all issues
+4. After pre-commit passes, CI will run to verify the build and tests
+5. If CI fails, you will receive the failure details and must fix all issues
+6. This process continues until all checks pass
+
+Make sure your refactoring:
+- Does not break existing functionality
+- Passes all linting and formatting checks
+- All tests continue to pass
+
 ## Output Format
 After completing the refactoring, output a summary as JSON in a code block:
 ```json

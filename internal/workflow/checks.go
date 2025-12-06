@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -25,6 +26,7 @@ type PreCommitResult struct {
 type CIChecker interface {
 	CheckCI(ctx context.Context, prNumber int) (*CIResult, error)
 	WaitForCI(ctx context.Context, prNumber int, timeout time.Duration) (*CIResult, error)
+	WaitForCIWithOptions(ctx context.Context, prNumber int, timeout time.Duration, opts CheckCIOptions) (*CIResult, error)
 }
 
 // CIResult represents the result of CI checks
@@ -162,8 +164,17 @@ func (c *ciChecker) CheckCI(ctx context.Context, prNumber int) (*CIResult, error
 
 // WaitForCI waits for CI to complete with polling
 func (c *ciChecker) WaitForCI(ctx context.Context, prNumber int, timeout time.Duration) (*CIResult, error) {
+	return c.WaitForCIWithOptions(ctx, prNumber, timeout, CheckCIOptions{})
+}
+
+// WaitForCIWithOptions waits for CI to complete with polling and optional e2e filtering
+func (c *ciChecker) WaitForCIWithOptions(ctx context.Context, prNumber int, timeout time.Duration, opts CheckCIOptions) (*CIResult, error) {
 	if timeout == 0 {
 		timeout = 30 * time.Minute
+	}
+
+	if opts.E2ETestPattern == "" {
+		opts.E2ETestPattern = "e2e|E2E|integration|Integration"
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -186,6 +197,9 @@ func (c *ciChecker) WaitForCI(ctx context.Context, prNumber int, timeout time.Du
 			}
 
 			if result.Status == "success" || result.Status == "failure" {
+				if opts.SkipE2E {
+					result = filterE2EFailures(result, opts.E2ETestPattern)
+				}
 				return result, nil
 			}
 		}
@@ -235,4 +249,32 @@ func parseCIOutput(output string) (string, []string) {
 	}
 
 	return "failure", failedJobs
+}
+
+// filterE2EFailures filters out e2e test failures from CI result
+func filterE2EFailures(result *CIResult, e2ePattern string) *CIResult {
+	if result.Passed {
+		return result
+	}
+
+	e2eRegex, err := regexp.Compile(e2ePattern)
+	if err != nil {
+		return result
+	}
+
+	filteredJobs := []string{}
+	for _, job := range result.FailedJobs {
+		if !e2eRegex.MatchString(job) {
+			filteredJobs = append(filteredJobs, job)
+		}
+	}
+
+	filtered := &CIResult{
+		Status:     result.Status,
+		Output:     result.Output,
+		FailedJobs: filteredJobs,
+		Passed:     len(filteredJobs) == 0,
+	}
+
+	return filtered
 }
