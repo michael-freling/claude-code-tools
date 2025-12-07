@@ -45,7 +45,7 @@ func (p *promptGenerator) loadTemplates() error {
 	}
 
 	for _, name := range templateNames {
-		path := fmt.Sprintf("prompts/workflow/%s", name)
+		path := fmt.Sprintf("workflow/%s", name)
 		content, err := templates.FS.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to read template %s: %w", name, err)
