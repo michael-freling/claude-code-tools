@@ -44,10 +44,10 @@ func DefaultConfig(baseDir string) *Config {
 		CICheckTimeout:             30 * time.Minute,
 		MaxFixAttempts:             10,
 		Timeouts: PhaseTimeouts{
-			Planning:       5 * time.Minute,
-			Implementation: 30 * time.Minute,
-			Refactoring:    15 * time.Minute,
-			PRSplit:        10 * time.Minute,
+			Planning:       1 * time.Hour,
+			Implementation: 6 * time.Hour,
+			Refactoring:    6 * time.Hour,
+			PRSplit:        1 * time.Hour,
 		},
 	}
 }

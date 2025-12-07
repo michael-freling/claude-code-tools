@@ -1055,10 +1055,10 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Equal(t, 100, config.MaxLines)
 	assert.Equal(t, 10, config.MaxFiles)
 	assert.Equal(t, "claude", config.ClaudePath)
-	assert.Equal(t, 5*time.Minute, config.Timeouts.Planning)
-	assert.Equal(t, 30*time.Minute, config.Timeouts.Implementation)
-	assert.Equal(t, 15*time.Minute, config.Timeouts.Refactoring)
-	assert.Equal(t, 10*time.Minute, config.Timeouts.PRSplit)
+	assert.Equal(t, 1*time.Hour, config.Timeouts.Planning)
+	assert.Equal(t, 6*time.Hour, config.Timeouts.Implementation)
+	assert.Equal(t, 6*time.Hour, config.Timeouts.Refactoring)
+	assert.Equal(t, 1*time.Hour, config.Timeouts.PRSplit)
 }
 
 func TestOrchestrator_SetConfirmFunc(t *testing.T) {
