@@ -11,9 +11,18 @@ The following feedback was provided on the previous plan:
 Please address this feedback in your updated plan.
 {{end}}
 
+## CRITICAL: Use Task Tool for Subagent Work
+
+**You MUST use the Task tool to spawn subagents for analysis and planning.** Do NOT analyze directly - delegate to the appropriate subagent type.
+
+Available subagent types for the Task tool:
+- `software-architect`: For architecture analysis, design, and planning
+- `Explore`: For codebase exploration and research
+- `architecture-reviewer`: For reviewing architectural decisions
+
 ## Instructions
-1. Analyze the codebase structure and patterns
-2. Design the implementation approach
+1. Use Task tool with `subagent_type: "Explore"` to analyze the codebase structure and patterns
+2. Use Task tool with `subagent_type: "software-architect"` to design the implementation approach
 3. Break down into phases with estimates
 4. Identify potential risks and challenges
 5. Ensure the plan is thorough but realistic

@@ -10,17 +10,46 @@ Components:
 {{range .Architecture.Components}}- {{.}}
 {{end}}
 
+## CRITICAL: Use Task Tool for Subagent Work
+
+**You MUST use the Task tool to spawn subagents for refactoring.** Do NOT refactor directly - delegate to the appropriate subagent type.
+
+Available subagent types for the Task tool:
+- `golang-engineer`: For Go code refactoring
+- `typescript-engineer`: For TypeScript/Next.js code refactoring
+- `golang-code-reviewer`: For reviewing Go refactoring changes
+- `typescript-code-reviewer`: For reviewing TypeScript refactoring changes
+
+### Refactoring Process
+
+For each component:
+
+1. **Review with Reviewer Subagent**
+   Use Task tool with `subagent_type: "golang-code-reviewer"` or `"typescript-code-reviewer"`.
+   Include in the prompt:
+   - The files to review
+   - Instructions to identify areas needing improvement
+
+2. **Refactor with Engineer Subagent**
+   Use Task tool with `subagent_type: "golang-engineer"` or `"typescript-engineer"`.
+   Include in the prompt:
+   - The specific improvements to make
+   - Instructions to maintain existing functionality
+
+3. **Commit after review approval**
+
 ## Instructions
-1. Review all implemented code for quality and maintainability
-2. Refactor to improve:
+1. Use Task tool to delegate review to appropriate reviewer subagents
+2. Use Task tool to delegate refactoring to appropriate engineer subagents
+3. Refactor to improve:
    - Code organization and structure
    - Error handling patterns
    - Test coverage and quality
    - Documentation and comments
    - Performance if applicable
-3. Ensure all tests still pass after refactoring
-4. Follow Go best practices and idioms
-5. Maintain backward compatibility
+4. Ensure all tests still pass after refactoring
+5. Follow best practices and idioms
+6. Maintain backward compatibility
 
 ## Focus Areas
 - Reduce code duplication

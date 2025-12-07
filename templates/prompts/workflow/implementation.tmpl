@@ -30,12 +30,45 @@ Dependencies: {{range .DependsOn}}{{.}} {{end}}
 {{range .Risks}}- {{.}}
 {{end}}
 
+## CRITICAL: Use Task Tool for Subagent Work
+
+**You MUST use the Task tool to spawn subagents for implementation.** Do NOT implement directly - delegate to the appropriate subagent type.
+
+Available subagent types for the Task tool:
+- `software-architect`: For architecture analysis and design
+- `golang-engineer`: For Go code implementation with tests
+- `typescript-engineer`: For TypeScript/Next.js implementation with tests
+- `golang-code-reviewer`: For reviewing Go code changes
+- `typescript-code-reviewer`: For reviewing TypeScript code changes
+- `Explore`: For codebase exploration and research
+
+### Implementation Process
+
+For each task in the work streams above:
+
+1. **Implement with Engineer Subagent**
+   Use Task tool with `subagent_type: "golang-engineer"` or `"typescript-engineer"` (based on tech stack).
+   Include in the prompt:
+   - The specific task to implement
+   - Instructions to write tests alongside implementation
+   - Instructions to follow existing codebase patterns
+
+2. **Review with Reviewer Subagent**
+   Use Task tool with `subagent_type: "golang-code-reviewer"` or `"typescript-code-reviewer"`.
+   Include in the prompt:
+   - The files that were changed
+   - Instructions to validate code quality
+   - Instructions to ensure tests are adequate
+
+3. **Commit after review approval**
+
 ## Instructions
-1. Implement all components according to the plan
-2. Follow existing codebase patterns and conventions
-3. Write comprehensive tests for all new code
-4. Ensure all error cases are handled
-5. Add appropriate documentation
+1. Use Task tool to delegate implementation to appropriate engineer subagents
+2. Use Task tool to delegate code review to reviewer subagents
+3. Follow existing codebase patterns and conventions
+4. Write comprehensive tests for all new code
+5. Ensure all error cases are handled
+6. Add appropriate documentation
 
 ## Verification Process
 After you implement the changes:
