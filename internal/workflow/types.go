@@ -48,6 +48,7 @@ type WorkflowState struct {
 	UpdatedAt    time.Time             `json:"updatedAt"`
 	Phases       map[Phase]*PhaseState `json:"phases"`
 	Error        *WorkflowError        `json:"error,omitempty"`
+	WorktreePath string                `json:"worktreePath,omitempty"`
 }
 
 // PhaseState represents the state of a single phase
@@ -157,6 +158,12 @@ type WorkflowInfo struct {
 	CreatedAt    time.Time    `json:"createdAt"`
 	UpdatedAt    time.Time    `json:"updatedAt"`
 	Status       string       `json:"status"`
+}
+
+// CheckCIOptions configures CI checking behavior
+type CheckCIOptions struct {
+	SkipE2E        bool
+	E2ETestPattern string
 }
 
 // Error variables for common error conditions

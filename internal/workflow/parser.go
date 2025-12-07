@@ -28,11 +28,36 @@ func NewOutputParser() OutputParser {
 	}
 }
 
-// ExtractJSON extracts JSON from markdown code blocks
+// claudeJSONResponse represents the JSON envelope from Claude CLI when using --output-format json
+type claudeJSONResponse struct {
+	Type             string          `json:"type"`
+	Result           string          `json:"result"`
+	StructuredOutput json.RawMessage `json:"structured_output"`
+	IsError          bool            `json:"is_error"`
+}
+
+// ExtractJSON extracts JSON from output, handling Claude CLI JSON envelope format
 func (p *outputParser) ExtractJSON(output string) (string, error) {
+	trimmed := strings.TrimSpace(output)
+
+	// First, try to parse as Claude CLI JSON envelope (from --output-format json)
+	if json.Valid([]byte(trimmed)) {
+		var envelope claudeJSONResponse
+		if err := json.Unmarshal([]byte(trimmed), &envelope); err == nil {
+			// Check if this is a Claude CLI JSON envelope with structured_output
+			if envelope.Type == "result" && len(envelope.StructuredOutput) > 0 {
+				return string(envelope.StructuredOutput), nil
+			}
+		}
+		// If not a Claude envelope, return as-is (direct JSON)
+		return trimmed, nil
+	}
+
+	// Fall back to looking for markdown code blocks
 	blocks := p.findJSONBlocks(output)
 	if len(blocks) == 0 {
-		return "", fmt.Errorf("no JSON blocks found in output: %w", ErrParseJSON)
+		preview := truncateOutput(output, 500)
+		return "", fmt.Errorf("no JSON blocks found in output.\n\nClaude output preview:\n%s\n\n%w", preview, ErrParseJSON)
 	}
 
 	for _, block := range blocks {
@@ -46,7 +71,19 @@ func (p *outputParser) ExtractJSON(output string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("no valid JSON found in output: %w", ErrParseJSON)
+	preview := truncateOutput(output, 500)
+	return "", fmt.Errorf("no valid JSON found in output.\n\nClaude output preview:\n%s\n\n%w", preview, ErrParseJSON)
+}
+
+// truncateOutput truncates output to maxLen characters with ellipsis
+func truncateOutput(output string, maxLen int) string {
+	if len(output) == 0 {
+		return "(empty output)"
+	}
+	if len(output) <= maxLen {
+		return output
+	}
+	return output[:maxLen] + "...\n(truncated, showing first 500 chars)"
 }
 
 // ParsePlan parses a Plan from JSON string

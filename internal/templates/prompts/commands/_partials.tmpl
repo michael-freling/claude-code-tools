@@ -1,0 +1,36 @@
+{{/* Shared rules used across command prompt templates */}}
+
+{{define "CLAUDE_CODE_COMMAND_RULES"}}
+1. Create the slash commands of Claude Code by analyzing the usages and best practices on the Internet at first, including https://code.claude.com/docs/en/slash-commands
+    1. Add **$ARGUMENTS** or **$1**, **$2** for each parameter
+    2. Add **allowed-tools**, **argument-hint**, and **description** for each slash command at least.
+3. Ask users to install all MCP servers that users should install on each slash command or skill.
+{{end}}
+
+{{define "CODING_RULES"}}
+- Write the code with minimal comments — only high-level explanations of purpose, architecture, or non-obvious decisions. No line-by-line comments
+- Delete assignments of the default or zero values.
+- Delete deadcodes.
+- Every error must be checked or returned.
+- **Prefer to continue or return early** than nesting code
+   - "if is bad, else is worse"
+- Reuse the existing codes as much as possible, and avoid duplicating codes.
+
+- **Use table-driven testing**
+   - Split happy and error test sets if complicated
+   - Reduces code duplication and improves maintainability
+- **Define test inputs as test case fields**, not as function arguments
+- Write code that operates identically across dev, test, and production. Avoid environment-specific logic in core logic. Use configuration or dependency injection instead of branching code. Use test doubles externally, not via conditionals in production code. No hacks, no assumptions, no global state. Always default to production-safe behavior.
+{{end}}
+
+{{define "GOLANG_RULES"}}
+- Go tests must always use want/got (never expected/actual).
+- All checks should use **assert** when the test can continue, and **require** when the test should stop.
+- Use **go.uber.org/gomock** for all mocks
+{{end}}
+
+{{define "TYPESCRIPT_RULES"}}
+- Only use useMemo when there is a real performance need—specifically when a computation is expensive or when memoization prevents unnecessary child re-renders. If useMemo isn't justified, do not add it. When you do use it, add a brief explanation of why it's needed.
+- Do not output SVG, base64, XML, or any embedded asset data. Use placeholder components or import statements only
+- Implement UI components based on a mobile-first approach
+{{end}}

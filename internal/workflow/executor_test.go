@@ -92,6 +92,26 @@ func TestMockExecutor_Execute_Success(t *testing.T) {
 			wantErr:    false,
 		},
 		{
+			name: "executes successfully with JSON schema",
+			config: ExecuteConfig{
+				Prompt:     "test prompt",
+				JSONSchema: `{"type": "object"}`,
+				Timeout:    5 * time.Second,
+			},
+			mockFunc: func(ctx context.Context, config ExecuteConfig) (*ExecuteResult, error) {
+				if config.JSONSchema == "" {
+					return nil, errors.New("expected JSONSchema to be set")
+				}
+				return &ExecuteResult{
+					Output:   `{"result": "success"}`,
+					ExitCode: 0,
+					Duration: 50 * time.Millisecond,
+				}, nil
+			},
+			wantOutput: `{"result": "success"}`,
+			wantErr:    false,
+		},
+		{
 			name: "handles timeout error",
 			config: ExecuteConfig{
 				Prompt:  "test prompt",

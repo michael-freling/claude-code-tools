@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"text/template"
 
-	"github.com/michael-freling/claude-code-config/templates"
+	"github.com/michael-freling/claude-code-config/internal/templates"
 )
 
 // PromptGenerator generates prompts for workflow phases
@@ -14,6 +14,7 @@ type PromptGenerator interface {
 	GenerateImplementationPrompt(plan *Plan) (string, error)
 	GenerateRefactoringPrompt(plan *Plan) (string, error)
 	GeneratePRSplitPrompt(metrics *PRMetrics) (string, error)
+	GenerateFixCIPrompt(failures string) (string, error)
 }
 
 type promptGenerator struct {
@@ -40,10 +41,11 @@ func (p *promptGenerator) loadTemplates() error {
 		"implementation.tmpl",
 		"refactoring.tmpl",
 		"pr-split.tmpl",
+		"fix-ci.tmpl",
 	}
 
 	for _, name := range templateNames {
-		path := fmt.Sprintf("prompts/workflow/%s", name)
+		path := fmt.Sprintf("workflow/%s", name)
 		content, err := templates.FS.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to read template %s: %w", name, err)
@@ -137,6 +139,25 @@ func (p *promptGenerator) GeneratePRSplitPrompt(metrics *PRMetrics) (string, err
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, metrics); err != nil {
 		return "", fmt.Errorf("failed to execute pr-split template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+// GenerateFixCIPrompt generates a prompt for fixing CI failures
+func (p *promptGenerator) GenerateFixCIPrompt(failures string) (string, error) {
+	if failures == "" {
+		return "", fmt.Errorf("failures cannot be empty")
+	}
+
+	tmpl, ok := p.templates["fix-ci.tmpl"]
+	if !ok {
+		return "", fmt.Errorf("fix-ci template not loaded")
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, failures); err != nil {
+		return "", fmt.Errorf("failed to execute fix-ci template: %w", err)
 	}
 
 	return buf.String(), nil

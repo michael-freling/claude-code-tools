@@ -176,46 +176,232 @@ func FormatDuration(d time.Duration) string {
 	return fmt.Sprintf("%ds", s)
 }
 
-// FormatPlanSummary formats a plan in a nice box
+// FormatPlanSummary formats a plan with full details
 func FormatPlanSummary(plan *Plan) string {
 	var b strings.Builder
 
-	b.WriteString("┌─────────────────────────────────────────────────────┐\n")
-	b.WriteString("│ " + Bold("Plan Summary") + strings.Repeat(" ", 48-len("Plan Summary")) + "│\n")
-	b.WriteString("├─────────────────────────────────────────────────────┤\n")
+	// Summary section
+	b.WriteString(formatSectionHeader("Plan Summary"))
+	b.WriteString("\n")
+	b.WriteString(plan.Summary)
+	b.WriteString("\n\n")
 
-	summary := plan.Summary
-	if len(summary) > 50 {
-		summary = summary[:47] + "..."
+	// Complexity and totals
+	b.WriteString(fmt.Sprintf("Complexity: %s\n", Bold(plan.Complexity)))
+	b.WriteString(fmt.Sprintf("Total: ~%d lines across %d files\n", plan.EstimatedTotalLines, plan.EstimatedTotalFiles))
+
+	// Architecture section (if available)
+	if plan.Architecture.Overview != "" || len(plan.Architecture.Components) > 0 {
+		b.WriteString("\n")
+		b.WriteString(formatSectionHeader("Architecture"))
+		b.WriteString("\n")
+
+		if plan.Architecture.Overview != "" {
+			b.WriteString("Overview:\n")
+			b.WriteString(indentText(plan.Architecture.Overview, 2))
+			b.WriteString("\n")
+		}
+
+		if len(plan.Architecture.Components) > 0 {
+			b.WriteString("\nComponents:\n")
+			for _, component := range plan.Architecture.Components {
+				b.WriteString(fmt.Sprintf("  • %s\n", component))
+			}
+		}
 	}
-	b.WriteString("│ " + summary + strings.Repeat(" ", 52-len(summary)) + "│\n")
-	b.WriteString("│" + strings.Repeat(" ", 54) + "│\n")
 
-	b.WriteString("│ " + Bold("Phases:") + strings.Repeat(" ", 48) + "│\n")
+	// Phases section
+	b.WriteString("\n")
+	b.WriteString(formatSectionHeader(fmt.Sprintf("Phases (%d total)", len(plan.Phases))))
+	b.WriteString("\n")
+
 	for i, phase := range plan.Phases {
-		if i >= 5 {
-			b.WriteString("│   ..." + strings.Repeat(" ", 50) + "│\n")
-			break
+		b.WriteString(fmt.Sprintf("\n%d. %s\n", i+1, Bold(phase.Name)))
+		b.WriteString(fmt.Sprintf("   %d files, ~%d lines\n", phase.EstimatedFiles, phase.EstimatedLines))
+		if phase.Description != "" {
+			b.WriteString(indentText(phase.Description, 3))
+			b.WriteString("\n")
 		}
-		line := fmt.Sprintf("%d. %s (%d files, ~%d lines)",
-			i+1, phase.Name, phase.EstimatedFiles, phase.EstimatedLines)
-		if len(line) > 50 {
-			line = line[:47] + "..."
-		}
-		b.WriteString("│   " + line + strings.Repeat(" ", 52-len(line)-2) + "│\n")
 	}
-	b.WriteString("│" + strings.Repeat(" ", 54) + "│\n")
 
-	complexityLine := fmt.Sprintf("Complexity: %s", plan.Complexity)
-	b.WriteString("│ " + complexityLine + strings.Repeat(" ", 52-len(complexityLine)) + "│\n")
+	// Work Streams section (if available)
+	if len(plan.WorkStreams) > 0 {
+		b.WriteString("\n")
+		b.WriteString(formatSectionHeader("Work Streams"))
+		b.WriteString("\n")
 
-	totalLine := fmt.Sprintf("Total: ~%d lines across %d files",
-		plan.EstimatedTotalLines, plan.EstimatedTotalFiles)
-	b.WriteString("│ " + totalLine + strings.Repeat(" ", 52-len(totalLine)) + "│\n")
+		for _, ws := range plan.WorkStreams {
+			b.WriteString(fmt.Sprintf("\n%s:\n", Bold(ws.Name)))
+			for _, task := range ws.Tasks {
+				b.WriteString(fmt.Sprintf("  • %s\n", task))
+			}
+			if len(ws.DependsOn) > 0 {
+				b.WriteString(fmt.Sprintf("  Dependencies: %s\n", strings.Join(ws.DependsOn, ", ")))
+			}
+		}
+	}
 
-	b.WriteString("└─────────────────────────────────────────────────────┘")
+	// Risks section (if available)
+	if len(plan.Risks) > 0 {
+		b.WriteString("\n")
+		b.WriteString(formatSectionHeader("Risks"))
+		b.WriteString("\n")
+
+		for _, risk := range plan.Risks {
+			b.WriteString(fmt.Sprintf("  • %s\n", risk))
+		}
+	}
 
 	return b.String()
+}
+
+// formatSectionHeader creates a section header with a line underneath
+func formatSectionHeader(title string) string {
+	return fmt.Sprintf("%s\n%s", Bold(title), strings.Repeat("─", len(title)+4))
+}
+
+// indentText adds indentation to each line of text
+func indentText(text string, spaces int) string {
+	indent := strings.Repeat(" ", spaces)
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if line != "" {
+			lines[i] = indent + line
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// StreamingSpinner provides a spinner that also displays streaming progress events
+type StreamingSpinner struct {
+	message   string
+	done      chan bool
+	running   bool
+	mu        sync.Mutex
+	lastTool  string
+	toolCount int
+	startTime time.Time
+}
+
+// NewStreamingSpinner creates a new streaming spinner with the given message
+func NewStreamingSpinner(message string) *StreamingSpinner {
+	return &StreamingSpinner{
+		message:   message,
+		done:      make(chan bool),
+		running:   false,
+		startTime: time.Now(),
+	}
+}
+
+// Start begins the streaming spinner animation
+func (s *StreamingSpinner) Start() {
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
+		return
+	}
+	s.running = true
+	s.done = make(chan bool)
+	s.startTime = time.Now()
+	s.mu.Unlock()
+
+	go func() {
+		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		i := 0
+		for {
+			select {
+			case <-s.done:
+				return
+			default:
+				s.mu.Lock()
+				elapsed := time.Since(s.startTime).Round(time.Second)
+				displayMsg := s.message
+				if s.lastTool != "" {
+					displayMsg = fmt.Sprintf("%s [%s]", s.message, s.lastTool)
+				}
+				fmt.Printf("\r%s %s (%s)", frames[i%len(frames)], displayMsg, elapsed)
+				s.mu.Unlock()
+				i++
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}()
+}
+
+// OnProgress handles a progress event and updates the display
+func (s *StreamingSpinner) OnProgress(event ProgressEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	switch event.Type {
+	case "tool_use":
+		s.toolCount++
+		// Truncate only for spinner status line (needs to fit on one line)
+		if event.ToolInput != "" {
+			s.lastTool = fmt.Sprintf("%s: %s", event.ToolName, truncateForDisplay(event.ToolInput, 40))
+		} else {
+			s.lastTool = event.ToolName
+		}
+		// Print full tool call on a new line - no truncation
+		if event.ToolInput != "" {
+			fmt.Printf("\r\033[K  %s %s %s\n", Cyan("→"), event.ToolName, event.ToolInput)
+		} else {
+			fmt.Printf("\r\033[K  %s %s\n", Cyan("→"), event.ToolName)
+		}
+	case "tool_result":
+		if event.IsError {
+			// Print full error message - no truncation
+			fmt.Printf("\r\033[K  %s %s\n", Red("✗"), event.Text)
+		}
+		// Don't print successful tool results to avoid clutter
+	}
+}
+
+// Stop stops the spinner and clears the line
+func (s *StreamingSpinner) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.running {
+		return
+	}
+
+	s.running = false
+	close(s.done)
+	fmt.Print("\r\033[K")
+}
+
+// Success stops the spinner and shows a success message with stats
+func (s *StreamingSpinner) Success(message string) {
+	s.mu.Lock()
+	toolCount := s.toolCount
+	elapsed := time.Since(s.startTime)
+	s.mu.Unlock()
+
+	s.Stop()
+	if toolCount > 0 {
+		fmt.Printf("%s %s (%d tool calls, %s)\n", Green("✓"), message, toolCount, FormatDuration(elapsed))
+	} else {
+		fmt.Printf("%s %s (%s)\n", Green("✓"), message, FormatDuration(elapsed))
+	}
+}
+
+// Fail stops the spinner and shows a failure message
+func (s *StreamingSpinner) Fail(message string) {
+	s.Stop()
+	fmt.Printf("%s %s\n", Red("✗"), message)
+}
+
+// truncateForDisplay truncates a string for display purposes
+func truncateForDisplay(s string, maxLen int) string {
+	// Remove newlines and extra whitespace
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.Join(strings.Fields(s), " ")
+
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
 
 // FormatWorkflowStatus formats a workflow state with colors

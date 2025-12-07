@@ -13,11 +13,15 @@ import (
 
 // Config holds configuration for the orchestrator
 type Config struct {
-	BaseDir    string
-	MaxLines   int
-	MaxFiles   int
-	Timeouts   PhaseTimeouts
-	ClaudePath string
+	BaseDir                    string
+	MaxLines                   int
+	MaxFiles                   int
+	Timeouts                   PhaseTimeouts
+	ClaudePath                 string
+	DangerouslySkipPermissions bool
+	CICheckInterval            time.Duration
+	CICheckTimeout             time.Duration
+	MaxFixAttempts             int
 }
 
 // PhaseTimeouts holds timeout durations for each phase
@@ -31,15 +35,19 @@ type PhaseTimeouts struct {
 // DefaultConfig returns default configuration
 func DefaultConfig(baseDir string) *Config {
 	return &Config{
-		BaseDir:    baseDir,
-		MaxLines:   100,
-		MaxFiles:   10,
-		ClaudePath: "claude",
+		BaseDir:                    baseDir,
+		MaxLines:                   100,
+		MaxFiles:                   10,
+		ClaudePath:                 "claude",
+		DangerouslySkipPermissions: false,
+		CICheckInterval:            30 * time.Second,
+		CICheckTimeout:             30 * time.Minute,
+		MaxFixAttempts:             10,
 		Timeouts: PhaseTimeouts{
-			Planning:       5 * time.Minute,
-			Implementation: 30 * time.Minute,
-			Refactoring:    15 * time.Minute,
-			PRSplit:        10 * time.Minute,
+			Planning:       1 * time.Hour,
+			Implementation: 6 * time.Hour,
+			Refactoring:    6 * time.Hour,
+			PRSplit:        1 * time.Hour,
 		},
 	}
 }
@@ -52,6 +60,10 @@ type Orchestrator struct {
 	parser          OutputParser
 	config          *Config
 	confirmFunc     func(plan *Plan) (bool, string, error)
+	worktreeManager WorktreeManager
+
+	// For testing - if nil, creates real checker
+	ciCheckerFactory func(workingDir string, checkInterval time.Duration) CIChecker
 }
 
 // NewOrchestrator creates orchestrator with default config
@@ -77,6 +89,7 @@ func NewOrchestratorWithConfig(config *Config) (*Orchestrator, error) {
 	executor := NewClaudeExecutorWithPath(config.ClaudePath)
 	stateManager := NewStateManager(config.BaseDir)
 	parser := NewOutputParser()
+	worktreeManager := NewWorktreeManager(config.BaseDir)
 
 	return &Orchestrator{
 		stateManager:    stateManager,
@@ -85,6 +98,7 @@ func NewOrchestratorWithConfig(config *Config) (*Orchestrator, error) {
 		parser:          parser,
 		config:          config,
 		confirmFunc:     defaultConfirmFunc,
+		worktreeManager: worktreeManager,
 	}, nil
 }
 
@@ -95,6 +109,18 @@ func (o *Orchestrator) SetConfirmFunc(fn func(plan *Plan) (bool, string, error))
 
 // Start initializes and runs a new workflow
 func (o *Orchestrator) Start(ctx context.Context, name, description string, wfType WorkflowType) error {
+	// Check if a workflow with this name already exists
+	if o.stateManager.WorkflowExists(name) {
+		existingState, err := o.stateManager.LoadState(name)
+		if err == nil && existingState.CurrentPhase == PhaseFailed {
+			// Delete failed workflow to allow restart with same name
+			if err := o.stateManager.DeleteWorkflow(name); err != nil {
+				return fmt.Errorf("failed to delete failed workflow: %w", err)
+			}
+		}
+		// If not failed or couldn't load state, InitState will handle the error
+	}
+
 	state, err := o.stateManager.InitState(name, description, wfType)
 	if err != nil {
 		return fmt.Errorf("failed to initialize workflow: %w", err)
@@ -118,11 +144,31 @@ func (o *Orchestrator) Resume(ctx context.Context, name string) error {
 		return fmt.Errorf("workflow is in non-recoverable error state: %w", state.Error)
 	}
 
+	// If workflow is in FAILED state, restore it to the phase that failed
+	if state.CurrentPhase == PhaseFailed {
+		if state.Error != nil {
+			state.CurrentPhase = state.Error.Phase
+		} else {
+			// Find the phase that was in progress or failed
+			for phase, phaseState := range state.Phases {
+				if phaseState.Status == StatusFailed || phaseState.Status == StatusInProgress {
+					state.CurrentPhase = phase
+					break
+				}
+			}
+		}
+		// Reset the phase status to allow retry
+		if phaseState, ok := state.Phases[state.CurrentPhase]; ok {
+			phaseState.Status = StatusInProgress
+		}
+	}
+
 	if state.Error != nil {
 		state.Error = nil
-		if err := o.stateManager.SaveState(name, state); err != nil {
-			return fmt.Errorf("failed to save state: %w", err)
-		}
+	}
+
+	if err := o.stateManager.SaveState(name, state); err != nil {
+		return fmt.Errorf("failed to save state: %w", err)
 	}
 
 	return o.runWorkflow(ctx, state)
@@ -231,13 +277,15 @@ func (o *Orchestrator) executePlanning(ctx context.Context, state *WorkflowState
 		return o.failWorkflow(state, fmt.Errorf("failed to generate planning prompt: %w", err))
 	}
 
-	spinner := NewSpinner("Invoking Claude Code to analyze codebase...")
+	spinner := NewStreamingSpinner("Analyzing codebase...")
 	spinner.Start()
 
-	result, err := o.executor.Execute(ctx, ExecuteConfig{
-		Prompt:  prompt,
-		Timeout: o.config.Timeouts.Planning,
-	})
+	result, err := o.executor.ExecuteStreaming(ctx, ExecuteConfig{
+		Prompt:                     prompt,
+		Timeout:                    o.config.Timeouts.Planning,
+		JSONSchema:                 PlanSchema,
+		DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
+	}, spinner.OnProgress)
 
 	if err != nil {
 		spinner.Fail("Planning failed")
@@ -247,12 +295,24 @@ func (o *Orchestrator) executePlanning(ctx context.Context, state *WorkflowState
 	jsonStr, err := o.parser.ExtractJSON(result.Output)
 	if err != nil {
 		spinner.Fail("Failed to parse planning output")
+		// Save raw output for debugging
+		if saveErr := o.stateManager.SaveRawOutput(state.Name, PhasePlanning, result.Output); saveErr != nil {
+			fmt.Printf("%s Failed to save raw output: %v\n", Yellow("⚠"), saveErr)
+		} else {
+			fmt.Printf("%s Raw output saved to: %s/phases/planning_raw.txt\n", Yellow("Debug:"), o.stateManager.WorkflowDir(state.Name))
+		}
 		return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from planning output: %w", err))
 	}
 
 	plan, err := o.parser.ParsePlan(jsonStr)
 	if err != nil {
 		spinner.Fail("Failed to parse plan")
+		// Save raw output for debugging
+		if saveErr := o.stateManager.SaveRawOutput(state.Name, PhasePlanning, result.Output); saveErr != nil {
+			fmt.Printf("%s Failed to save raw output: %v\n", Yellow("⚠"), saveErr)
+		} else {
+			fmt.Printf("%s Raw output saved to: %s/phases/planning_raw.txt\n", Yellow("Debug:"), o.stateManager.WorkflowDir(state.Name))
+		}
 		return o.failWorkflow(state, fmt.Errorf("failed to parse plan: %w", err))
 	}
 
@@ -305,13 +365,12 @@ func (o *Orchestrator) executeConfirmation(ctx context.Context, state *WorkflowS
 	return o.transitionPhase(state, PhaseImplementation)
 }
 
-// executeImplementation runs the implementation phase
+// executeImplementation runs the implementation phase with error-fixing loop
 func (o *Orchestrator) executeImplementation(ctx context.Context, state *WorkflowState) error {
 	fmt.Printf("\n%s\n", Bold(FormatPhase(PhaseImplementation, 5)))
 	fmt.Println(strings.Repeat("-", len(FormatPhase(PhaseImplementation, 5))))
 
 	phaseState := state.Phases[PhaseImplementation]
-	phaseState.Attempts++
 	now := time.Now()
 	phaseState.StartedAt = &now
 
@@ -319,58 +378,139 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 		return fmt.Errorf("failed to save state: %w", err)
 	}
 
+	if state.WorktreePath == "" {
+		worktreePath, err := o.worktreeManager.CreateWorktree(state.Name)
+		if err != nil {
+			return o.failWorkflow(state, fmt.Errorf("failed to create worktree: %w", err))
+		}
+		state.WorktreePath = worktreePath
+		if err := o.stateManager.SaveState(state.Name, state); err != nil {
+			return fmt.Errorf("failed to save state with worktree path: %w", err)
+		}
+		fmt.Printf("%s Created worktree at: %s\n", Green("✓"), worktreePath)
+	}
+
 	plan, err := o.stateManager.LoadPlan(state.Name)
 	if err != nil {
 		return o.failWorkflow(state, fmt.Errorf("failed to load plan: %w", err))
 	}
 
-	prompt, err := o.promptGenerator.GenerateImplementationPrompt(plan)
-	if err != nil {
-		return o.failWorkflow(state, fmt.Errorf("failed to generate implementation prompt: %w", err))
+	var lastError string
+	for attempt := 1; attempt <= o.config.MaxFixAttempts; attempt++ {
+		phaseState.Attempts = attempt
+
+		var prompt string
+		if attempt == 1 {
+			prompt, err = o.promptGenerator.GenerateImplementationPrompt(plan)
+			if err != nil {
+				return o.failWorkflow(state, fmt.Errorf("failed to generate implementation prompt: %w", err))
+			}
+		} else {
+			prompt, err = o.promptGenerator.GenerateFixCIPrompt(lastError)
+			if err != nil {
+				return o.failWorkflow(state, fmt.Errorf("failed to generate fix prompt: %w", err))
+			}
+			fmt.Printf("\n%s Attempt %d/%d to fix CI errors\n", Yellow("⚠"), attempt, o.config.MaxFixAttempts)
+		}
+
+		spinner := NewStreamingSpinner("Implementing changes...")
+		spinner.Start()
+
+		result, err := o.executor.ExecuteStreaming(ctx, ExecuteConfig{
+			Prompt:                     prompt,
+			Timeout:                    o.config.Timeouts.Implementation,
+			JSONSchema:                 ImplementationSummarySchema,
+			DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
+			WorkingDirectory:           state.WorktreePath,
+		}, spinner.OnProgress)
+
+		if err != nil {
+			spinner.Fail("Implementation failed")
+			return o.failWorkflow(state, fmt.Errorf("failed to execute implementation: %w", err))
+		}
+
+		jsonStr, err := o.parser.ExtractJSON(result.Output)
+		if err != nil {
+			spinner.Fail("Failed to parse implementation output")
+			// Save raw output for debugging
+			if saveErr := o.stateManager.SaveRawOutput(state.Name, PhaseImplementation, result.Output); saveErr != nil {
+				fmt.Printf("%s Failed to save raw output: %v\n", Yellow("⚠"), saveErr)
+			} else {
+				fmt.Printf("%s Raw output saved to: %s/phases/implementation_raw.txt\n", Yellow("Debug:"), o.stateManager.WorkflowDir(state.Name))
+			}
+			return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from implementation output: %w", err))
+		}
+
+		summary, err := o.parser.ParseImplementationSummary(jsonStr)
+		if err != nil {
+			spinner.Fail("Failed to parse implementation summary")
+			// Save raw output for debugging
+			if saveErr := o.stateManager.SaveRawOutput(state.Name, PhaseImplementation, result.Output); saveErr != nil {
+				fmt.Printf("%s Failed to save raw output: %v\n", Yellow("⚠"), saveErr)
+			} else {
+				fmt.Printf("%s Raw output saved to: %s/phases/implementation_raw.txt\n", Yellow("Debug:"), o.stateManager.WorkflowDir(state.Name))
+			}
+			return o.failWorkflow(state, fmt.Errorf("failed to parse implementation summary: %w", err))
+		}
+
+		if err := o.stateManager.SavePhaseOutput(state.Name, PhaseImplementation, summary); err != nil {
+			spinner.Fail("Failed to save implementation output")
+			return o.failWorkflow(state, fmt.Errorf("failed to save implementation output: %w", err))
+		}
+
+		spinner.Success("Implementation complete")
+
+		workingDir := state.WorktreePath
+		if workingDir == "" {
+			workingDir = o.config.BaseDir
+		}
+
+		if err := o.stateManager.SaveState(state.Name, state); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+
+		ciSpinner := NewSpinner("Waiting for CI to complete...")
+		ciSpinner.Start()
+
+		ciChecker := o.getCIChecker(workingDir)
+		ciResult, err := ciChecker.WaitForCI(ctx, 0, o.config.CICheckTimeout)
+		if err != nil {
+			ciSpinner.Fail("CI check failed")
+			return o.failWorkflow(state, fmt.Errorf("failed to check CI: %w", err))
+		}
+
+		if ciResult.Passed {
+			ciSpinner.Success("CI passed")
+			return o.transitionPhase(state, PhaseRefactoring)
+		}
+
+		ciSpinner.Fail("CI failed")
+		lastError = formatCIErrors(ciResult)
+		fmt.Printf("\n%s\n", Red("CI failures detected:"))
+		for _, job := range ciResult.FailedJobs {
+			fmt.Printf("  %s %s\n", Red("✗"), job)
+		}
+		fmt.Printf("\n%s\n", ciResult.Output)
+
+		prompt, err = o.promptGenerator.GenerateFixCIPrompt(lastError)
+		if err != nil {
+			return o.failWorkflow(state, fmt.Errorf("failed to generate CI fix prompt: %w", err))
+		}
+
+		if err := o.stateManager.SaveState(state.Name, state); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
 	}
 
-	spinner := NewSpinner("Implementing changes...")
-	spinner.Start()
-
-	result, err := o.executor.Execute(ctx, ExecuteConfig{
-		Prompt:  prompt,
-		Timeout: o.config.Timeouts.Implementation,
-	})
-
-	if err != nil {
-		spinner.Fail("Implementation failed")
-		return o.failWorkflow(state, fmt.Errorf("failed to execute implementation: %w", err))
-	}
-
-	jsonStr, err := o.parser.ExtractJSON(result.Output)
-	if err != nil {
-		spinner.Fail("Failed to parse implementation output")
-		return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from implementation output: %w", err))
-	}
-
-	summary, err := o.parser.ParseImplementationSummary(jsonStr)
-	if err != nil {
-		spinner.Fail("Failed to parse implementation summary")
-		return o.failWorkflow(state, fmt.Errorf("failed to parse implementation summary: %w", err))
-	}
-
-	if err := o.stateManager.SavePhaseOutput(state.Name, PhaseImplementation, summary); err != nil {
-		spinner.Fail("Failed to save implementation output")
-		return o.failWorkflow(state, fmt.Errorf("failed to save implementation output: %w", err))
-	}
-
-	spinner.Success("Implementation complete")
-
-	return o.transitionPhase(state, PhaseRefactoring)
+	return o.failWorkflow(state, fmt.Errorf("exceeded maximum fix attempts (%d)", o.config.MaxFixAttempts))
 }
 
-// executeRefactoring runs the refactoring phase
+// executeRefactoring runs the refactoring phase with error-fixing loop
 func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowState) error {
 	fmt.Printf("\n%s\n", Bold(FormatPhase(PhaseRefactoring, 5)))
 	fmt.Println(strings.Repeat("-", len(FormatPhase(PhaseRefactoring, 5))))
 
 	phaseState := state.Phases[PhaseRefactoring]
-	phaseState.Attempts++
 	now := time.Now()
 	phaseState.StartedAt = &now
 
@@ -383,44 +523,114 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 		return o.failWorkflow(state, fmt.Errorf("failed to load plan: %w", err))
 	}
 
-	prompt, err := o.promptGenerator.GenerateRefactoringPrompt(plan)
-	if err != nil {
-		return o.failWorkflow(state, fmt.Errorf("failed to generate refactoring prompt: %w", err))
+	var lastError string
+	for attempt := 1; attempt <= o.config.MaxFixAttempts; attempt++ {
+		phaseState.Attempts = attempt
+
+		var prompt string
+		if attempt == 1 {
+			prompt, err = o.promptGenerator.GenerateRefactoringPrompt(plan)
+			if err != nil {
+				return o.failWorkflow(state, fmt.Errorf("failed to generate refactoring prompt: %w", err))
+			}
+		} else {
+			prompt, err = o.promptGenerator.GenerateFixCIPrompt(lastError)
+			if err != nil {
+				return o.failWorkflow(state, fmt.Errorf("failed to generate fix prompt: %w", err))
+			}
+			fmt.Printf("\n%s Attempt %d/%d to fix CI errors\n", Yellow("⚠"), attempt, o.config.MaxFixAttempts)
+		}
+
+		spinner := NewStreamingSpinner("Refactoring code...")
+		spinner.Start()
+
+		result, err := o.executor.ExecuteStreaming(ctx, ExecuteConfig{
+			Prompt:                     prompt,
+			Timeout:                    o.config.Timeouts.Refactoring,
+			JSONSchema:                 RefactoringSummarySchema,
+			DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
+			WorkingDirectory:           state.WorktreePath,
+		}, spinner.OnProgress)
+
+		if err != nil {
+			spinner.Fail("Refactoring failed")
+			return o.failWorkflow(state, fmt.Errorf("failed to execute refactoring: %w", err))
+		}
+
+		jsonStr, err := o.parser.ExtractJSON(result.Output)
+		if err != nil {
+			spinner.Fail("Failed to parse refactoring output")
+			// Save raw output for debugging
+			if saveErr := o.stateManager.SaveRawOutput(state.Name, PhaseRefactoring, result.Output); saveErr != nil {
+				fmt.Printf("%s Failed to save raw output: %v\n", Yellow("⚠"), saveErr)
+			} else {
+				fmt.Printf("%s Raw output saved to: %s/phases/refactoring_raw.txt\n", Yellow("Debug:"), o.stateManager.WorkflowDir(state.Name))
+			}
+			return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from refactoring output: %w", err))
+		}
+
+		summary, err := o.parser.ParseRefactoringSummary(jsonStr)
+		if err != nil {
+			spinner.Fail("Failed to parse refactoring summary")
+			// Save raw output for debugging
+			if saveErr := o.stateManager.SaveRawOutput(state.Name, PhaseRefactoring, result.Output); saveErr != nil {
+				fmt.Printf("%s Failed to save raw output: %v\n", Yellow("⚠"), saveErr)
+			} else {
+				fmt.Printf("%s Raw output saved to: %s/phases/refactoring_raw.txt\n", Yellow("Debug:"), o.stateManager.WorkflowDir(state.Name))
+			}
+			return o.failWorkflow(state, fmt.Errorf("failed to parse refactoring summary: %w", err))
+		}
+
+		if err := o.stateManager.SavePhaseOutput(state.Name, PhaseRefactoring, summary); err != nil {
+			spinner.Fail("Failed to save refactoring output")
+			return o.failWorkflow(state, fmt.Errorf("failed to save refactoring output: %w", err))
+		}
+
+		spinner.Success("Refactoring complete")
+
+		workingDir := state.WorktreePath
+		if workingDir == "" {
+			workingDir = o.config.BaseDir
+		}
+
+		ciSpinner := NewSpinner("Waiting for CI to complete...")
+		ciSpinner.Start()
+
+		ciChecker := o.getCIChecker(workingDir)
+		ciResult, err := ciChecker.WaitForCI(ctx, 0, o.config.CICheckTimeout)
+		if err != nil {
+			ciSpinner.Fail("CI check failed")
+			return o.failWorkflow(state, fmt.Errorf("failed to check CI: %w", err))
+		}
+
+		if ciResult.Passed {
+			ciSpinner.Success("CI passed")
+			break
+		}
+
+		ciSpinner.Fail("CI failed")
+		lastError = formatCIErrors(ciResult)
+		fmt.Printf("\n%s\n", Red("CI failures detected:"))
+		for _, job := range ciResult.FailedJobs {
+			fmt.Printf("  %s %s\n", Red("✗"), job)
+		}
+		fmt.Printf("\n%s\n", ciResult.Output)
+
+		prompt, err = o.promptGenerator.GenerateFixCIPrompt(lastError)
+		if err != nil {
+			return o.failWorkflow(state, fmt.Errorf("failed to generate CI fix prompt: %w", err))
+		}
+
+		if err := o.stateManager.SaveState(state.Name, state); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+
+		if attempt == o.config.MaxFixAttempts {
+			return o.failWorkflow(state, fmt.Errorf("exceeded maximum fix attempts (%d)", o.config.MaxFixAttempts))
+		}
 	}
 
-	spinner := NewSpinner("Refactoring code...")
-	spinner.Start()
-
-	result, err := o.executor.Execute(ctx, ExecuteConfig{
-		Prompt:  prompt,
-		Timeout: o.config.Timeouts.Refactoring,
-	})
-
-	if err != nil {
-		spinner.Fail("Refactoring failed")
-		return o.failWorkflow(state, fmt.Errorf("failed to execute refactoring: %w", err))
-	}
-
-	jsonStr, err := o.parser.ExtractJSON(result.Output)
-	if err != nil {
-		spinner.Fail("Failed to parse refactoring output")
-		return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from refactoring output: %w", err))
-	}
-
-	summary, err := o.parser.ParseRefactoringSummary(jsonStr)
-	if err != nil {
-		spinner.Fail("Failed to parse refactoring summary")
-		return o.failWorkflow(state, fmt.Errorf("failed to parse refactoring summary: %w", err))
-	}
-
-	if err := o.stateManager.SavePhaseOutput(state.Name, PhaseRefactoring, summary); err != nil {
-		spinner.Fail("Failed to save refactoring output")
-		return o.failWorkflow(state, fmt.Errorf("failed to save refactoring output: %w", err))
-	}
-
-	spinner.Success("Refactoring complete")
-
-	metrics, err := o.getPRMetrics(ctx)
+	metrics, err := o.getPRMetrics(ctx, state.WorktreePath)
 	if err != nil {
 		return o.failWorkflow(state, fmt.Errorf("failed to get PR metrics: %w", err))
 	}
@@ -443,13 +653,12 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 	return o.transitionPhase(state, PhaseCompleted)
 }
 
-// executePRSplit runs the PR split phase
+// executePRSplit runs the PR split phase with error-checking loop
 func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState) error {
 	fmt.Printf("\n%s\n", Bold(FormatPhase(PhasePRSplit, 5)))
 	fmt.Println(strings.Repeat("-", len(FormatPhase(PhasePRSplit, 5))))
 
 	phaseState := state.Phases[PhasePRSplit]
-	phaseState.Attempts++
 	now := time.Now()
 	phaseState.StartedAt = &now
 
@@ -461,42 +670,127 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 		return o.failWorkflow(state, fmt.Errorf("PR metrics not available"))
 	}
 
-	prompt, err := o.promptGenerator.GeneratePRSplitPrompt(phaseState.Metrics)
-	if err != nil {
-		return o.failWorkflow(state, fmt.Errorf("failed to generate PR split prompt: %w", err))
+	var prResult *PRSplitResult
+	var lastError string
+
+	for attempt := 1; attempt <= o.config.MaxFixAttempts; attempt++ {
+		phaseState.Attempts = attempt
+
+		var prompt string
+		var err error
+		if attempt == 1 {
+			prompt, err = o.promptGenerator.GeneratePRSplitPrompt(phaseState.Metrics)
+			if err != nil {
+				return o.failWorkflow(state, fmt.Errorf("failed to generate PR split prompt: %w", err))
+			}
+		} else {
+			prompt = lastError
+			fmt.Printf("\n%s Attempt %d/%d to fix errors\n", Yellow("⚠"), attempt, o.config.MaxFixAttempts)
+		}
+
+		spinner := NewStreamingSpinner("Splitting PR into manageable pieces...")
+		spinner.Start()
+
+		result, err := o.executor.ExecuteStreaming(ctx, ExecuteConfig{
+			Prompt:                     prompt,
+			Timeout:                    o.config.Timeouts.PRSplit,
+			JSONSchema:                 PRSplitResultSchema,
+			DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
+			WorkingDirectory:           state.WorktreePath,
+		}, spinner.OnProgress)
+
+		if err != nil {
+			spinner.Fail("PR split failed")
+			return o.failWorkflow(state, fmt.Errorf("failed to execute PR split: %w", err))
+		}
+
+		jsonStr, err := o.parser.ExtractJSON(result.Output)
+		if err != nil {
+			spinner.Fail("Failed to parse PR split output")
+			// Save raw output for debugging
+			if saveErr := o.stateManager.SaveRawOutput(state.Name, PhasePRSplit, result.Output); saveErr != nil {
+				fmt.Printf("%s Failed to save raw output: %v\n", Yellow("⚠"), saveErr)
+			} else {
+				fmt.Printf("%s Raw output saved to: %s/phases/pr_split_raw.txt\n", Yellow("Debug:"), o.stateManager.WorkflowDir(state.Name))
+			}
+			return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from PR split output: %w", err))
+		}
+
+		prResult, err = o.parser.ParsePRSplitResult(jsonStr)
+		if err != nil {
+			spinner.Fail("Failed to parse PR split result")
+			// Save raw output for debugging
+			if saveErr := o.stateManager.SaveRawOutput(state.Name, PhasePRSplit, result.Output); saveErr != nil {
+				fmt.Printf("%s Failed to save raw output: %v\n", Yellow("⚠"), saveErr)
+			} else {
+				fmt.Printf("%s Raw output saved to: %s/phases/pr_split_raw.txt\n", Yellow("Debug:"), o.stateManager.WorkflowDir(state.Name))
+			}
+			return o.failWorkflow(state, fmt.Errorf("failed to parse PR split result: %w", err))
+		}
+
+		if err := o.stateManager.SavePhaseOutput(state.Name, PhasePRSplit, prResult); err != nil {
+			spinner.Fail("Failed to save PR split output")
+			return o.failWorkflow(state, fmt.Errorf("failed to save PR split output: %w", err))
+		}
+
+		spinner.Success("PR split complete")
+
+		workingDir := state.WorktreePath
+		if workingDir == "" {
+			workingDir = o.config.BaseDir
+		}
+
+		allPassed := true
+		for i, childPR := range prResult.ChildPRs {
+			isLastChild := (i == len(prResult.ChildPRs)-1)
+
+			fmt.Printf("\n%s Checking child PR #%d: %s\n", Bold("→"), childPR.Number, childPR.Title)
+
+			opts := CheckCIOptions{
+				SkipE2E: !isLastChild,
+			}
+
+			ciSpinner := NewSpinner("Waiting for CI to complete...")
+			ciSpinner.Start()
+
+			ciChecker := o.getCIChecker(workingDir)
+			ciResult, err := ciChecker.WaitForCIWithOptions(ctx, childPR.Number, o.config.CICheckTimeout, opts)
+			if err != nil {
+				ciSpinner.Fail("CI check failed")
+				return o.failWorkflow(state, fmt.Errorf("failed to check CI on child PR #%d: %w", childPR.Number, err))
+			}
+
+			if !ciResult.Passed {
+				ciSpinner.Fail("CI failed")
+				allPassed = false
+				if isLastChild {
+					fmt.Printf("%s\n", Yellow("Last child PR must pass e2e tests"))
+				}
+				lastError = formatCIErrors(ciResult)
+				fmt.Printf("\n%s\n", Red("CI failures detected:"))
+				for _, job := range ciResult.FailedJobs {
+					fmt.Printf("  %s %s\n", Red("✗"), job)
+				}
+				fmt.Printf("\n%s\n", ciResult.Output)
+				break
+			}
+
+			ciSpinner.Success("CI passed")
+			fmt.Printf("  %s Child PR #%d passed all checks\n", Green("✓"), childPR.Number)
+		}
+
+		if allPassed {
+			break
+		}
+
+		if err := o.stateManager.SaveState(state.Name, state); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+
+		if attempt == o.config.MaxFixAttempts {
+			return o.failWorkflow(state, fmt.Errorf("exceeded maximum fix attempts (%d)", o.config.MaxFixAttempts))
+		}
 	}
-
-	spinner := NewSpinner("Splitting PR into manageable pieces...")
-	spinner.Start()
-
-	result, err := o.executor.Execute(ctx, ExecuteConfig{
-		Prompt:  prompt,
-		Timeout: o.config.Timeouts.PRSplit,
-	})
-
-	if err != nil {
-		spinner.Fail("PR split failed")
-		return o.failWorkflow(state, fmt.Errorf("failed to execute PR split: %w", err))
-	}
-
-	jsonStr, err := o.parser.ExtractJSON(result.Output)
-	if err != nil {
-		spinner.Fail("Failed to parse PR split output")
-		return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from PR split output: %w", err))
-	}
-
-	prResult, err := o.parser.ParsePRSplitResult(jsonStr)
-	if err != nil {
-		spinner.Fail("Failed to parse PR split result")
-		return o.failWorkflow(state, fmt.Errorf("failed to parse PR split result: %w", err))
-	}
-
-	if err := o.stateManager.SavePhaseOutput(state.Name, PhasePRSplit, prResult); err != nil {
-		spinner.Fail("Failed to save PR split output")
-		return o.failWorkflow(state, fmt.Errorf("failed to save PR split output: %w", err))
-	}
-
-	spinner.Success("PR split complete")
 
 	return o.transitionPhase(state, PhaseCompleted)
 }
@@ -549,8 +843,11 @@ func (o *Orchestrator) failWorkflow(state *WorkflowState, err error) error {
 }
 
 // getPRMetrics collects PR metrics from git diff
-func (o *Orchestrator) getPRMetrics(ctx context.Context) (*PRMetrics, error) {
+func (o *Orchestrator) getPRMetrics(ctx context.Context, workingDir string) (*PRMetrics, error) {
 	cmd := exec.CommandContext(ctx, "git", "diff", "--stat", "origin/main")
+	if workingDir != "" {
+		cmd.Dir = workingDir
+	}
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to run git diff: %w", err)
@@ -614,6 +911,10 @@ func isRecoverableError(err error) bool {
 	case strings.Contains(err.Error(), "claude execution failed"):
 		return true
 	case strings.Contains(err.Error(), "failed to parse"):
+		// Parse errors are recoverable since Claude's response can vary on retry
+		return true
+	case strings.Contains(err.Error(), "invalid workflow name"):
+		// Invalid input errors are not recoverable
 		return false
 	case strings.Contains(err.Error(), "invalid"):
 		return false
@@ -629,34 +930,55 @@ func defaultConfirmFunc(plan *Plan) (bool, string, error) {
 	fmt.Println()
 	fmt.Println(Cyan("Full plan saved to: .claude/workflow/<name>/plan.md"))
 	fmt.Println()
-	fmt.Print(Bold("Approve this plan? [y/n/feedback]: "))
 
 	scanner := bufio.NewScanner(os.Stdin)
-	if !scanner.Scan() {
-		return false, "", fmt.Errorf("failed to read input")
+
+	for {
+		fmt.Print(Bold("Approve this plan? [y/n/feedback]: "))
+
+		if !scanner.Scan() {
+			return false, "", fmt.Errorf("failed to read input")
+		}
+
+		response := strings.TrimSpace(strings.ToLower(scanner.Text()))
+
+		if response == "" {
+			fmt.Println(Yellow("Please enter 'y' to approve, 'n' to cancel, or type your feedback."))
+			continue
+		}
+
+		if response == "yes" || response == "y" {
+			return true, "", nil
+		}
+
+		if response == "no" || response == "n" {
+			return false, "", ErrUserCancelled
+		}
+
+		// Treat any other non-empty input as feedback
+		fmt.Println(Green("✓") + " Feedback received. Replanning with your suggestions...")
+		return false, response, nil
 	}
+}
 
-	response := strings.TrimSpace(strings.ToLower(scanner.Text()))
-
-	if response == "yes" || response == "y" {
-		return true, "", nil
+// formatCIErrors formats CI errors for the fix prompt
+func formatCIErrors(result *CIResult) string {
+	var builder strings.Builder
+	builder.WriteString("CI checks failed with the following errors:\n\n")
+	builder.WriteString(result.Output)
+	builder.WriteString("\n\nFailed jobs:\n")
+	for _, job := range result.FailedJobs {
+		builder.WriteString("- ")
+		builder.WriteString(job)
+		builder.WriteString("\n")
 	}
+	return builder.String()
+}
 
-	if response == "no" || response == "n" {
-		return false, "", ErrUserCancelled
+// getCIChecker creates or retrieves a CIChecker for the given working directory
+func (o *Orchestrator) getCIChecker(workingDir string) CIChecker {
+	if o.ciCheckerFactory != nil {
+		return o.ciCheckerFactory(workingDir, o.config.CICheckInterval)
 	}
-
-	fmt.Print(Yellow("Please provide your feedback: "))
-	if !scanner.Scan() {
-		return false, "", fmt.Errorf("failed to read feedback")
-	}
-
-	feedback := strings.TrimSpace(scanner.Text())
-	if feedback == "" {
-		return false, "", fmt.Errorf("feedback cannot be empty")
-	}
-
-	fmt.Println(Green("✓") + " Feedback received. Replanning with your suggestions...")
-
-	return false, feedback, nil
+	return NewCIChecker(workingDir, o.config.CICheckInterval)
 }

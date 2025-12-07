@@ -1,0 +1,16 @@
+Fixing error skills on a CI:
+Create Claude Code skills by following the official reference: https://code.claude.com/docs/en/skills
+
+When you get an error on CI, follow the following approach.
+
+At first, understand the cause of an error.
+Then check if the CI on the main branch has the same error or not.
+
+If there is no CI error, the error was added by your change, so follow to fix the cause of an error.
+
+1. Investigate the cause of an error from the current codebase
+2. Reproduce an error locally
+3. Fix the cause of an error as well as update the test codes
+4. Verify the fix works
+
+Repeat until the CI passes successfully.

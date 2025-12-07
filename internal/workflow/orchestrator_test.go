@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -18,6 +19,14 @@ type MockClaudeExecutor struct {
 
 func (m *MockClaudeExecutor) Execute(ctx context.Context, config ExecuteConfig) (*ExecuteResult, error) {
 	args := m.Called(ctx, config)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ExecuteResult), args.Error(1)
+}
+
+func (m *MockClaudeExecutor) ExecuteStreaming(ctx context.Context, config ExecuteConfig, onProgress func(ProgressEvent)) (*ExecuteResult, error) {
+	args := m.Called(ctx, config, onProgress)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -106,6 +115,11 @@ func (m *MockStateManager) DeleteWorkflow(name string) error {
 	return args.Error(0)
 }
 
+func (m *MockStateManager) SaveRawOutput(name string, phase Phase, output string) error {
+	args := m.Called(name, phase, output)
+	return args.Error(0)
+}
+
 // MockPromptGenerator is a mock implementation of PromptGenerator
 type MockPromptGenerator struct {
 	mock.Mock
@@ -129,6 +143,40 @@ func (m *MockPromptGenerator) GenerateRefactoringPrompt(plan *Plan) (string, err
 func (m *MockPromptGenerator) GeneratePRSplitPrompt(metrics *PRMetrics) (string, error) {
 	args := m.Called(metrics)
 	return args.String(0), args.Error(1)
+}
+
+func (m *MockPromptGenerator) GenerateFixCIPrompt(failures string) (string, error) {
+	args := m.Called(failures)
+	return args.String(0), args.Error(1)
+}
+
+// MockCIChecker is a mock implementation of CIChecker
+type MockCIChecker struct {
+	mock.Mock
+}
+
+func (m *MockCIChecker) CheckCI(ctx context.Context, prNumber int) (*CIResult, error) {
+	args := m.Called(ctx, prNumber)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*CIResult), args.Error(1)
+}
+
+func (m *MockCIChecker) WaitForCI(ctx context.Context, prNumber int, timeout time.Duration) (*CIResult, error) {
+	args := m.Called(ctx, prNumber, timeout)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*CIResult), args.Error(1)
+}
+
+func (m *MockCIChecker) WaitForCIWithOptions(ctx context.Context, prNumber int, timeout time.Duration, opts CheckCIOptions) (*CIResult, error) {
+	args := m.Called(ctx, prNumber, timeout, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*CIResult), args.Error(1)
 }
 
 // MockOutputParser is a mock implementation of OutputParser
@@ -171,6 +219,26 @@ func (m *MockOutputParser) ParsePRSplitResult(jsonStr string) (*PRSplitResult, e
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*PRSplitResult), args.Error(1)
+}
+
+// MockWorktreeManager is a mock implementation of WorktreeManager
+type MockWorktreeManager struct {
+	mock.Mock
+}
+
+func (m *MockWorktreeManager) CreateWorktree(workflowName string) (string, error) {
+	args := m.Called(workflowName)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockWorktreeManager) WorktreeExists(path string) bool {
+	args := m.Called(path)
+	return args.Bool(0)
+}
+
+func (m *MockWorktreeManager) DeleteWorktree(path string) error {
+	args := m.Called(path)
+	return args.Error(0)
 }
 
 func TestNewOrchestrator(t *testing.T) {
@@ -263,7 +331,7 @@ func TestOrchestrator_executePlanning(t *testing.T) {
 			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 				pg.On("GeneratePlanningPrompt", WorkflowTypeFeature, "test description", []string(nil)).Return("planning prompt", nil)
-				exec.On("Execute", mock.Anything, mock.Anything).Return(&ExecuteResult{
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
 					Output:   "```json\n{\"summary\": \"test plan\"}\n```",
 					ExitCode: 0,
 				}, nil)
@@ -280,7 +348,7 @@ func TestOrchestrator_executePlanning(t *testing.T) {
 			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 				pg.On("GeneratePlanningPrompt", WorkflowTypeFeature, "test description", []string(nil)).Return("planning prompt", nil)
-				exec.On("Execute", mock.Anything, mock.Anything).Return((*ExecuteResult)(nil), errors.New("execution failed"))
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return((*ExecuteResult)(nil), errors.New("execution failed"))
 			},
 			wantErr:       true,
 			wantNextPhase: PhaseFailed,
@@ -420,27 +488,91 @@ func TestOrchestrator_executeConfirmation(t *testing.T) {
 
 func TestOrchestrator_executeImplementation(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupMocks    func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockOutputParser)
-		wantErr       bool
-		wantNextPhase Phase
+		name             string
+		initialWorktree  string
+		setupMocks       func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockOutputParser, *MockCIChecker, *MockWorktreeManager)
+		wantErr          bool
+		wantNextPhase    Phase
+		wantWorktreePath string
 	}{
 		{
-			name: "successfully implements plan",
-			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser) {
+			name:            "successfully implements plan with pre-commit passing",
+			initialWorktree: "",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				wm.On("CreateWorktree", "test-workflow").Return("/tmp/worktrees/test-workflow", nil)
 				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
 				pg.On("GenerateImplementationPrompt", mock.Anything).Return("implementation prompt", nil)
-				exec.On("Execute", mock.Anything, mock.Anything).Return(&ExecuteResult{
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.WorkingDirectory == "/tmp/worktrees/test-workflow"
+				}), mock.Anything).Return(&ExecuteResult{
 					Output:   "```json\n{\"summary\": \"implemented\"}\n```",
 					ExitCode: 0,
 				}, nil)
 				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\"}", nil)
 				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented"}, nil)
 				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
+				ci.On("WaitForCI", mock.Anything, 0, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
 			},
-			wantErr:       false,
-			wantNextPhase: PhaseRefactoring,
+			wantErr:          false,
+			wantNextPhase:    PhaseRefactoring,
+			wantWorktreePath: "/tmp/worktrees/test-workflow",
+		},
+		{
+			name:            "skips worktree creation when WorktreePath already set (resume scenario)",
+			initialWorktree: "/existing/worktree/path",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				// Note: CreateWorktree should NOT be called
+				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
+				pg.On("GenerateImplementationPrompt", mock.Anything).Return("implementation prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.WorkingDirectory == "/existing/worktree/path"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   "```json\n{\"summary\": \"implemented\"}\n```",
+					ExitCode: 0,
+				}, nil)
+				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\"}", nil)
+				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented"}, nil)
+				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
+				ci.On("WaitForCI", mock.Anything, 0, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
+			},
+			wantErr:          false,
+			wantNextPhase:    PhaseRefactoring,
+			wantWorktreePath: "/existing/worktree/path",
+		},
+		{
+			name:            "fails when worktree creation fails",
+			initialWorktree: "",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				wm.On("CreateWorktree", "test-workflow").Return("", errors.New("branch already exists"))
+			},
+			wantErr:          true,
+			wantNextPhase:    PhaseFailed,
+			wantWorktreePath: "",
+		},
+		{
+			name:            "CI check uses current branch PR automatically",
+			initialWorktree: "",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				wm.On("CreateWorktree", "test-workflow").Return("/tmp/worktrees/test-workflow", nil)
+				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
+				pg.On("GenerateImplementationPrompt", mock.Anything).Return("implementation prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
+					Output:   "```json\n{\"summary\": \"implemented\"}\n```",
+					ExitCode: 0,
+				}, nil)
+				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\"}", nil)
+				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented"}, nil)
+				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
+				// CI check uses 0 for PR number (auto-detect current branch)
+				ci.On("WaitForCI", mock.Anything, 0, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
+			},
+			wantErr:          false,
+			wantNextPhase:    PhaseRefactoring,
+			wantWorktreePath: "/tmp/worktrees/test-workflow",
 		},
 	}
 
@@ -450,8 +582,10 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 			mockExec := new(MockClaudeExecutor)
 			mockPG := new(MockPromptGenerator)
 			mockOP := new(MockOutputParser)
+			mockCI := new(MockCIChecker)
+			mockWM := new(MockWorktreeManager)
 
-			tt.setupMocks(mockSM, mockExec, mockPG, mockOP)
+			tt.setupMocks(mockSM, mockExec, mockPG, mockOP, mockCI, mockWM)
 
 			o := &Orchestrator{
 				stateManager:    mockSM,
@@ -459,11 +593,16 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 				promptGenerator: mockPG,
 				parser:          mockOP,
 				config:          DefaultConfig("/tmp/workflows"),
+				worktreeManager: mockWM,
+				ciCheckerFactory: func(workingDir string, checkInterval time.Duration) CIChecker {
+					return mockCI
+				},
 			}
 
 			state := &WorkflowState{
 				Name:         "test-workflow",
 				CurrentPhase: PhaseImplementation,
+				WorktreePath: tt.initialWorktree,
 				Phases: map[Phase]*PhaseState{
 					PhasePlanning:       {Status: StatusCompleted},
 					PhaseConfirmation:   {Status: StatusCompleted},
@@ -482,10 +621,12 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 			}
 
 			assert.Equal(t, tt.wantNextPhase, state.CurrentPhase)
+			assert.Equal(t, tt.wantWorktreePath, state.WorktreePath)
 			mockSM.AssertExpectations(t)
 			mockExec.AssertExpectations(t)
 			mockPG.AssertExpectations(t)
 			mockOP.AssertExpectations(t)
+			mockWM.AssertExpectations(t)
 		})
 	}
 }
@@ -523,7 +664,45 @@ func TestOrchestrator_Start(t *testing.T) {
 		{
 			name: "fails when InitState fails",
 			setupMocks: func(sm *MockStateManager) {
+				sm.On("WorkflowExists", "test-workflow").Return(false)
 				sm.On("InitState", "test-workflow", "test description", WorkflowTypeFeature).Return((*WorkflowState)(nil), errors.New("init failed"))
+			},
+			wantErr: true,
+		},
+		{
+			name: "deletes and restarts failed workflow",
+			setupMocks: func(sm *MockStateManager) {
+				sm.On("WorkflowExists", "test-workflow").Return(true)
+				sm.On("LoadState", "test-workflow").Return(&WorkflowState{
+					Name:         "test-workflow",
+					CurrentPhase: PhaseFailed,
+				}, nil)
+				sm.On("DeleteWorkflow", "test-workflow").Return(nil)
+				sm.On("InitState", "test-workflow", "test description", WorkflowTypeFeature).Return((*WorkflowState)(nil), errors.New("init failed"))
+			},
+			wantErr: true,
+		},
+		{
+			name: "fails when workflow exists and not failed",
+			setupMocks: func(sm *MockStateManager) {
+				sm.On("WorkflowExists", "test-workflow").Return(true)
+				sm.On("LoadState", "test-workflow").Return(&WorkflowState{
+					Name:         "test-workflow",
+					CurrentPhase: PhaseImplementation,
+				}, nil)
+				sm.On("InitState", "test-workflow", "test description", WorkflowTypeFeature).Return((*WorkflowState)(nil), ErrWorkflowExists)
+			},
+			wantErr: true,
+		},
+		{
+			name: "fails when deleting failed workflow fails",
+			setupMocks: func(sm *MockStateManager) {
+				sm.On("WorkflowExists", "test-workflow").Return(true)
+				sm.On("LoadState", "test-workflow").Return(&WorkflowState{
+					Name:         "test-workflow",
+					CurrentPhase: PhaseFailed,
+				}, nil)
+				sm.On("DeleteWorkflow", "test-workflow").Return(errors.New("delete failed"))
 			},
 			wantErr: true,
 		},
@@ -681,6 +860,89 @@ func TestOrchestrator_Resume(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_Resume_RestoresFailedPhase(t *testing.T) {
+	tests := []struct {
+		name                string
+		initialState        *WorkflowState
+		expectedPhase       Phase
+		expectedPhaseStatus PhaseStatus
+	}{
+		{
+			name: "restores phase from error.Phase when error exists",
+			initialState: &WorkflowState{
+				Name:         "test-workflow",
+				CurrentPhase: PhaseFailed,
+				Phases: map[Phase]*PhaseState{
+					PhaseImplementation: {Status: StatusFailed},
+					PhasePlanning:       {Status: StatusCompleted},
+				},
+				Error: &WorkflowError{
+					Message:     "parse error",
+					Phase:       PhaseImplementation,
+					Recoverable: true,
+				},
+			},
+			expectedPhase:       PhaseImplementation,
+			expectedPhaseStatus: StatusInProgress,
+		},
+		{
+			name: "finds failed phase when error is nil",
+			initialState: &WorkflowState{
+				Name:         "test-workflow",
+				CurrentPhase: PhaseFailed,
+				Phases: map[Phase]*PhaseState{
+					PhaseImplementation: {Status: StatusFailed},
+					PhasePlanning:       {Status: StatusCompleted},
+				},
+			},
+			expectedPhase:       PhaseImplementation,
+			expectedPhaseStatus: StatusInProgress,
+		},
+		{
+			name: "finds in_progress phase when error is nil",
+			initialState: &WorkflowState{
+				Name:         "test-workflow",
+				CurrentPhase: PhaseFailed,
+				Phases: map[Phase]*PhaseState{
+					PhaseRefactoring: {Status: StatusInProgress},
+					PhasePlanning:    {Status: StatusCompleted},
+				},
+			},
+			expectedPhase:       PhaseRefactoring,
+			expectedPhaseStatus: StatusInProgress,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSM := new(MockStateManager)
+			mockSM.On("LoadState", "test-workflow").Return(tt.initialState, nil)
+
+			// Capture the saved state to verify
+			var savedState *WorkflowState
+			mockSM.On("SaveState", "test-workflow", mock.Anything).Run(func(args mock.Arguments) {
+				savedState = args.Get(1).(*WorkflowState)
+			}).Return(errors.New("stop execution for test"))
+
+			o := &Orchestrator{
+				stateManager: mockSM,
+				config:       DefaultConfig("/tmp/workflows"),
+			}
+
+			// Resume will fail because SaveState returns error, but we verify state was correctly set
+			err := o.Resume(context.Background(), "test-workflow")
+			require.Error(t, err)
+
+			// Verify the state was correctly modified before save
+			assert.Equal(t, tt.expectedPhase, savedState.CurrentPhase)
+			assert.Nil(t, savedState.Error)
+			assert.Equal(t, tt.expectedPhaseStatus, savedState.Phases[tt.expectedPhase].Status)
+
+			mockSM.AssertExpectations(t)
+		})
+	}
+}
+
 func TestOrchestrator_List(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -800,9 +1062,9 @@ func TestIsRecoverableError(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "parse error is not recoverable",
+			name: "parse error is recoverable",
 			err:  errors.New("failed to parse JSON"),
-			want: false,
+			want: true,
 		},
 		{
 			name: "invalid input is not recoverable",
@@ -832,10 +1094,10 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Equal(t, 100, config.MaxLines)
 	assert.Equal(t, 10, config.MaxFiles)
 	assert.Equal(t, "claude", config.ClaudePath)
-	assert.Equal(t, 5*time.Minute, config.Timeouts.Planning)
-	assert.Equal(t, 30*time.Minute, config.Timeouts.Implementation)
-	assert.Equal(t, 15*time.Minute, config.Timeouts.Refactoring)
-	assert.Equal(t, 10*time.Minute, config.Timeouts.PRSplit)
+	assert.Equal(t, 1*time.Hour, config.Timeouts.Planning)
+	assert.Equal(t, 6*time.Hour, config.Timeouts.Implementation)
+	assert.Equal(t, 6*time.Hour, config.Timeouts.Refactoring)
+	assert.Equal(t, 1*time.Hour, config.Timeouts.PRSplit)
 }
 
 func TestOrchestrator_SetConfirmFunc(t *testing.T) {
@@ -921,7 +1183,7 @@ func TestOrchestrator_executePRSplit(t *testing.T) {
 			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 				pg.On("GeneratePRSplitPrompt", mock.Anything).Return("pr-split prompt", nil)
-				exec.On("Execute", mock.Anything, mock.Anything).Return(&ExecuteResult{
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
 					Output:   "```json\n{\"summary\": \"split complete\"}\n```",
 					ExitCode: 0,
 				}, nil)
@@ -1134,6 +1396,129 @@ func TestOrchestrator_failWorkflow(t *testing.T) {
 			assert.Equal(t, tt.err.Error(), state.Error.Message)
 			assert.Equal(t, StatusFailed, state.Phases[PhasePlanning].Status)
 			mockSM.AssertExpectations(t)
+		})
+	}
+}
+
+func TestDefaultConfirmFunc(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		wantApproved bool
+		wantFeedback string
+		wantErr      bool
+		wantErrMsg   string
+	}{
+		{
+			name:         "approves with y",
+			input:        "y\n",
+			wantApproved: true,
+			wantFeedback: "",
+			wantErr:      false,
+		},
+		{
+			name:         "approves with yes",
+			input:        "yes\n",
+			wantApproved: true,
+			wantFeedback: "",
+			wantErr:      false,
+		},
+		{
+			name:         "approves with Y uppercase",
+			input:        "Y\n",
+			wantApproved: true,
+			wantFeedback: "",
+			wantErr:      false,
+		},
+		{
+			name:         "approves with YES uppercase",
+			input:        "YES\n",
+			wantApproved: true,
+			wantFeedback: "",
+			wantErr:      false,
+		},
+		{
+			name:         "rejects with n",
+			input:        "n\n",
+			wantApproved: false,
+			wantFeedback: "",
+			wantErr:      true,
+			wantErrMsg:   "workflow cancelled by user",
+		},
+		{
+			name:         "rejects with no",
+			input:        "no\n",
+			wantApproved: false,
+			wantFeedback: "",
+			wantErr:      true,
+			wantErrMsg:   "workflow cancelled by user",
+		},
+		{
+			name:         "handles feedback input directly",
+			input:        "please add more tests\n",
+			wantApproved: false,
+			wantFeedback: "please add more tests",
+			wantErr:      false,
+		},
+		{
+			name:         "handles empty input then valid input",
+			input:        "\ny\n",
+			wantApproved: true,
+			wantFeedback: "",
+			wantErr:      false,
+		},
+		{
+			name:         "handles whitespace-only input then valid input",
+			input:        "   \ny\n",
+			wantApproved: true,
+			wantFeedback: "",
+			wantErr:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a pipe to simulate stdin
+			r, w, err := os.Pipe()
+			require.NoError(t, err)
+			defer r.Close()
+
+			// Save original stdin and restore after test
+			oldStdin := os.Stdin
+			os.Stdin = r
+			defer func() { os.Stdin = oldStdin }()
+
+			// Write test input in a goroutine
+			go func() {
+				defer w.Close()
+				w.WriteString(tt.input)
+			}()
+
+			plan := &Plan{
+				Summary: "Test plan summary",
+				Phases: []PlanPhase{
+					{
+						Name:           "Phase 1",
+						Description:    "Test phase",
+						EstimatedFiles: 1,
+						EstimatedLines: 10,
+					},
+				},
+			}
+
+			approved, feedback, err := defaultConfirmFunc(plan)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.wantErrMsg != "" {
+					assert.Contains(t, err.Error(), tt.wantErrMsg)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantApproved, approved)
+			assert.Equal(t, tt.wantFeedback, feedback)
 		})
 	}
 }

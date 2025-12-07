@@ -557,6 +557,69 @@ func TestFileStateManager_DeleteWorkflow(t *testing.T) {
 	}
 }
 
+func TestFileStateManager_SaveRawOutput(t *testing.T) {
+	tests := []struct {
+		name         string
+		workflowName string
+		phase        Phase
+		output       string
+		wantErr      bool
+		errContains  string
+	}{
+		{
+			name:         "saves raw output successfully",
+			workflowName: "test-workflow",
+			phase:        PhasePlanning,
+			output:       "This is raw Claude output that failed to parse as JSON",
+			wantErr:      false,
+		},
+		{
+			name:         "saves empty output",
+			workflowName: "test-workflow",
+			phase:        PhaseImplementation,
+			output:       "",
+			wantErr:      false,
+		},
+		{
+			name:         "returns error for invalid workflow name",
+			workflowName: "../invalid",
+			phase:        PhasePlanning,
+			output:       "test",
+			wantErr:      true,
+			errContains:  "invalid workflow name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			sm := NewStateManager(tmpDir)
+
+			if !tt.wantErr {
+				_, err := sm.InitState(tt.workflowName, "test", WorkflowTypeFeature)
+				require.NoError(t, err)
+			}
+
+			err := sm.SaveRawOutput(tt.workflowName, tt.phase, tt.output)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
+
+			rawFile := filepath.Join(sm.WorkflowDir(tt.workflowName), "phases", string(tt.phase)+"_raw.txt")
+			assert.FileExists(t, rawFile)
+
+			content, err := os.ReadFile(rawFile)
+			require.NoError(t, err)
+			assert.Equal(t, tt.output, string(content))
+		})
+	}
+}
+
 func TestFileStateManager_ConcurrentAccess(t *testing.T) {
 	tmpDir := t.TempDir()
 	sm := NewStateManager(tmpDir)

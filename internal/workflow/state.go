@@ -41,6 +41,9 @@ type StateManager interface {
 	SavePhaseOutput(name string, phase Phase, data interface{}) error
 	LoadPhaseOutput(name string, phase Phase, target interface{}) error
 
+	// Debug output operations
+	SaveRawOutput(name string, phase Phase, output string) error
+
 	// List and delete
 	ListWorkflows() ([]WorkflowInfo, error)
 	DeleteWorkflow(name string) error
@@ -337,6 +340,22 @@ func (s *fileStateManager) LoadPhaseOutput(name string, phase Phase, target inte
 
 	if err := json.Unmarshal(data, target); err != nil {
 		return fmt.Errorf("failed to unmarshal phase output: %w", err)
+	}
+
+	return nil
+}
+
+// SaveRawOutput saves raw Claude output for debugging purposes
+func (s *fileStateManager) SaveRawOutput(name string, phase Phase, output string) error {
+	if err := ValidateWorkflowName(name); err != nil {
+		return err
+	}
+
+	rawFile := fmt.Sprintf("%s_raw.txt", string(phase))
+	rawPath := filepath.Join(s.WorkflowDir(name), phasesDir, rawFile)
+
+	if err := s.atomicWrite(rawPath, []byte(output)); err != nil {
+		return fmt.Errorf("failed to write raw output: %w", err)
 	}
 
 	return nil

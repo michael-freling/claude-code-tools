@@ -35,6 +35,21 @@ func TestOutputParser_ExtractJSON(t *testing.T) {
 		wantContain string
 	}{
 		{
+			name:        "extracts structured_output from Claude CLI JSON envelope",
+			output:      `{"type":"result","subtype":"success","is_error":false,"duration_ms":5328,"result":"","structured_output":{"summary":"test plan from envelope","contextType":"feature"}}`,
+			wantErr:     false,
+			wantContain: "test plan from envelope",
+		},
+		{
+			name: "extracts direct JSON without markdown",
+			output: `{
+  "summary": "test plan",
+  "contextType": "feature"
+}`,
+			wantErr:     false,
+			wantContain: "test plan",
+		},
+		{
 			name: "extracts JSON from markdown code block",
 			output: `Here is the plan:
 
@@ -69,20 +84,20 @@ Second block is valid:
 			wantContain: "valid plan",
 		},
 		{
-			name:        "returns error when no JSON blocks found",
+			name:        "returns error when no JSON blocks found with output preview",
 			output:      "No JSON here, just plain text",
 			wantErr:     true,
-			errContains: "no JSON blocks found",
+			errContains: "Claude output preview",
 		},
 		{
-			name: "returns error when JSON blocks are all invalid",
+			name: "returns error when JSON blocks are all invalid with output preview",
 			output: `Invalid JSON:
 
 ` + "```json" + `
 {invalid json}
 ` + "```",
 			wantErr:     true,
-			errContains: "no valid JSON found",
+			errContains: "Claude output preview",
 		},
 		{
 			name: "skips empty JSON block and uses valid one",
@@ -134,10 +149,10 @@ func TestOutputParser_ExtractJSON_FromFile(t *testing.T) {
 			wantContain: "JWT authentication",
 		},
 		{
-			name:        "returns error for output without JSON",
+			name:        "returns error for output without JSON with preview",
 			filename:    "claude_output_no_json.txt",
 			wantErr:     true,
-			errContains: "no JSON blocks found",
+			errContains: "Claude output preview",
 		},
 		{
 			name:        "extracts valid JSON from multiple blocks",
@@ -481,6 +496,47 @@ Second block:
 
 			got := p.findJSONBlocks(tt.output)
 			assert.Len(t, got, tt.wantCount)
+		})
+	}
+}
+
+func TestTruncateOutput(t *testing.T) {
+	tests := []struct {
+		name     string
+		output   string
+		maxLen   int
+		expected string
+	}{
+		{
+			name:     "returns empty output message for empty string",
+			output:   "",
+			maxLen:   100,
+			expected: "(empty output)",
+		},
+		{
+			name:     "returns full output when under max length",
+			output:   "short output",
+			maxLen:   100,
+			expected: "short output",
+		},
+		{
+			name:     "truncates output when over max length",
+			output:   "this is a very long output that should be truncated",
+			maxLen:   20,
+			expected: "this is a very long ...\n(truncated, showing first 500 chars)",
+		},
+		{
+			name:     "returns exact length output unchanged",
+			output:   "exact",
+			maxLen:   5,
+			expected: "exact",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateOutput(tt.output, tt.maxLen)
+			assert.Equal(t, tt.expected, got)
 		})
 	}
 }

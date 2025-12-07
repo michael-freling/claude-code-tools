@@ -1,0 +1,45 @@
+The CI checks have failed on your pull request. You need to fix the errors and ensure all CI jobs pass.
+
+## CI Failure Output
+
+{{.}}
+
+## Instructions
+
+1. Analyze the CI failure output above carefully
+2. Identify which jobs failed and why
+3. Fix all issues reported by the CI system
+4. DO NOT skip or ignore any errors
+5. Ensure your fixes address the root cause, not just symptoms
+6. Run tests locally to verify fixes before pushing
+7. Push your fixes to update the PR
+
+Common CI failures:
+- Unit tests failing
+- Integration tests failing
+- Build failures
+- Linting issues not caught by pre-commit
+- Race conditions
+- Flaky tests
+- Missing dependencies
+- Environment-specific issues
+
+## Output Format
+
+After fixing the errors, output a summary as JSON in a code block:
+```json
+{
+  "filesChanged": ["file1.go", "file2.go"],
+  "linesAdded": 15,
+  "linesRemoved": 8,
+  "testsAdded": 2,
+  "summary": "Fixed CI failures: [brief description of fixes]",
+  "nextSteps": ["Push fixes to PR"]
+}
+```
+
+IMPORTANT:
+- Fix ALL CI failures
+- Ensure all tests pass locally before pushing
+- Do not skip or disable failing tests
+- Address root causes, not symptoms

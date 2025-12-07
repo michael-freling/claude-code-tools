@@ -11,14 +11,15 @@ import (
 )
 
 var (
-	baseDir            string
-	maxLines           int
-	maxFiles           int
-	claudePath         string
-	timeoutPlanning    time.Duration
-	timeoutImplement   time.Duration
-	timeoutRefactoring time.Duration
-	timeoutPRSplit     time.Duration
+	baseDir                    string
+	maxLines                   int
+	maxFiles                   int
+	claudePath                 string
+	dangerouslySkipPermissions bool
+	timeoutPlanning            time.Duration
+	timeoutImplement           time.Duration
+	timeoutRefactoring         time.Duration
+	timeoutPRSplit             time.Duration
 )
 
 func main() {
@@ -38,10 +39,11 @@ func newRootCmd() *cobra.Command {
 	rootCmd.PersistentFlags().IntVar(&maxLines, "max-lines", 100, "PR split threshold for lines")
 	rootCmd.PersistentFlags().IntVar(&maxFiles, "max-files", 10, "PR split threshold for files")
 	rootCmd.PersistentFlags().StringVar(&claudePath, "claude-path", "claude", "path to claude CLI")
-	rootCmd.PersistentFlags().DurationVar(&timeoutPlanning, "timeout-planning", 5*time.Minute, "planning phase timeout")
-	rootCmd.PersistentFlags().DurationVar(&timeoutImplement, "timeout-implementation", 30*time.Minute, "implementation phase timeout")
-	rootCmd.PersistentFlags().DurationVar(&timeoutRefactoring, "timeout-refactoring", 15*time.Minute, "refactoring phase timeout")
-	rootCmd.PersistentFlags().DurationVar(&timeoutPRSplit, "timeout-pr-split", 10*time.Minute, "PR split phase timeout")
+	rootCmd.PersistentFlags().BoolVar(&dangerouslySkipPermissions, "dangerously-skip-permissions", false, "skip all permission prompts in Claude Code (use with caution)")
+	rootCmd.PersistentFlags().DurationVar(&timeoutPlanning, "timeout-planning", 1*time.Hour, "planning phase timeout")
+	rootCmd.PersistentFlags().DurationVar(&timeoutImplement, "timeout-implementation", 6*time.Hour, "implementation phase timeout")
+	rootCmd.PersistentFlags().DurationVar(&timeoutRefactoring, "timeout-refactoring", 6*time.Hour, "refactoring phase timeout")
+	rootCmd.PersistentFlags().DurationVar(&timeoutPRSplit, "timeout-pr-split", 1*time.Hour, "PR split phase timeout")
 
 	rootCmd.AddCommand(newStartCmd())
 	rootCmd.AddCommand(newListCmd())
@@ -54,19 +56,17 @@ func newRootCmd() *cobra.Command {
 }
 
 func createOrchestrator() (*workflow.Orchestrator, error) {
-	config := &workflow.Config{
-		BaseDir:    baseDir,
-		MaxLines:   maxLines,
-		MaxFiles:   maxFiles,
-		ClaudePath: claudePath,
-		Timeouts: workflow.PhaseTimeouts{
-			Planning:       timeoutPlanning,
-			Implementation: timeoutImplement,
-			Refactoring:    timeoutRefactoring,
-			PRSplit:        timeoutPRSplit,
-		},
+	config := workflow.DefaultConfig(baseDir)
+	config.MaxLines = maxLines
+	config.MaxFiles = maxFiles
+	config.ClaudePath = claudePath
+	config.DangerouslySkipPermissions = dangerouslySkipPermissions
+	config.Timeouts = workflow.PhaseTimeouts{
+		Planning:       timeoutPlanning,
+		Implementation: timeoutImplement,
+		Refactoring:    timeoutRefactoring,
+		PRSplit:        timeoutPRSplit,
 	}
-
 	return workflow.NewOrchestratorWithConfig(config)
 }
 

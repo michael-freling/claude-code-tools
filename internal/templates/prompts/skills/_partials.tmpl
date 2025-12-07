@@ -1,0 +1,17 @@
+{{/* Shared rules used across skill prompt templates */}}
+
+{{define "CODING_RULES"}}
+- Write the code with minimal comments — only high-level explanations of purpose, architecture, or non-obvious decisions. No line-by-line comments
+- Delete assignments of the default or zero values.
+- Delete deadcodes.
+- Every error must be checked or returned.
+- **Prefer to continue or return early** than nesting code
+   - "if is bad, else is worse"
+- Reuse the existing codes as much as possible, and avoid duplicating codes.
+
+- **Use table-driven testing**
+   - Split happy and error test sets if complicated
+   - Reduces code duplication and improves maintainability
+- **Define test inputs as test case fields**, not as function arguments
+- Write code that operates identically across dev, test, and production. Avoid environment-specific logic in core logic. Use configuration or dependency injection instead of branching code. Use test doubles externally, not via conditionals in production code. No hacks, no assumptions, no global state. Always default to production-safe behavior.
+{{end}}
