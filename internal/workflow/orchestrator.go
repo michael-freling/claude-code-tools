@@ -142,11 +142,31 @@ func (o *Orchestrator) Resume(ctx context.Context, name string) error {
 		return fmt.Errorf("workflow is in non-recoverable error state: %w", state.Error)
 	}
 
+	// If workflow is in FAILED state, restore it to the phase that failed
+	if state.CurrentPhase == PhaseFailed {
+		if state.Error != nil {
+			state.CurrentPhase = state.Error.Phase
+		} else {
+			// Find the phase that was in progress or failed
+			for phase, phaseState := range state.Phases {
+				if phaseState.Status == StatusFailed || phaseState.Status == StatusInProgress {
+					state.CurrentPhase = phase
+					break
+				}
+			}
+		}
+		// Reset the phase status to allow retry
+		if phaseState, ok := state.Phases[state.CurrentPhase]; ok {
+			phaseState.Status = StatusInProgress
+		}
+	}
+
 	if state.Error != nil {
 		state.Error = nil
-		if err := o.stateManager.SaveState(name, state); err != nil {
-			return fmt.Errorf("failed to save state: %w", err)
-		}
+	}
+
+	if err := o.stateManager.SaveState(name, state); err != nil {
+		return fmt.Errorf("failed to save state: %w", err)
 	}
 
 	return o.runWorkflow(ctx, state)

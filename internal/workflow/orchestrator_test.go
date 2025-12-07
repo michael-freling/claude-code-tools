@@ -821,6 +821,89 @@ func TestOrchestrator_Resume(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_Resume_RestoresFailedPhase(t *testing.T) {
+	tests := []struct {
+		name                string
+		initialState        *WorkflowState
+		expectedPhase       Phase
+		expectedPhaseStatus PhaseStatus
+	}{
+		{
+			name: "restores phase from error.Phase when error exists",
+			initialState: &WorkflowState{
+				Name:         "test-workflow",
+				CurrentPhase: PhaseFailed,
+				Phases: map[Phase]*PhaseState{
+					PhaseImplementation: {Status: StatusFailed},
+					PhasePlanning:       {Status: StatusCompleted},
+				},
+				Error: &WorkflowError{
+					Message:     "parse error",
+					Phase:       PhaseImplementation,
+					Recoverable: true,
+				},
+			},
+			expectedPhase:       PhaseImplementation,
+			expectedPhaseStatus: StatusInProgress,
+		},
+		{
+			name: "finds failed phase when error is nil",
+			initialState: &WorkflowState{
+				Name:         "test-workflow",
+				CurrentPhase: PhaseFailed,
+				Phases: map[Phase]*PhaseState{
+					PhaseImplementation: {Status: StatusFailed},
+					PhasePlanning:       {Status: StatusCompleted},
+				},
+			},
+			expectedPhase:       PhaseImplementation,
+			expectedPhaseStatus: StatusInProgress,
+		},
+		{
+			name: "finds in_progress phase when error is nil",
+			initialState: &WorkflowState{
+				Name:         "test-workflow",
+				CurrentPhase: PhaseFailed,
+				Phases: map[Phase]*PhaseState{
+					PhaseRefactoring: {Status: StatusInProgress},
+					PhasePlanning:    {Status: StatusCompleted},
+				},
+			},
+			expectedPhase:       PhaseRefactoring,
+			expectedPhaseStatus: StatusInProgress,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSM := new(MockStateManager)
+			mockSM.On("LoadState", "test-workflow").Return(tt.initialState, nil)
+
+			// Capture the saved state to verify
+			var savedState *WorkflowState
+			mockSM.On("SaveState", "test-workflow", mock.Anything).Run(func(args mock.Arguments) {
+				savedState = args.Get(1).(*WorkflowState)
+			}).Return(errors.New("stop execution for test"))
+
+			o := &Orchestrator{
+				stateManager: mockSM,
+				config:       DefaultConfig("/tmp/workflows"),
+			}
+
+			// Resume will fail because SaveState returns error, but we verify state was correctly set
+			err := o.Resume(context.Background(), "test-workflow")
+			require.Error(t, err)
+
+			// Verify the state was correctly modified before save
+			assert.Equal(t, tt.expectedPhase, savedState.CurrentPhase)
+			assert.Nil(t, savedState.Error)
+			assert.Equal(t, tt.expectedPhaseStatus, savedState.Phases[tt.expectedPhase].Status)
+
+			mockSM.AssertExpectations(t)
+		})
+	}
+}
+
 func TestOrchestrator_List(t *testing.T) {
 	tests := []struct {
 		name       string
