@@ -23,75 +23,64 @@ func TestParseCIOutput(t *testing.T) {
 			wantFailedJobs: []string{},
 		},
 		{
-			name: "all checks passed - symbol format",
-			output: `✓ build
-✓ test
-✓ lint`,
+			name:           "empty JSON array",
+			output:         "[]",
+			wantStatus:     "pending",
+			wantFailedJobs: []string{},
+		},
+		{
+			name:           "invalid JSON",
+			output:         "not json",
+			wantStatus:     "pending",
+			wantFailedJobs: []string{},
+		},
+		{
+			name:           "all checks passed",
+			output:         `[{"name":"build","state":"SUCCESS"},{"name":"test","state":"SUCCESS"},{"name":"lint","state":"SUCCESS"}]`,
 			wantStatus:     "success",
 			wantFailedJobs: []string{},
 		},
 		{
-			name: "some checks failed - symbol format",
-			output: `✓ build
-✗ test
-✓ lint`,
+			name:           "some checks failed",
+			output:         `[{"name":"build","state":"SUCCESS"},{"name":"test","state":"FAILURE"},{"name":"lint","state":"SUCCESS"}]`,
 			wantStatus:     "failure",
 			wantFailedJobs: []string{"test"},
 		},
 		{
-			name: "checks pending - symbol format",
-			output: `✓ build
-○ test
-○ lint`,
+			name:           "checks pending",
+			output:         `[{"name":"build","state":"SUCCESS"},{"name":"test","state":"PENDING"},{"name":"lint","state":"QUEUED"}]`,
 			wantStatus:     "pending",
 			wantFailedJobs: []string{},
 		},
 		{
-			name: "mixed status with pending - symbol format",
-			output: `✓ build
-✗ test
-○ lint`,
+			name:           "checks in progress",
+			output:         `[{"name":"build","state":"SUCCESS"},{"name":"test","state":"IN_PROGRESS"}]`,
+			wantStatus:     "pending",
+			wantFailedJobs: []string{},
+		},
+		{
+			name:           "mixed status with pending",
+			output:         `[{"name":"build","state":"SUCCESS"},{"name":"test","state":"FAILURE"},{"name":"lint","state":"PENDING"}]`,
 			wantStatus:     "pending",
 			wantFailedJobs: []string{"test"},
 		},
 		{
-			name: "multiple failed jobs - symbol format",
-			output: `✓ build
-✗ test-unit
-✗ test-integration
-✓ lint`,
+			name:           "multiple failed jobs",
+			output:         `[{"name":"build","state":"SUCCESS"},{"name":"test-unit","state":"FAILURE"},{"name":"test-integration","state":"FAILURE"},{"name":"lint","state":"SUCCESS"}]`,
 			wantStatus:     "failure",
 			wantFailedJobs: []string{"test-unit", "test-integration"},
 		},
-		// Tab-separated format (actual gh pr checks output)
 		{
-			name:           "all checks passed - tab format",
-			output:         "build\tpass\t14s\thttps://github.com/example/actions/runs/123",
+			name:           "skipped and neutral states count as passed",
+			output:         `[{"name":"build","state":"SUCCESS"},{"name":"optional-check","state":"SKIPPED"},{"name":"neutral-check","state":"NEUTRAL"}]`,
 			wantStatus:     "success",
 			wantFailedJobs: []string{},
 		},
 		{
-			name: "multiple checks passed - tab format",
-			output: `build	pass	14s	https://github.com/example/actions/runs/123
-test	pass	30s	https://github.com/example/actions/runs/124
-lint	pass	10s	https://github.com/example/actions/runs/125`,
-			wantStatus:     "success",
-			wantFailedJobs: []string{},
-		},
-		{
-			name: "some checks failed - tab format",
-			output: `build	pass	14s	https://github.com/example/actions/runs/123
-test	fail	30s	https://github.com/example/actions/runs/124
-lint	pass	10s	https://github.com/example/actions/runs/125`,
+			name:           "lowercase state values",
+			output:         `[{"name":"build","state":"success"},{"name":"test","state":"failure"}]`,
 			wantStatus:     "failure",
 			wantFailedJobs: []string{"test"},
-		},
-		{
-			name: "checks pending - tab format",
-			output: `build	pass	14s	https://github.com/example/actions/runs/123
-test	pending	0s	https://github.com/example/actions/runs/124`,
-			wantStatus:     "pending",
-			wantFailedJobs: []string{},
 		},
 	}
 
@@ -120,26 +109,43 @@ func TestCountJobStatuses(t *testing.T) {
 			wantPending: 0,
 		},
 		{
-			name:        "single passed job - tab format",
-			output:      "build\tpass\t14s\thttps://github.com/example/actions/runs/123",
+			name:        "invalid JSON",
+			output:      "not json",
+			wantPassed:  0,
+			wantFailed:  0,
+			wantPending: 0,
+		},
+		{
+			name:        "empty JSON array",
+			output:      "[]",
+			wantPassed:  0,
+			wantFailed:  0,
+			wantPending: 0,
+		},
+		{
+			name:        "single passed job",
+			output:      `[{"name":"build","state":"SUCCESS"}]`,
 			wantPassed:  1,
 			wantFailed:  0,
 			wantPending: 0,
 		},
 		{
-			name: "multiple jobs - tab format",
-			output: `build	pass	14s	https://github.com/example/actions/runs/123
-test	fail	30s	https://github.com/example/actions/runs/124
-lint	pending	0s	https://github.com/example/actions/runs/125`,
+			name:        "multiple jobs with mixed states",
+			output:      `[{"name":"build","state":"SUCCESS"},{"name":"test","state":"FAILURE"},{"name":"lint","state":"PENDING"}]`,
 			wantPassed:  1,
 			wantFailed:  1,
 			wantPending: 1,
 		},
 		{
-			name: "symbol format",
-			output: `✓ build
-✗ test
-○ lint`,
+			name:        "all job states",
+			output:      `[{"name":"build","state":"SUCCESS"},{"name":"test","state":"FAILURE"},{"name":"lint","state":"PENDING"},{"name":"deploy","state":"QUEUED"},{"name":"e2e","state":"IN_PROGRESS"},{"name":"optional","state":"SKIPPED"},{"name":"neutral","state":"NEUTRAL"}]`,
+			wantPassed:  3,
+			wantFailed:  1,
+			wantPending: 3,
+		},
+		{
+			name:        "lowercase states",
+			output:      `[{"name":"build","state":"success"},{"name":"test","state":"failure"},{"name":"lint","state":"pending"}]`,
 			wantPassed:  1,
 			wantFailed:  1,
 			wantPending: 1,
@@ -217,12 +223,9 @@ func TestCIChecker_CheckCI_NoPR(t *testing.T) {
 }
 
 func TestParseCIOutput_PendingStatus(t *testing.T) {
-	// Test that pending status from gh pr checks (exit code 8) is handled correctly
-	// Exit code 8 means "checks pending" - when there's output, parse it
-	output := `Vercel Preview Comments	pass	0	https://vercel.com/github
-Test go/aninexus-gateway / Lint go/aninexus-gateway	pending	0	https://github.com/example/actions/runs/123
-Test go/aninexus-gateway / Test go/aninexus-gateway	pending	0	https://github.com/example/actions/runs/123
-Vercel – nooxac-gateway	pass	0	https://vercel.com/example	Deployment has completed`
+	// Test that pending status from gh pr checks --json is handled correctly
+	// This simulates the case where some checks are still pending
+	output := `[{"name":"Vercel Preview Comments","state":"SUCCESS"},{"name":"Test go/aninexus-gateway / Lint go/aninexus-gateway","state":"PENDING"},{"name":"Test go/aninexus-gateway / Test go/aninexus-gateway","state":"PENDING"},{"name":"Vercel – nooxac-gateway","state":"SUCCESS"}]`
 
 	status, failedJobs := parseCIOutput(output)
 	assert.Equal(t, "pending", status)

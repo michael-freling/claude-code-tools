@@ -3,6 +3,7 @@ package workflow
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -10,6 +11,14 @@ import (
 	"strings"
 	"time"
 )
+
+// ciCheck represents a single CI check from gh pr checks --json output
+type ciCheck struct {
+	Name        string `json:"name"`
+	State       string `json:"state"`
+	StartedAt   string `json:"startedAt"`
+	CompletedAt string `json:"completedAt"`
+}
 
 // ErrCICheckTimeout is returned when CI check command times out
 var ErrCICheckTimeout = errors.New("CI check command timed out")
@@ -129,11 +138,12 @@ func (c *ciChecker) checkCIOnce(ctx context.Context, prNumber int) (*CIResult, e
 	cmdCtx, cancel := context.WithTimeout(ctx, c.commandTimeout)
 	defer cancel()
 
+	// Use --json flag for reliable parsing
 	var cmd *exec.Cmd
 	if prNumber > 0 {
-		cmd = exec.CommandContext(cmdCtx, "gh", "pr", "checks", fmt.Sprintf("%d", prNumber))
+		cmd = exec.CommandContext(cmdCtx, "gh", "pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "name,state")
 	} else {
-		cmd = exec.CommandContext(cmdCtx, "gh", "pr", "checks")
+		cmd = exec.CommandContext(cmdCtx, "gh", "pr", "checks", "--json", "name,state")
 	}
 	if c.workingDir != "" {
 		cmd.Dir = c.workingDir
@@ -161,18 +171,9 @@ func (c *ciChecker) checkCIOnce(ctx context.Context, prNumber int) (*CIResult, e
 			case 127:
 				return result, fmt.Errorf("gh CLI not found: is it installed?")
 			case 8:
-				if output != "" {
-					result.Status, result.FailedJobs = parseCIOutput(output)
-					result.Passed = result.Status == "success"
-					return result, nil
-				}
+				// Exit code 8 means no PR found or checks pending
 				return result, fmt.Errorf("no PR found for the current branch: ensure a PR exists before checking CI status")
 			case 1:
-				if output != "" {
-					result.Status, result.FailedJobs = parseCIOutput(output)
-					result.Passed = result.Status == "success"
-					return result, nil
-				}
 				return result, fmt.Errorf("failed to check CI status: %w (stderr: %s)", err, stderr.String())
 			}
 		}
@@ -336,44 +337,41 @@ checkLoop:
 	}
 }
 
-// parseCIOutput parses gh pr checks output to extract status and failed jobs
-// Handles both formats:
-// - "✓ build" (status first, then job name)
-// - "build	pass	14s	https://..." (job name first, then status)
+// parseCIOutput parses gh pr checks --json output to extract status and failed jobs
+// The output is expected to be JSON array: [{"name":"build","state":"SUCCESS"},...]
+// State values: SUCCESS, FAILURE, PENDING, QUEUED, IN_PROGRESS, SKIPPED, NEUTRAL
 func parseCIOutput(output string) (string, []string) {
-	lines := strings.Split(output, "\n")
+	var checks []ciCheck
+	if err := json.Unmarshal([]byte(output), &checks); err != nil {
+		// If JSON parsing fails, return pending (safest default)
+		return "pending", []string{}
+	}
+
+	if len(checks) == 0 {
+		return "pending", []string{}
+	}
+
 	failedJobs := []string{}
 	allPassed := true
-	anyCompleted := false
 	hasPending := false
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-
-		// Try to find status - check first field, then second field
-		status, jobName := extractStatusAndJobName(fields)
-
-		switch status {
-		case "✓", "pass", "success":
-			anyCompleted = true
-		case "✗", "fail", "failure":
-			anyCompleted = true
+	for _, check := range checks {
+		state := strings.ToUpper(check.State)
+		switch state {
+		case "SUCCESS", "SKIPPED", "NEUTRAL":
+			// These are considered passing states
+		case "FAILURE":
 			allPassed = false
-			failedJobs = append(failedJobs, jobName)
-		case "○", "*", "pending", "queued", "in_progress":
+			failedJobs = append(failedJobs, check.Name)
+		case "PENDING", "QUEUED", "IN_PROGRESS", "":
+			hasPending = true
+		default:
+			// Unknown state, treat as pending to be safe
 			hasPending = true
 		}
 	}
 
-	if !anyCompleted || hasPending {
+	if hasPending {
 		return "pending", failedJobs
 	}
 
@@ -384,54 +382,24 @@ func parseCIOutput(output string) (string, []string) {
 	return "failure", failedJobs
 }
 
-// extractStatusAndJobName extracts status and job name from fields
-// Handles both formats:
-// - ["✓", "build"] -> status="✓", jobName="build"
-// - ["build", "pass", "14s", "https://..."] -> status="pass", jobName="build"
-func extractStatusAndJobName(fields []string) (status, jobName string) {
-	statusValues := map[string]bool{
-		"✓": true, "pass": true, "success": true,
-		"✗": true, "fail": true, "failure": true,
-		"○": true, "*": true, "pending": true, "queued": true, "in_progress": true,
-	}
-
-	// Check if first field is a status indicator
-	if statusValues[fields[0]] {
-		return fields[0], strings.Join(fields[1:], " ")
-	}
-
-	// Check if second field is a status indicator (tab-separated format)
-	if len(fields) >= 2 && statusValues[fields[1]] {
-		return fields[1], fields[0]
-	}
-
-	// Default: assume first field is status
-	return fields[0], strings.Join(fields[1:], " ")
-}
-
-// countJobStatuses counts passed, failed, and pending jobs from CI output
+// countJobStatuses counts passed, failed, and pending jobs from CI JSON output
 func countJobStatuses(output string) (passed, failed, pending int) {
-	lines := strings.Split(output, "\n")
+	var checks []ciCheck
+	if err := json.Unmarshal([]byte(output), &checks); err != nil {
+		return 0, 0, 0
+	}
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-
-		status, _ := extractStatusAndJobName(fields)
-
-		switch status {
-		case "✓", "pass", "success":
+	for _, check := range checks {
+		state := strings.ToUpper(check.State)
+		switch state {
+		case "SUCCESS", "SKIPPED", "NEUTRAL":
 			passed++
-		case "✗", "fail", "failure":
+		case "FAILURE":
 			failed++
-		case "○", "*", "pending", "queued", "in_progress":
+		case "PENDING", "QUEUED", "IN_PROGRESS", "":
+			pending++
+		default:
+			// Unknown state, count as pending
 			pending++
 		}
 	}
