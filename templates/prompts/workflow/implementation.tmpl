@@ -75,9 +75,14 @@ After you implement the changes:
 1. Commit all your changes with descriptive commit messages
 2. Pre-commit hooks will automatically run to check code quality
 3. If pre-commit fails, you will receive the error output and must fix all issues
-4. After pre-commit passes, CI will run to verify the build and tests
-5. If CI fails, you will receive the failure details and must fix all issues
-6. This process continues until all checks pass
+4. After pre-commit passes, push your branch and create a Pull Request:
+   - Push the branch: `git push -u origin <branch-name>`
+   - Create a PR: `gh pr create --title "<descriptive title>" --body "<description>"`
+   - If PR creation fails, you MUST stop and report the error - do NOT continue without a PR
+   - Extract the PR number from the PR URL (format: https://github.com/owner/repo/pull/NUMBER)
+5. CI will run on the PR to verify the build and tests
+6. If CI fails, you will receive the failure details and must fix all issues
+7. This process continues until all checks pass
 
 Make sure your implementation:
 - Passes all linting and formatting checks
@@ -85,15 +90,19 @@ Make sure your implementation:
 - All tests pass
 
 ## Output Format
-After completing the implementation, output a summary as JSON with the following structure:
+After completing the implementation and creating the PR, output a summary as JSON with the following structure:
 {
   "filesChanged": ["file1.go", "file2.go"],
   "linesAdded": 350,
   "linesRemoved": 20,
   "testsAdded": 15,
+  "prNumber": 123,
+  "prUrl": "https://github.com/owner/repo/pull/123",
   "summary": "Brief summary of what was implemented",
   "nextSteps": ["optional", "next", "steps"]
 }
+
+**IMPORTANT:** You MUST create a Pull Request and include the `prNumber` and `prUrl` in your output. The CI checks require a PR to exist.
 
 Focus on:
 - Clean, maintainable code

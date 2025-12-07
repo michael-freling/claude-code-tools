@@ -53,10 +53,10 @@ func TestWorktreeManager_CreateWorktree(t *testing.T) {
 
 func TestWorktreeManager_WorktreeExists(t *testing.T) {
 	tests := []struct {
-		name   string
-		path   string
-		setup  func(t *testing.T) string
-		want   bool
+		name  string
+		path  string
+		setup func(t *testing.T) string
+		want  bool
 	}{
 		{
 			name: "returns false for empty path",

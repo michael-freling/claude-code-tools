@@ -506,13 +506,13 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
 					return config.WorkingDirectory == "/tmp/worktrees/test-workflow"
 				}), mock.Anything).Return(&ExecuteResult{
-					Output:   "```json\n{\"summary\": \"implemented\"}\n```",
+					Output:   "```json\n{\"summary\": \"implemented\", \"prNumber\": 123}\n```",
 					ExitCode: 0,
 				}, nil)
-				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\"}", nil)
-				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented"}, nil)
+				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\", \"prNumber\": 123}", nil)
+				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented", PRNumber: 123}, nil)
 				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
-				ci.On("WaitForCI", mock.Anything, 0, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
+				ci.On("WaitForCI", mock.Anything, 123, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
 			},
 			wantErr:          false,
 			wantNextPhase:    PhaseRefactoring,
@@ -529,13 +529,13 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
 					return config.WorkingDirectory == "/existing/worktree/path"
 				}), mock.Anything).Return(&ExecuteResult{
-					Output:   "```json\n{\"summary\": \"implemented\"}\n```",
+					Output:   "```json\n{\"summary\": \"implemented\", \"prNumber\": 456}\n```",
 					ExitCode: 0,
 				}, nil)
-				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\"}", nil)
-				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented"}, nil)
+				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\", \"prNumber\": 456}", nil)
+				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented", PRNumber: 456}, nil)
 				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
-				ci.On("WaitForCI", mock.Anything, 0, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
+				ci.On("WaitForCI", mock.Anything, 456, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
 			},
 			wantErr:          false,
 			wantNextPhase:    PhaseRefactoring,
@@ -551,6 +551,48 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 			wantErr:          true,
 			wantNextPhase:    PhaseFailed,
 			wantWorktreePath: "",
+		},
+		{
+			name:            "fails when PR number is zero in implementation output",
+			initialWorktree: "",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				wm.On("CreateWorktree", "test-workflow").Return("/tmp/worktrees/test-workflow", nil)
+				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
+				pg.On("GenerateImplementationPrompt", mock.Anything).Return("implementation prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
+					Output:   "```json\n{\"summary\": \"implemented\", \"prNumber\": 0}\n```",
+					ExitCode: 0,
+				}, nil)
+				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\", \"prNumber\": 0}", nil)
+				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented", PRNumber: 0}, nil)
+				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
+				// CI checker should NOT be called since we fail before reaching CI check
+			},
+			wantErr:          true,
+			wantNextPhase:    PhaseFailed,
+			wantWorktreePath: "/tmp/worktrees/test-workflow",
+		},
+		{
+			name:            "fails when PR number is missing from implementation output",
+			initialWorktree: "",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				wm.On("CreateWorktree", "test-workflow").Return("/tmp/worktrees/test-workflow", nil)
+				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
+				pg.On("GenerateImplementationPrompt", mock.Anything).Return("implementation prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
+					Output:   "```json\n{\"summary\": \"implemented\"}\n```",
+					ExitCode: 0,
+				}, nil)
+				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\"}", nil)
+				// PRNumber defaults to 0 when not present in JSON
+				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented"}, nil)
+				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
+			},
+			wantErr:          true,
+			wantNextPhase:    PhaseFailed,
+			wantWorktreePath: "/tmp/worktrees/test-workflow",
 		},
 	}
 

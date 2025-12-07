@@ -458,6 +458,18 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 			return o.failWorkflow(state, fmt.Errorf("failed to save implementation output: %w", err))
 		}
 
+		// Validate and store PR number from implementation output.
+		// The PR is required for CI checks - if Claude Code didn't create one,
+		// we fail the workflow rather than attempting CI with PR number 0.
+		if summary.PRNumber == 0 {
+			spinner.Fail("No PR created")
+			return o.failWorkflow(state, fmt.Errorf("implementation did not create a PR - prNumber is missing or zero in output"))
+		}
+		state.PRNumber = summary.PRNumber
+		if err := o.stateManager.SaveState(state.Name, state); err != nil {
+			return fmt.Errorf("failed to save state with PR number: %w", err)
+		}
+
 		spinner.Success("Implementation complete")
 
 		workingDir := state.WorktreePath
@@ -469,7 +481,7 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 		ciSpinner.Start()
 
 		ciChecker := o.getCIChecker(workingDir)
-		ciResult, err := ciChecker.WaitForCI(ctx, 0, o.config.CICheckTimeout)
+		ciResult, err := ciChecker.WaitForCI(ctx, state.PRNumber, o.config.CICheckTimeout)
 		if err != nil {
 			ciSpinner.Fail("CI check failed")
 			return o.failWorkflow(state, fmt.Errorf("failed to check CI: %w", err))
@@ -584,6 +596,12 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 
 		spinner.Success("Refactoring complete")
 
+		// Verify PR number exists for CI checks.
+		// This should never happen if implementation phase completed successfully.
+		if state.PRNumber == 0 {
+			return o.failWorkflow(state, fmt.Errorf("internal error: PR number missing after implementation phase"))
+		}
+
 		workingDir := state.WorktreePath
 		if workingDir == "" {
 			workingDir = o.config.BaseDir
@@ -593,7 +611,7 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 		ciSpinner.Start()
 
 		ciChecker := o.getCIChecker(workingDir)
-		ciResult, err := ciChecker.WaitForCI(ctx, 0, o.config.CICheckTimeout)
+		ciResult, err := ciChecker.WaitForCI(ctx, state.PRNumber, o.config.CICheckTimeout)
 		if err != nil {
 			ciSpinner.Fail("CI check failed")
 			return o.failWorkflow(state, fmt.Errorf("failed to check CI: %w", err))
