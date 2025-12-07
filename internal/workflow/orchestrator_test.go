@@ -338,6 +338,7 @@ func TestOrchestrator_executePlanning(t *testing.T) {
 				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"test plan\"}", nil)
 				op.On("ParsePlan", mock.Anything).Return(&Plan{Summary: "test plan"}, nil)
 				sm.On("SavePlan", "test-workflow", mock.Anything).Return(nil)
+				sm.On("SavePlanMarkdown", "test-workflow", mock.Anything).Return(nil)
 				sm.On("SavePhaseOutput", "test-workflow", PhasePlanning, mock.Anything).Return(nil)
 			},
 			wantErr:       false,
@@ -1255,6 +1256,100 @@ func TestOrchestrator_executePRSplit(t *testing.T) {
 			mockSM.AssertExpectations(t)
 		})
 	}
+}
+
+func TestOrchestrator_executePRSplit_CIFailureRetry(t *testing.T) {
+	// This test verifies that when CI fails on a child PR, the retry uses
+	// GenerateFixCIPrompt to generate a proper fix prompt (not raw error text)
+	mockSM := new(MockStateManager)
+	mockExec := new(MockClaudeExecutor)
+	mockPG := new(MockPromptGenerator)
+	mockOP := new(MockOutputParser)
+	mockCI := new(MockCIChecker)
+
+	// Setup: first attempt splits PR, CI fails on child PR
+	// second attempt uses GenerateFixCIPrompt, CI passes
+	mockSM.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+
+	// First attempt: GeneratePRSplitPrompt
+	mockPG.On("GeneratePRSplitPrompt", mock.Anything).Return("pr-split prompt", nil).Once()
+
+	// First execution returns PRs
+	mockExec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+		return config.Prompt == "pr-split prompt"
+	}), mock.Anything).Return(&ExecuteResult{
+		Output:   `{"parentPR": {"number": 1}, "childPRs": [{"number": 2, "title": "Child PR"}]}`,
+		ExitCode: 0,
+	}, nil).Once()
+
+	mockOP.On("ExtractJSON", mock.Anything).Return(`{"parentPR": {"number": 1}, "childPRs": [{"number": 2, "title": "Child PR"}]}`, nil)
+	mockOP.On("ParsePRSplitResult", mock.Anything).Return(&PRSplitResult{
+		ParentPR: PRInfo{Number: 1},
+		ChildPRs: []PRInfo{{Number: 2, Title: "Child PR"}},
+	}, nil)
+	mockSM.On("SavePhaseOutput", "test-workflow", PhasePRSplit, mock.Anything).Return(nil)
+
+	// First CI check fails
+	mockCI.On("WaitForCIWithOptions", mock.Anything, 2, mock.Anything, mock.Anything).Return(&CIResult{
+		Passed:     false,
+		Status:     "failure",
+		FailedJobs: []string{"build"},
+		Output:     "Build failed",
+	}, nil).Once()
+
+	// Second attempt: GenerateFixCIPrompt should be called (this is the fix we're testing)
+	mockPG.On("GenerateFixCIPrompt", mock.Anything).Return("fix ci prompt", nil).Once()
+
+	// Second execution with fix prompt
+	mockExec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+		return config.Prompt == "fix ci prompt"
+	}), mock.Anything).Return(&ExecuteResult{
+		Output:   `{"parentPR": {"number": 1}, "childPRs": [{"number": 2, "title": "Child PR"}]}`,
+		ExitCode: 0,
+	}, nil).Once()
+
+	// Second CI check passes
+	mockCI.On("WaitForCIWithOptions", mock.Anything, 2, mock.Anything, mock.Anything).Return(&CIResult{
+		Passed: true,
+		Status: "success",
+	}, nil).Once()
+
+	config := DefaultConfig("/tmp/workflows")
+	config.MaxFixAttempts = 3
+
+	o := &Orchestrator{
+		stateManager:    mockSM,
+		executor:        mockExec,
+		promptGenerator: mockPG,
+		parser:          mockOP,
+		config:          config,
+		ciCheckerFactory: func(workingDir string, checkInterval time.Duration) CIChecker {
+			return mockCI
+		},
+	}
+
+	state := &WorkflowState{
+		Name:         "test-workflow",
+		CurrentPhase: PhasePRSplit,
+		Phases: map[Phase]*PhaseState{
+			PhasePlanning:       {Status: StatusCompleted},
+			PhaseConfirmation:   {Status: StatusCompleted},
+			PhaseImplementation: {Status: StatusCompleted},
+			PhaseRefactoring:    {Status: StatusCompleted},
+			PhasePRSplit:        {Status: StatusInProgress, Metrics: &PRMetrics{LinesChanged: 150, FilesChanged: 15}},
+		},
+	}
+
+	err := o.executePRSplit(context.Background(), state)
+
+	require.NoError(t, err)
+	assert.Equal(t, PhaseCompleted, state.CurrentPhase)
+
+	// Verify GenerateFixCIPrompt was called (not just raw error passed)
+	mockPG.AssertCalled(t, "GenerateFixCIPrompt", mock.Anything)
+	mockSM.AssertExpectations(t)
+	mockExec.AssertExpectations(t)
+	mockPG.AssertExpectations(t)
 }
 
 func TestOrchestrator_Status(t *testing.T) {

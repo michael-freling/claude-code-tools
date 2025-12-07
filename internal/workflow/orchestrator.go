@@ -321,6 +321,13 @@ func (o *Orchestrator) executePlanning(ctx context.Context, state *WorkflowState
 		return o.failWorkflow(state, fmt.Errorf("failed to save plan: %w", err))
 	}
 
+	// Save plan as markdown for easy viewing
+	planMarkdown := FormatPlanSummary(plan)
+	if err := o.stateManager.SavePlanMarkdown(state.Name, planMarkdown); err != nil {
+		spinner.Fail("Failed to save plan markdown")
+		return o.failWorkflow(state, fmt.Errorf("failed to save plan markdown: %w", err))
+	}
+
 	if err := o.stateManager.SavePhaseOutput(state.Name, PhasePlanning, plan); err != nil {
 		spinner.Fail("Failed to save planning output")
 		return o.failWorkflow(state, fmt.Errorf("failed to save planning output: %w", err))
@@ -684,7 +691,10 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 				return o.failWorkflow(state, fmt.Errorf("failed to generate PR split prompt: %w", err))
 			}
 		} else {
-			prompt = lastError
+			prompt, err = o.promptGenerator.GenerateFixCIPrompt(lastError)
+			if err != nil {
+				return o.failWorkflow(state, fmt.Errorf("failed to generate CI fix prompt: %w", err))
+			}
 			fmt.Printf("\n%s Attempt %d/%d to fix errors\n", Yellow("⚠"), attempt, o.config.MaxFixAttempts)
 		}
 
