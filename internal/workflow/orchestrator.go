@@ -163,7 +163,10 @@ func (o *Orchestrator) Resume(ctx context.Context, name string) error {
 		}
 	}
 
-	if state.Error != nil {
+	// Preserve CI failure type for phase execution to handle appropriately
+	// (the error message is stored in phase feedback, so we only need to preserve the type)
+	isCIFailure := state.Error != nil && state.Error.FailureType == FailureTypeCI
+	if state.Error != nil && !isCIFailure {
 		state.Error = nil
 	}
 
@@ -402,8 +405,19 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 		return o.failWorkflow(state, fmt.Errorf("failed to load plan: %w", err))
 	}
 
+	// Check if we're resuming from a CI failure - if so, skip to CI fix loop
 	var lastError string
-	for attempt := 1; attempt <= o.config.MaxFixAttempts; attempt++ {
+	startAttempt := 1
+	if state.Error != nil && state.Error.FailureType == FailureTypeCI && len(phaseState.Feedback) > 0 {
+		// Resuming from CI failure - use the stored error message and start from attempt 2
+		lastError = phaseState.Feedback[len(phaseState.Feedback)-1]
+		startAttempt = 2
+		// Clear the error now that we've extracted the CI failure info
+		state.Error = nil
+		fmt.Printf("%s Resuming from CI failure, skipping to CI fix...\n", Yellow("⚠"))
+	}
+
+	for attempt := startAttempt; attempt <= o.config.MaxFixAttempts; attempt++ {
 		phaseState.Attempts = attempt
 
 		var prompt string
@@ -483,7 +497,12 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 		ciResult, err := ciChecker.WaitForCI(ctx, 0, o.config.CICheckTimeout)
 		if err != nil {
 			ciSpinner.Fail("CI check failed")
-			return o.failWorkflow(state, fmt.Errorf("failed to check CI: %w", err))
+			// Store the error message in feedback so resume can use it for CI fix prompt
+			phaseState.Feedback = append(phaseState.Feedback, fmt.Sprintf("CI check error: %v", err))
+			if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
+				return fmt.Errorf("failed to save state: %w", saveErr)
+			}
+			return o.failWorkflowCI(state, fmt.Errorf("failed to check CI: %w", err))
 		}
 
 		if ciResult.Passed {
@@ -530,8 +549,19 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 		return o.failWorkflow(state, fmt.Errorf("failed to load plan: %w", err))
 	}
 
+	// Check if we're resuming from a CI failure - if so, skip to CI fix loop
 	var lastError string
-	for attempt := 1; attempt <= o.config.MaxFixAttempts; attempt++ {
+	startAttempt := 1
+	if state.Error != nil && state.Error.FailureType == FailureTypeCI && len(phaseState.Feedback) > 0 {
+		// Resuming from CI failure - use the stored error message and start from attempt 2
+		lastError = phaseState.Feedback[len(phaseState.Feedback)-1]
+		startAttempt = 2
+		// Clear the error now that we've extracted the CI failure info
+		state.Error = nil
+		fmt.Printf("%s Resuming from CI failure, skipping to CI fix...\n", Yellow("⚠"))
+	}
+
+	for attempt := startAttempt; attempt <= o.config.MaxFixAttempts; attempt++ {
 		phaseState.Attempts = attempt
 
 		var prompt string
@@ -607,7 +637,12 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 		ciResult, err := ciChecker.WaitForCI(ctx, 0, o.config.CICheckTimeout)
 		if err != nil {
 			ciSpinner.Fail("CI check failed")
-			return o.failWorkflow(state, fmt.Errorf("failed to check CI: %w", err))
+			// Store the error message in feedback so resume can use it for CI fix prompt
+			phaseState.Feedback = append(phaseState.Feedback, fmt.Sprintf("CI check error: %v", err))
+			if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
+				return fmt.Errorf("failed to save state: %w", saveErr)
+			}
+			return o.failWorkflowCI(state, fmt.Errorf("failed to check CI: %w", err))
 		}
 
 		if ciResult.Passed {
@@ -767,7 +802,7 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 			ciResult, err := ciChecker.WaitForCIWithOptions(ctx, childPR.Number, o.config.CICheckTimeout, opts)
 			if err != nil {
 				ciSpinner.Fail("CI check failed")
-				return o.failWorkflow(state, fmt.Errorf("failed to check CI on child PR #%d: %w", childPR.Number, err))
+				return o.failWorkflowCI(state, fmt.Errorf("failed to check CI on child PR #%d: %w", childPR.Number, err))
 			}
 
 			if !ciResult.Passed {
@@ -831,13 +866,24 @@ func (o *Orchestrator) transitionPhase(state *WorkflowState, nextPhase Phase) er
 	return nil
 }
 
-// failWorkflow transitions the workflow to failed state
+// failWorkflow transitions the workflow to failed state with execution failure type
 func (o *Orchestrator) failWorkflow(state *WorkflowState, err error) error {
+	return o.failWorkflowWithType(state, err, FailureTypeExecution)
+}
+
+// failWorkflowCI transitions the workflow to failed state with CI failure type
+func (o *Orchestrator) failWorkflowCI(state *WorkflowState, err error) error {
+	return o.failWorkflowWithType(state, err, FailureTypeCI)
+}
+
+// failWorkflowWithType transitions the workflow to failed state with a specific failure type
+func (o *Orchestrator) failWorkflowWithType(state *WorkflowState, err error, failureType FailureType) error {
 	state.Error = &WorkflowError{
 		Message:     err.Error(),
 		Phase:       state.CurrentPhase,
 		Timestamp:   time.Now(),
 		Recoverable: isRecoverableError(err),
+		FailureType: failureType,
 	}
 
 	currentPhaseState := state.Phases[state.CurrentPhase]
