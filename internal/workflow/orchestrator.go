@@ -13,14 +13,15 @@ import (
 
 // Config holds configuration for the orchestrator
 type Config struct {
-	BaseDir         string
-	MaxLines        int
-	MaxFiles        int
-	Timeouts        PhaseTimeouts
-	ClaudePath      string
-	CICheckInterval time.Duration
-	CICheckTimeout  time.Duration
-	MaxFixAttempts  int
+	BaseDir                    string
+	MaxLines                   int
+	MaxFiles                   int
+	Timeouts                   PhaseTimeouts
+	ClaudePath                 string
+	DangerouslySkipPermissions bool
+	CICheckInterval            time.Duration
+	CICheckTimeout             time.Duration
+	MaxFixAttempts             int
 }
 
 // PhaseTimeouts holds timeout durations for each phase
@@ -34,13 +35,14 @@ type PhaseTimeouts struct {
 // DefaultConfig returns default configuration
 func DefaultConfig(baseDir string) *Config {
 	return &Config{
-		BaseDir:         baseDir,
-		MaxLines:        100,
-		MaxFiles:        10,
-		ClaudePath:      "claude",
-		CICheckInterval: 30 * time.Second,
-		CICheckTimeout:  30 * time.Minute,
-		MaxFixAttempts:  10,
+		BaseDir:                    baseDir,
+		MaxLines:                   100,
+		MaxFiles:                   10,
+		ClaudePath:                 "claude",
+		DangerouslySkipPermissions: false,
+		CICheckInterval:            30 * time.Second,
+		CICheckTimeout:             30 * time.Minute,
+		MaxFixAttempts:             10,
 		Timeouts: PhaseTimeouts{
 			Planning:       5 * time.Minute,
 			Implementation: 30 * time.Minute,
@@ -279,9 +281,10 @@ func (o *Orchestrator) executePlanning(ctx context.Context, state *WorkflowState
 	spinner.Start()
 
 	result, err := o.executor.ExecuteStreaming(ctx, ExecuteConfig{
-		Prompt:     prompt,
-		Timeout:    o.config.Timeouts.Planning,
-		JSONSchema: PlanSchema,
+		Prompt:                     prompt,
+		Timeout:                    o.config.Timeouts.Planning,
+		JSONSchema:                 PlanSchema,
+		DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
 	}, spinner.OnProgress)
 
 	if err != nil {
@@ -402,9 +405,10 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 		spinner.Start()
 
 		result, err := o.executor.ExecuteStreaming(ctx, ExecuteConfig{
-			Prompt:     prompt,
-			Timeout:    o.config.Timeouts.Implementation,
-			JSONSchema: ImplementationSummarySchema,
+			Prompt:                     prompt,
+			Timeout:                    o.config.Timeouts.Implementation,
+			JSONSchema:                 ImplementationSummarySchema,
+			DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
 		}, spinner.OnProgress)
 
 		if err != nil {
@@ -543,9 +547,10 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 		spinner.Start()
 
 		result, err := o.executor.ExecuteStreaming(ctx, ExecuteConfig{
-			Prompt:     prompt,
-			Timeout:    o.config.Timeouts.Refactoring,
-			JSONSchema: RefactoringSummarySchema,
+			Prompt:                     prompt,
+			Timeout:                    o.config.Timeouts.Refactoring,
+			JSONSchema:                 RefactoringSummarySchema,
+			DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
 		}, spinner.OnProgress)
 
 		if err != nil {
@@ -711,9 +716,10 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 		spinner.Start()
 
 		result, err := o.executor.ExecuteStreaming(ctx, ExecuteConfig{
-			Prompt:     prompt,
-			Timeout:    o.config.Timeouts.PRSplit,
-			JSONSchema: PRSplitResultSchema,
+			Prompt:                     prompt,
+			Timeout:                    o.config.Timeouts.PRSplit,
+			JSONSchema:                 PRSplitResultSchema,
+			DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
 		}, spinner.OnProgress)
 
 		if err != nil {

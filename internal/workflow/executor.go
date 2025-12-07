@@ -27,11 +27,11 @@ type ProgressEvent struct {
 
 // StreamChunk represents a parsed stream-json chunk from Claude CLI
 type StreamChunk struct {
-	Type             string          `json:"type"`             // system, assistant, user, result
-	Subtype          string          `json:"subtype"`          // init, success, etc.
-	Message          *MessageChunk   `json:"message"`          // For assistant/user types
-	ToolUseResult    string          `json:"tool_use_result"`  // For user type (tool results)
-	Result           string          `json:"result"`           // For result type
+	Type             string          `json:"type"`              // system, assistant, user, result
+	Subtype          string          `json:"subtype"`           // init, success, etc.
+	Message          *MessageChunk   `json:"message"`           // For assistant/user types
+	ToolUseResult    string          `json:"tool_use_result"`   // For user type (tool results)
+	Result           string          `json:"result"`            // For result type
 	StructuredOutput json.RawMessage `json:"structured_output"` // For result type with schema
 	IsError          bool            `json:"is_error"`
 }
@@ -51,11 +51,12 @@ type ContentBlock struct {
 
 // ExecuteConfig holds configuration for executing Claude CLI
 type ExecuteConfig struct {
-	Prompt           string
-	WorkingDirectory string
-	Timeout          time.Duration
-	Env              map[string]string
-	JSONSchema       string
+	Prompt                     string
+	WorkingDirectory           string
+	Timeout                    time.Duration
+	Env                        map[string]string
+	JSONSchema                 string
+	DangerouslySkipPermissions bool
 }
 
 // ExecuteResult holds the result of Claude CLI execution
@@ -103,6 +104,9 @@ func (e *claudeExecutor) Execute(ctx context.Context, config ExecuteConfig) (*Ex
 	}
 
 	args := []string{"--print"}
+	if config.DangerouslySkipPermissions {
+		args = append(args, "--dangerously-skip-permissions")
+	}
 	if config.JSONSchema != "" {
 		args = append(args, "--output-format", "json", "--json-schema", config.JSONSchema)
 	}
@@ -188,6 +192,9 @@ func (e *claudeExecutor) ExecuteStreaming(ctx context.Context, config ExecuteCon
 
 	// Build args for streaming mode: requires --verbose with stream-json
 	args := []string{"--print", "--output-format", "stream-json", "--verbose"}
+	if config.DangerouslySkipPermissions {
+		args = append(args, "--dangerously-skip-permissions")
+	}
 	if config.JSONSchema != "" {
 		args = append(args, "--json-schema", config.JSONSchema)
 	}
