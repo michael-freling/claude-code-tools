@@ -23,4 +23,23 @@ jobs:
       run: go build -v ./...
 
     - name: Test
-      run: go test -v ./...
+      run: go test -v -coverprofile=coverage.txt -covermode=atomic ./...
+
+    - name: Check coverage threshold
+      run: |
+        coverage=$(go tool cover -func=coverage.txt | grep total | awk '{print $3}' | sed 's/%//')
+        threshold=80
+        echo "Total coverage: ${coverage}%"
+        echo "Threshold: ${threshold}%"
+        if (( $(echo "$coverage < $threshold" | bc -l) )); then
+          echo "Coverage ${coverage}% is below threshold ${threshold}%"
+          exit 1
+        else
+          echo "Coverage ${coverage}% meets threshold ${threshold}%"
+        fi
+
+    - name: Upload coverage artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: coverage.txt
