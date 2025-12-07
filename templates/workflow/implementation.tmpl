@@ -79,14 +79,13 @@ After you implement the changes:
    - Push the branch: `git push -u origin <branch-name>`
    - Create a PR: `gh pr create --title "<descriptive title>" --body "<description>"`
    - If PR creation fails, you MUST stop and report the error - do NOT continue without a PR
-5. CI will run on the PR to verify the build and tests
-6. If CI fails, you will receive the failure details and must fix all issues
-7. This process continues until all checks pass
+
+**Note:** CI error handling is managed separately by an orchestrator. Your responsibility ends after successfully creating the PR.
 
 Make sure your implementation:
 - Passes all linting and formatting checks
 - Compiles without errors
-- All tests pass
+- All tests pass locally before committing
 
 ## Output Format
 After completing the implementation and creating the PR, output a summary as JSON with the following structure:
