@@ -179,31 +179,6 @@ func (m *MockCIChecker) WaitForCIWithOptions(ctx context.Context, prNumber int, 
 	return args.Get(0).(*CIResult), args.Error(1)
 }
 
-// MockPRManager is a mock implementation of PRManager
-type MockPRManager struct {
-	mock.Mock
-}
-
-func (m *MockPRManager) CreatePR(ctx context.Context, title, body string) (int, error) {
-	args := m.Called(ctx, title, body)
-	return args.Int(0), args.Error(1)
-}
-
-func (m *MockPRManager) GetCurrentBranchPR(ctx context.Context) (int, error) {
-	args := m.Called(ctx)
-	return args.Int(0), args.Error(1)
-}
-
-func (m *MockPRManager) EnsurePR(ctx context.Context, title, body string) (int, error) {
-	args := m.Called(ctx, title, body)
-	return args.Int(0), args.Error(1)
-}
-
-func (m *MockPRManager) PushBranch(ctx context.Context) error {
-	args := m.Called(ctx)
-	return args.Error(0)
-}
-
 // MockOutputParser is a mock implementation of OutputParser
 type MockOutputParser struct {
 	mock.Mock
@@ -515,7 +490,7 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 	tests := []struct {
 		name             string
 		initialWorktree  string
-		setupMocks       func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockOutputParser, *MockCIChecker, *MockWorktreeManager, *MockPRManager)
+		setupMocks       func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockOutputParser, *MockCIChecker, *MockWorktreeManager)
 		wantErr          bool
 		wantNextPhase    Phase
 		wantWorktreePath string
@@ -523,7 +498,7 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 		{
 			name:            "successfully implements plan with pre-commit passing",
 			initialWorktree: "",
-			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager, pr *MockPRManager) {
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 				wm.On("CreateWorktree", "test-workflow").Return("/tmp/worktrees/test-workflow", nil)
 				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
@@ -531,13 +506,13 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
 					return config.WorkingDirectory == "/tmp/worktrees/test-workflow"
 				}), mock.Anything).Return(&ExecuteResult{
-					Output:   "```json\n{\"summary\": \"implemented\", \"prNumber\": 123}\n```",
+					Output:   "```json\n{\"summary\": \"implemented\"}\n```",
 					ExitCode: 0,
 				}, nil)
-				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\", \"prNumber\": 123}", nil)
-				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented", PRNumber: 123}, nil)
+				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\"}", nil)
+				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented"}, nil)
 				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
-				ci.On("WaitForCI", mock.Anything, 123, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
+				ci.On("WaitForCI", mock.Anything, 0, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
 			},
 			wantErr:          false,
 			wantNextPhase:    PhaseRefactoring,
@@ -546,7 +521,7 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 		{
 			name:            "skips worktree creation when WorktreePath already set (resume scenario)",
 			initialWorktree: "/existing/worktree/path",
-			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager, pr *MockPRManager) {
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 				// Note: CreateWorktree should NOT be called
 				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
@@ -554,13 +529,13 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
 					return config.WorkingDirectory == "/existing/worktree/path"
 				}), mock.Anything).Return(&ExecuteResult{
-					Output:   "```json\n{\"summary\": \"implemented\", \"prNumber\": 456}\n```",
+					Output:   "```json\n{\"summary\": \"implemented\"}\n```",
 					ExitCode: 0,
 				}, nil)
-				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\", \"prNumber\": 456}", nil)
-				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented", PRNumber: 456}, nil)
+				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\"}", nil)
+				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented"}, nil)
 				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
-				ci.On("WaitForCI", mock.Anything, 456, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
+				ci.On("WaitForCI", mock.Anything, 0, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
 			},
 			wantErr:          false,
 			wantNextPhase:    PhaseRefactoring,
@@ -569,7 +544,7 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 		{
 			name:            "fails when worktree creation fails",
 			initialWorktree: "",
-			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager, pr *MockPRManager) {
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 				wm.On("CreateWorktree", "test-workflow").Return("", errors.New("branch already exists"))
 			},
@@ -578,33 +553,9 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 			wantWorktreePath: "",
 		},
 		{
-			name:            "creates PR when PR number is zero in implementation output",
+			name:            "CI check uses current branch PR automatically",
 			initialWorktree: "",
-			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager, pr *MockPRManager) {
-				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
-				wm.On("CreateWorktree", "test-workflow").Return("/tmp/worktrees/test-workflow", nil)
-				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
-				pg.On("GenerateImplementationPrompt", mock.Anything).Return("implementation prompt", nil)
-				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
-					Output:   "```json\n{\"summary\": \"implemented\", \"prNumber\": 0}\n```",
-					ExitCode: 0,
-				}, nil)
-				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\", \"prNumber\": 0}", nil)
-				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented", PRNumber: 0}, nil)
-				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
-				// PR manager should be called to create PR
-				pr.On("PushBranch", mock.Anything).Return(nil)
-				pr.On("EnsurePR", mock.Anything, "feat: test-workflow", "implemented").Return(789, nil)
-				ci.On("WaitForCI", mock.Anything, 789, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
-			},
-			wantErr:          false,
-			wantNextPhase:    PhaseRefactoring,
-			wantWorktreePath: "/tmp/worktrees/test-workflow",
-		},
-		{
-			name:            "fails when PR creation fails",
-			initialWorktree: "",
-			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager, pr *MockPRManager) {
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 				wm.On("CreateWorktree", "test-workflow").Return("/tmp/worktrees/test-workflow", nil)
 				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
@@ -616,12 +567,11 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\"}", nil)
 				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented"}, nil)
 				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
-				// PR manager fails to create PR
-				pr.On("PushBranch", mock.Anything).Return(nil)
-				pr.On("EnsurePR", mock.Anything, "feat: test-workflow", "implemented").Return(0, errors.New("failed to create PR"))
+				// CI check uses 0 for PR number (auto-detect current branch)
+				ci.On("WaitForCI", mock.Anything, 0, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
 			},
-			wantErr:          true,
-			wantNextPhase:    PhaseFailed,
+			wantErr:          false,
+			wantNextPhase:    PhaseRefactoring,
 			wantWorktreePath: "/tmp/worktrees/test-workflow",
 		},
 	}
@@ -634,9 +584,8 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 			mockOP := new(MockOutputParser)
 			mockCI := new(MockCIChecker)
 			mockWM := new(MockWorktreeManager)
-			mockPR := new(MockPRManager)
 
-			tt.setupMocks(mockSM, mockExec, mockPG, mockOP, mockCI, mockWM, mockPR)
+			tt.setupMocks(mockSM, mockExec, mockPG, mockOP, mockCI, mockWM)
 
 			o := &Orchestrator{
 				stateManager:    mockSM,
@@ -647,9 +596,6 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 				worktreeManager: mockWM,
 				ciCheckerFactory: func(workingDir string, checkInterval time.Duration) CIChecker {
 					return mockCI
-				},
-				prManagerFactory: func(workingDir string) PRManager {
-					return mockPR
 				},
 			}
 

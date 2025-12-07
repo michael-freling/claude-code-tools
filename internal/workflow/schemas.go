@@ -126,14 +126,6 @@ const ImplementationSummarySchema = `{
       "type": "integer",
       "description": "Number of tests added"
     },
-    "prNumber": {
-      "type": "integer",
-      "description": "PR number created for the implementation"
-    },
-    "prUrl": {
-      "type": "string",
-      "description": "URL of the PR created for the implementation"
-    },
     "summary": {
       "type": "string",
       "description": "Brief summary of what was implemented"
@@ -146,7 +138,7 @@ const ImplementationSummarySchema = `{
       "description": "Optional next steps"
     }
   },
-  "required": ["filesChanged", "linesAdded", "linesRemoved", "testsAdded", "prNumber", "prUrl", "summary"]
+  "required": ["filesChanged", "linesAdded", "linesRemoved", "testsAdded", "summary"]
 }`
 
 const RefactoringSummarySchema = `{

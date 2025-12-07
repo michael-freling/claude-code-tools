@@ -49,7 +49,6 @@ type WorkflowState struct {
 	Phases       map[Phase]*PhaseState `json:"phases"`
 	Error        *WorkflowError        `json:"error,omitempty"`
 	WorktreePath string                `json:"worktreePath,omitempty"`
-	PRNumber     int                   `json:"prNumber,omitempty"`
 }
 
 // PhaseState represents the state of a single phase
@@ -125,8 +124,6 @@ type ImplementationSummary struct {
 	LinesAdded   int      `json:"linesAdded"`
 	LinesRemoved int      `json:"linesRemoved"`
 	TestsAdded   int      `json:"testsAdded"`
-	PRNumber     int      `json:"prNumber"`
-	PRURL        string   `json:"prUrl"`
 	Summary      string   `json:"summary"`
 	NextSteps    []string `json:"nextSteps,omitempty"`
 }

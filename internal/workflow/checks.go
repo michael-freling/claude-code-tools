@@ -12,8 +12,11 @@ import (
 
 // CIChecker checks CI status on GitHub
 type CIChecker interface {
+	// CheckCI checks CI status. If prNumber is 0, checks the current branch's PR.
 	CheckCI(ctx context.Context, prNumber int) (*CIResult, error)
+	// WaitForCI waits for CI to complete. If prNumber is 0, checks the current branch's PR.
 	WaitForCI(ctx context.Context, prNumber int, timeout time.Duration) (*CIResult, error)
+	// WaitForCIWithOptions waits for CI with options. If prNumber is 0, checks the current branch's PR.
 	WaitForCIWithOptions(ctx context.Context, prNumber int, timeout time.Duration, opts CheckCIOptions) (*CIResult, error)
 }
 
@@ -42,14 +45,19 @@ func NewCIChecker(workingDir string, checkInterval time.Duration) CIChecker {
 	}
 }
 
-// CheckCI checks the current CI status for a PR
+// CheckCI checks the current CI status. If prNumber is 0, checks the current branch's PR.
 func (c *ciChecker) CheckCI(ctx context.Context, prNumber int) (*CIResult, error) {
 	result := &CIResult{
 		Passed:     false,
 		FailedJobs: []string{},
 	}
 
-	cmd := exec.CommandContext(ctx, "gh", "pr", "checks", fmt.Sprintf("%d", prNumber))
+	var cmd *exec.Cmd
+	if prNumber > 0 {
+		cmd = exec.CommandContext(ctx, "gh", "pr", "checks", fmt.Sprintf("%d", prNumber))
+	} else {
+		cmd = exec.CommandContext(ctx, "gh", "pr", "checks")
+	}
 	if c.workingDir != "" {
 		cmd.Dir = c.workingDir
 	}
@@ -77,12 +85,12 @@ func (c *ciChecker) CheckCI(ctx context.Context, prNumber int) (*CIResult, error
 	return result, nil
 }
 
-// WaitForCI waits for CI to complete with polling
+// WaitForCI waits for CI to complete with polling. If prNumber is 0, checks the current branch's PR.
 func (c *ciChecker) WaitForCI(ctx context.Context, prNumber int, timeout time.Duration) (*CIResult, error) {
 	return c.WaitForCIWithOptions(ctx, prNumber, timeout, CheckCIOptions{})
 }
 
-// WaitForCIWithOptions waits for CI to complete with polling and optional e2e filtering
+// WaitForCIWithOptions waits for CI to complete with polling and optional e2e filtering. If prNumber is 0, checks the current branch's PR.
 func (c *ciChecker) WaitForCIWithOptions(ctx context.Context, prNumber int, timeout time.Duration, opts CheckCIOptions) (*CIResult, error) {
 	if timeout == 0 {
 		timeout = 30 * time.Minute
