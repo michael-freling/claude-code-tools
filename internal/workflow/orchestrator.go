@@ -63,8 +63,7 @@ type Orchestrator struct {
 	worktreeManager WorktreeManager
 
 	// For testing - if nil, creates real checkers
-	preCommitCheckerFactory func(workingDir string) PreCommitChecker
-	ciCheckerFactory        func(workingDir string, checkInterval time.Duration) CIChecker
+	ciCheckerFactory func(workingDir string, checkInterval time.Duration) CIChecker
 }
 
 // NewOrchestrator creates orchestrator with default config
@@ -407,11 +406,11 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 				return o.failWorkflow(state, fmt.Errorf("failed to generate implementation prompt: %w", err))
 			}
 		} else {
-			prompt, err = o.promptGenerator.GenerateFixPreCommitPrompt(lastError)
+			prompt, err = o.promptGenerator.GenerateFixCIPrompt(lastError)
 			if err != nil {
 				return o.failWorkflow(state, fmt.Errorf("failed to generate fix prompt: %w", err))
 			}
-			fmt.Printf("\n%s Attempt %d/%d to fix pre-commit errors\n", Yellow("⚠"), attempt, o.config.MaxFixAttempts)
+			fmt.Printf("\n%s Attempt %d/%d to fix CI errors\n", Yellow("⚠"), attempt, o.config.MaxFixAttempts)
 		}
 
 		spinner := NewStreamingSpinner("Implementing changes...")
@@ -461,35 +460,10 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 
 		spinner.Success("Implementation complete")
 
-		checkSpinner := NewSpinner("Running pre-commit checks...")
-		checkSpinner.Start()
-
 		workingDir := state.WorktreePath
 		if workingDir == "" {
 			workingDir = o.config.BaseDir
 		}
-		preCommitChecker := o.getPreCommitChecker(workingDir)
-		preCommitResult, err := preCommitChecker.RunPreCommit(ctx)
-		if err != nil {
-			checkSpinner.Fail("Pre-commit check failed")
-			return o.failWorkflow(state, fmt.Errorf("failed to run pre-commit: %w", err))
-		}
-
-		if !preCommitResult.Passed {
-			checkSpinner.Fail("Pre-commit checks failed")
-			lastError = formatPreCommitErrors(preCommitResult)
-			fmt.Println(Red("\nPre-commit errors:"))
-			for _, errMsg := range preCommitResult.Errors {
-				fmt.Printf("  %s %s\n", Red("✗"), errMsg)
-			}
-
-			if err := o.stateManager.SaveState(state.Name, state); err != nil {
-				return fmt.Errorf("failed to save state: %w", err)
-			}
-			continue
-		}
-
-		checkSpinner.Success("Pre-commit checks passed")
 
 		ciSpinner := NewSpinner("Waiting for CI to complete...")
 		ciSpinner.Start()
@@ -556,11 +530,11 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 				return o.failWorkflow(state, fmt.Errorf("failed to generate refactoring prompt: %w", err))
 			}
 		} else {
-			prompt, err = o.promptGenerator.GenerateFixPreCommitPrompt(lastError)
+			prompt, err = o.promptGenerator.GenerateFixCIPrompt(lastError)
 			if err != nil {
 				return o.failWorkflow(state, fmt.Errorf("failed to generate fix prompt: %w", err))
 			}
-			fmt.Printf("\n%s Attempt %d/%d to fix pre-commit errors\n", Yellow("⚠"), attempt, o.config.MaxFixAttempts)
+			fmt.Printf("\n%s Attempt %d/%d to fix CI errors\n", Yellow("⚠"), attempt, o.config.MaxFixAttempts)
 		}
 
 		spinner := NewStreamingSpinner("Refactoring code...")
@@ -610,39 +584,10 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 
 		spinner.Success("Refactoring complete")
 
-		checkSpinner := NewSpinner("Running pre-commit checks...")
-		checkSpinner.Start()
-
 		workingDir := state.WorktreePath
 		if workingDir == "" {
 			workingDir = o.config.BaseDir
 		}
-		preCommitChecker := o.getPreCommitChecker(workingDir)
-		preCommitResult, err := preCommitChecker.RunPreCommit(ctx)
-		if err != nil {
-			checkSpinner.Fail("Pre-commit check failed")
-			return o.failWorkflow(state, fmt.Errorf("failed to run pre-commit: %w", err))
-		}
-
-		if !preCommitResult.Passed {
-			checkSpinner.Fail("Pre-commit checks failed")
-			lastError = formatPreCommitErrors(preCommitResult)
-			fmt.Println(Red("\nPre-commit errors:"))
-			for _, errMsg := range preCommitResult.Errors {
-				fmt.Printf("  %s %s\n", Red("✗"), errMsg)
-			}
-
-			if err := o.stateManager.SaveState(state.Name, state); err != nil {
-				return fmt.Errorf("failed to save state: %w", err)
-			}
-
-			if attempt == o.config.MaxFixAttempts {
-				return o.failWorkflow(state, fmt.Errorf("exceeded maximum fix attempts (%d) for pre-commit errors", o.config.MaxFixAttempts))
-			}
-			continue
-		}
-
-		checkSpinner.Success("Pre-commit checks passed")
 
 		ciSpinner := NewSpinner("Waiting for CI to complete...")
 		ciSpinner.Start()
@@ -796,29 +741,6 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 			isLastChild := (i == len(prResult.ChildPRs)-1)
 
 			fmt.Printf("\n%s Checking child PR #%d: %s\n", Bold("→"), childPR.Number, childPR.Title)
-
-			checkSpinner := NewSpinner("Running pre-commit checks...")
-			checkSpinner.Start()
-
-			preCommitChecker := o.getPreCommitChecker(workingDir)
-			preCommitResult, err := preCommitChecker.RunPreCommit(ctx)
-			if err != nil {
-				checkSpinner.Fail("Pre-commit check failed")
-				return o.failWorkflow(state, fmt.Errorf("failed to run pre-commit on child PR #%d: %w", childPR.Number, err))
-			}
-
-			if !preCommitResult.Passed {
-				checkSpinner.Fail("Pre-commit checks failed")
-				allPassed = false
-				lastError = formatPreCommitErrors(preCommitResult)
-				fmt.Println(Red("\nPre-commit errors:"))
-				for _, errMsg := range preCommitResult.Errors {
-					fmt.Printf("  %s %s\n", Red("✗"), errMsg)
-				}
-				break
-			}
-
-			checkSpinner.Success("Pre-commit checks passed")
 
 			opts := CheckCIOptions{
 				SkipE2E: !isLastChild,
@@ -1035,20 +957,6 @@ func defaultConfirmFunc(plan *Plan) (bool, string, error) {
 	}
 }
 
-// formatPreCommitErrors formats pre-commit errors for the fix prompt
-func formatPreCommitErrors(result *PreCommitResult) string {
-	var builder strings.Builder
-	builder.WriteString("Pre-commit checks failed with the following errors:\n\n")
-	builder.WriteString(result.Output)
-	builder.WriteString("\n\nErrors detected:\n")
-	for _, err := range result.Errors {
-		builder.WriteString("- ")
-		builder.WriteString(err)
-		builder.WriteString("\n")
-	}
-	return builder.String()
-}
-
 // formatCIErrors formats CI errors for the fix prompt
 func formatCIErrors(result *CIResult) string {
 	var builder strings.Builder
@@ -1061,14 +969,6 @@ func formatCIErrors(result *CIResult) string {
 		builder.WriteString("\n")
 	}
 	return builder.String()
-}
-
-// getPreCommitChecker creates or retrieves a PreCommitChecker for the given working directory
-func (o *Orchestrator) getPreCommitChecker(workingDir string) PreCommitChecker {
-	if o.preCommitCheckerFactory != nil {
-		return o.preCommitCheckerFactory(workingDir)
-	}
-	return NewPreCommitChecker(workingDir)
 }
 
 // getCIChecker creates or retrieves a CIChecker for the given working directory

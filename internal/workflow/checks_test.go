@@ -9,56 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParsePreCommitErrors(t *testing.T) {
-	tests := []struct {
-		name   string
-		output string
-		want   []string
-	}{
-		{
-			name:   "no errors",
-			output: "",
-			want:   nil,
-		},
-		{
-			name: "single failed check",
-			output: `check-yaml...........................................................Failed
-- hook id: check-yaml
-- exit code: 1`,
-			want: []string{
-				"check-yaml...........................................................Failed",
-			},
-		},
-		{
-			name: "multiple failed checks",
-			output: `check-yaml...........................................................Failed
-go fmt...............................................................Failed
-✗ golangci-lint......................................................Failed`,
-			want: []string{
-				"check-yaml...........................................................Failed",
-				"go fmt...............................................................Failed",
-				"✗ golangci-lint......................................................Failed",
-			},
-		},
-		{
-			name: "mixed success and failure",
-			output: `check-yaml...........................................................Passed
-go fmt...............................................................Failed
-check-merge-conflict.................................................Passed`,
-			want: []string{
-				"go fmt...............................................................Failed",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := parsePreCommitErrors(tt.output)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 func TestParseCIOutput(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -124,33 +74,6 @@ func TestParseCIOutput(t *testing.T) {
 	}
 }
 
-func TestNewPreCommitChecker(t *testing.T) {
-	tests := []struct {
-		name       string
-		workingDir string
-	}{
-		{
-			name:       "with working directory",
-			workingDir: "/tmp/test",
-		},
-		{
-			name:       "without working directory",
-			workingDir: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			checker := NewPreCommitChecker(tt.workingDir)
-			require.NotNil(t, checker)
-
-			concreteChecker, ok := checker.(*preCommitChecker)
-			require.True(t, ok)
-			assert.Equal(t, tt.workingDir, concreteChecker.workingDir)
-		})
-	}
-}
-
 func TestNewCIChecker(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -183,16 +106,6 @@ func TestNewCIChecker(t *testing.T) {
 			assert.Equal(t, tt.wantInterval, concreteChecker.checkInterval)
 		})
 	}
-}
-
-func TestPreCommitChecker_RunPreCommit_NotInstalled(t *testing.T) {
-	checker := NewPreCommitChecker("/nonexistent/path/that/should/not/exist")
-	ctx := context.Background()
-
-	result, err := checker.RunPreCommit(ctx)
-	require.Error(t, err)
-	require.NotNil(t, result)
-	assert.False(t, result.Passed)
 }
 
 func TestCIChecker_CheckCI_NotInstalled(t *testing.T) {

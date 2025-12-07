@@ -10,18 +10,6 @@ import (
 	"time"
 )
 
-// PreCommitChecker runs pre-commit hooks and returns errors
-type PreCommitChecker interface {
-	RunPreCommit(ctx context.Context) (*PreCommitResult, error)
-}
-
-// PreCommitResult represents the result of running pre-commit hooks
-type PreCommitResult struct {
-	Passed bool
-	Output string
-	Errors []string
-}
-
 // CIChecker checks CI status on GitHub
 type CIChecker interface {
 	CheckCI(ctx context.Context, prNumber int) (*CIResult, error)
@@ -35,79 +23,6 @@ type CIResult struct {
 	Status     string
 	FailedJobs []string
 	Output     string
-}
-
-// preCommitChecker implements PreCommitChecker interface
-type preCommitChecker struct {
-	workingDir string
-}
-
-// NewPreCommitChecker creates a new pre-commit checker
-func NewPreCommitChecker(workingDir string) PreCommitChecker {
-	return &preCommitChecker{
-		workingDir: workingDir,
-	}
-}
-
-// RunPreCommit executes pre-commit hooks on all files
-func (p *preCommitChecker) RunPreCommit(ctx context.Context) (*PreCommitResult, error) {
-	result := &PreCommitResult{
-		Passed: false,
-		Errors: []string{},
-	}
-
-	cmd := exec.CommandContext(ctx, "pre-commit", "run", "--all-files")
-	if p.workingDir != "" {
-		cmd.Dir = p.workingDir
-	}
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	combinedOutput := stdout.String() + stderr.String()
-	result.Output = combinedOutput
-
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			result.Errors = parsePreCommitErrors(combinedOutput)
-			result.Passed = false
-			if exitErr.ExitCode() == 127 {
-				return result, fmt.Errorf("pre-commit not found: is it installed?")
-			}
-			return result, nil
-		}
-		return result, fmt.Errorf("failed to run pre-commit: %w", err)
-	}
-
-	result.Passed = true
-	return result, nil
-}
-
-// parsePreCommitErrors extracts error messages from pre-commit output
-func parsePreCommitErrors(output string) []string {
-	var errors []string
-	lines := strings.Split(output, "\n")
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if strings.Contains(line, "Failed") ||
-			strings.Contains(line, "Error") ||
-			strings.Contains(line, "FAILED") ||
-			strings.Contains(line, "✗") {
-			errors = append(errors, line)
-		}
-	}
-
-	if len(errors) == 0 && output != "" {
-		errors = append(errors, output)
-	}
-
-	return errors
 }
 
 // ciChecker implements CIChecker interface
