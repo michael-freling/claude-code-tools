@@ -188,6 +188,45 @@ func (c *ciChecker) WaitForCIWithProgress(ctx context.Context, prNumber int, tim
 	defer cancel()
 
 	startTime := time.Now()
+
+	// Check CI status immediately first - if already complete, return right away
+	if onProgress != nil {
+		onProgress(CIProgressEvent{
+			Type:    "checking",
+			Elapsed: time.Since(startTime),
+			Message: "Checking CI status",
+		})
+	}
+
+	result, err := c.CheckCI(ctx, prNumber)
+	if err != nil && !errors.Is(err, ErrCICheckTimeout) {
+		return nil, err
+	}
+
+	if err == nil {
+		passed, failed, pending := countJobStatuses(result.Output)
+		if onProgress != nil {
+			onProgress(CIProgressEvent{
+				Type:        "status",
+				Elapsed:     time.Since(startTime),
+				Message:     fmt.Sprintf("CI status: %s", result.Status),
+				JobsPassed:  passed,
+				JobsFailed:  failed,
+				JobsPending: pending,
+				NextCheckIn: c.checkInterval,
+			})
+		}
+
+		// If CI already completed, return immediately
+		if result.Status == "success" || result.Status == "failure" {
+			if opts.SkipE2E {
+				result = filterE2EFailures(result, opts.E2ETestPattern)
+			}
+			return result, nil
+		}
+	}
+
+	// CI is pending or had a timeout error - wait before polling
 	ticker := time.NewTicker(c.checkInterval)
 	defer ticker.Stop()
 
@@ -195,6 +234,7 @@ func (c *ciChecker) WaitForCIWithProgress(ctx context.Context, prNumber int, tim
 	progressTicker := time.NewTicker(5 * time.Second)
 	defer progressTicker.Stop()
 
+	// Wait for initial delay before starting polling loop
 	for {
 		select {
 		case <-time.After(initialDelay):
@@ -211,7 +251,7 @@ func (c *ciChecker) WaitForCIWithProgress(ctx context.Context, prNumber int, tim
 				onProgress(CIProgressEvent{
 					Type:        "waiting",
 					Elapsed:     elapsed,
-					Message:     "Initial delay before checking CI",
+					Message:     "Waiting for CI jobs to complete",
 					NextCheckIn: remaining,
 				})
 			}
