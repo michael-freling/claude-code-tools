@@ -54,6 +54,7 @@ type ciChecker struct {
 	workingDir     string
 	checkInterval  time.Duration
 	commandTimeout time.Duration
+	initialDelay   time.Duration
 }
 
 // NewCIChecker creates a new CI checker
@@ -65,6 +66,26 @@ func NewCIChecker(workingDir string, checkInterval time.Duration) CIChecker {
 		workingDir:     workingDir,
 		checkInterval:  checkInterval,
 		commandTimeout: 2 * time.Minute,
+		initialDelay:   1 * time.Minute,
+	}
+}
+
+// NewCICheckerWithOptions creates a new CI checker with custom options (for testing)
+func NewCICheckerWithOptions(workingDir string, checkInterval, commandTimeout, initialDelay time.Duration) CIChecker {
+	if checkInterval == 0 {
+		checkInterval = 30 * time.Second
+	}
+	if commandTimeout == 0 {
+		commandTimeout = 2 * time.Minute
+	}
+	if initialDelay == 0 {
+		initialDelay = 1 * time.Minute
+	}
+	return &ciChecker{
+		workingDir:     workingDir,
+		checkInterval:  checkInterval,
+		commandTimeout: commandTimeout,
+		initialDelay:   initialDelay,
 	}
 }
 
@@ -230,21 +251,26 @@ func (c *ciChecker) WaitForCIWithProgress(ctx context.Context, prNumber int, tim
 	ticker := time.NewTicker(c.checkInterval)
 	defer ticker.Stop()
 
-	initialDelay := 1 * time.Minute
+	initialDelayTimer := time.NewTimer(c.initialDelay)
+	defer initialDelayTimer.Stop()
+
 	progressTicker := time.NewTicker(5 * time.Second)
 	defer progressTicker.Stop()
+
+	waitStartTime := time.Now()
 
 	// Wait for initial delay before starting polling loop
 	for {
 		select {
-		case <-time.After(initialDelay):
+		case <-initialDelayTimer.C:
 			goto checkLoop
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-progressTicker.C:
 			if onProgress != nil {
 				elapsed := time.Since(startTime)
-				remaining := initialDelay - elapsed
+				waitElapsed := time.Since(waitStartTime)
+				remaining := c.initialDelay - waitElapsed
 				if remaining < 0 {
 					remaining = 0
 				}
