@@ -3,12 +3,16 @@ package workflow
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
 	"strings"
 	"time"
 )
+
+// ErrCICheckTimeout is returned when CI check command times out
+var ErrCICheckTimeout = errors.New("CI check command timed out")
 
 // CIChecker checks CI status on GitHub
 type CIChecker interface {
@@ -30,8 +34,9 @@ type CIResult struct {
 
 // ciChecker implements CIChecker interface
 type ciChecker struct {
-	workingDir    string
-	checkInterval time.Duration
+	workingDir     string
+	checkInterval  time.Duration
+	commandTimeout time.Duration
 }
 
 // NewCIChecker creates a new CI checker
@@ -40,23 +45,57 @@ func NewCIChecker(workingDir string, checkInterval time.Duration) CIChecker {
 		checkInterval = 30 * time.Second
 	}
 	return &ciChecker{
-		workingDir:    workingDir,
-		checkInterval: checkInterval,
+		workingDir:     workingDir,
+		checkInterval:  checkInterval,
+		commandTimeout: 2 * time.Minute,
 	}
 }
 
 // CheckCI checks the current CI status. If prNumber is 0, checks the current branch's PR.
 func (c *ciChecker) CheckCI(ctx context.Context, prNumber int) (*CIResult, error) {
+	const maxRetries = 3
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(attempt) * 5 * time.Second
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+
+		result, err := c.checkCIOnce(ctx, prNumber)
+		if err == nil {
+			return result, nil
+		}
+
+		if errors.Is(err, ErrCICheckTimeout) {
+			lastErr = err
+			continue
+		}
+
+		return result, err
+	}
+
+	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
+}
+
+func (c *ciChecker) checkCIOnce(ctx context.Context, prNumber int) (*CIResult, error) {
 	result := &CIResult{
 		Passed:     false,
 		FailedJobs: []string{},
 	}
 
+	cmdCtx, cancel := context.WithTimeout(ctx, c.commandTimeout)
+	defer cancel()
+
 	var cmd *exec.Cmd
 	if prNumber > 0 {
-		cmd = exec.CommandContext(ctx, "gh", "pr", "checks", fmt.Sprintf("%d", prNumber))
+		cmd = exec.CommandContext(cmdCtx, "gh", "pr", "checks", fmt.Sprintf("%d", prNumber))
 	} else {
-		cmd = exec.CommandContext(ctx, "gh", "pr", "checks")
+		cmd = exec.CommandContext(cmdCtx, "gh", "pr", "checks")
 	}
 	if c.workingDir != "" {
 		cmd.Dir = c.workingDir
@@ -71,23 +110,26 @@ func (c *ciChecker) CheckCI(ctx context.Context, prNumber int) (*CIResult, error
 	result.Output = output
 
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || (cmdCtx.Err() == context.DeadlineExceeded) {
+			return result, ErrCICheckTimeout
+		}
+
 		if exitErr, ok := err.(*exec.ExitError); ok {
+			if exitErr.String() == "signal: killed" {
+				return result, ErrCICheckTimeout
+			}
+
 			switch exitErr.ExitCode() {
 			case 127:
 				return result, fmt.Errorf("gh CLI not found: is it installed?")
 			case 8:
-				// Exit code 8 means "checks pending" according to gh pr checks --help
-				// Parse the output to get the current status
 				if output != "" {
 					result.Status, result.FailedJobs = parseCIOutput(output)
 					result.Passed = result.Status == "success"
 					return result, nil
 				}
-				// No output with exit code 8 likely means no PR found
 				return result, fmt.Errorf("no PR found for the current branch: ensure a PR exists before checking CI status")
 			case 1:
-				// Exit code 1 can mean checks failed or other errors
-				// If we got output, parse it as normal (this indicates failed checks)
 				if output != "" {
 					result.Status, result.FailedJobs = parseCIOutput(output)
 					result.Passed = result.Status == "success"
@@ -127,7 +169,11 @@ func (c *ciChecker) WaitForCIWithOptions(ctx context.Context, prNumber int, time
 	defer ticker.Stop()
 
 	initialDelay := 1 * time.Minute
-	time.Sleep(initialDelay)
+	select {
+	case <-time.After(initialDelay):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 
 	for {
 		select {
@@ -136,6 +182,9 @@ func (c *ciChecker) WaitForCIWithOptions(ctx context.Context, prNumber int, time
 		case <-ticker.C:
 			result, err := c.CheckCI(ctx, prNumber)
 			if err != nil {
+				if errors.Is(err, ErrCICheckTimeout) {
+					continue
+				}
 				return nil, err
 			}
 

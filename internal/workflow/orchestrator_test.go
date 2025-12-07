@@ -1000,7 +1000,7 @@ func TestOrchestrator_Resume_PreservesCIFailure(t *testing.T) {
 				Name:         "test-workflow",
 				CurrentPhase: PhaseFailed,
 				Phases: map[Phase]*PhaseState{
-					PhaseRefactoring:    {
+					PhaseRefactoring: {
 						Status:   StatusFailed,
 						Feedback: []string{"CI check error: CI check timeout after 30m0s"},
 					},

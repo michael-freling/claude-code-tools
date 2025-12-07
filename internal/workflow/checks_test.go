@@ -76,22 +76,25 @@ func TestParseCIOutput(t *testing.T) {
 
 func TestNewCIChecker(t *testing.T) {
 	tests := []struct {
-		name          string
-		workingDir    string
-		checkInterval time.Duration
-		wantInterval  time.Duration
+		name               string
+		workingDir         string
+		checkInterval      time.Duration
+		wantInterval       time.Duration
+		wantCommandTimeout time.Duration
 	}{
 		{
-			name:          "with custom interval",
-			workingDir:    "/tmp/test",
-			checkInterval: 10 * time.Second,
-			wantInterval:  10 * time.Second,
+			name:               "with custom interval",
+			workingDir:         "/tmp/test",
+			checkInterval:      10 * time.Second,
+			wantInterval:       10 * time.Second,
+			wantCommandTimeout: 2 * time.Minute,
 		},
 		{
-			name:          "with default interval",
-			workingDir:    "/tmp/test",
-			checkInterval: 0,
-			wantInterval:  30 * time.Second,
+			name:               "with default interval",
+			workingDir:         "/tmp/test",
+			checkInterval:      0,
+			wantInterval:       30 * time.Second,
+			wantCommandTimeout: 2 * time.Minute,
 		},
 	}
 
@@ -104,6 +107,7 @@ func TestNewCIChecker(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, tt.workingDir, concreteChecker.workingDir)
 			assert.Equal(t, tt.wantInterval, concreteChecker.checkInterval)
+			assert.Equal(t, tt.wantCommandTimeout, concreteChecker.commandTimeout)
 		})
 	}
 }
@@ -150,6 +154,22 @@ func TestCIChecker_WaitForCI_Timeout(t *testing.T) {
 	result, err := checker.WaitForCI(ctx, 123, 200*time.Millisecond)
 	require.Error(t, err)
 	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "context deadline exceeded")
+}
+
+func TestCIChecker_WaitForCI_ContextCancellationDuringInitialDelay(t *testing.T) {
+	checker := NewCIChecker("/tmp/test", 100*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	result, err := checker.WaitForCI(ctx, 123, 5*time.Minute)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "context canceled")
 }
 
 func TestFilterE2EFailures(t *testing.T) {
