@@ -62,8 +62,9 @@ type Orchestrator struct {
 	confirmFunc     func(plan *Plan) (bool, string, error)
 	worktreeManager WorktreeManager
 
-	// For testing - if nil, creates real checkers
+	// For testing - if nil, creates real checkers/managers
 	ciCheckerFactory func(workingDir string, checkInterval time.Duration) CIChecker
+	prManagerFactory func(workingDir string) PRManager
 }
 
 // NewOrchestrator creates orchestrator with default config
@@ -458,23 +459,46 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 			return o.failWorkflow(state, fmt.Errorf("failed to save implementation output: %w", err))
 		}
 
-		// Validate and store PR number from implementation output.
-		// The PR is required for CI checks - if Claude Code didn't create one,
-		// we fail the workflow rather than attempting CI with PR number 0.
-		if summary.PRNumber == 0 {
-			spinner.Fail("No PR created")
-			return o.failWorkflow(state, fmt.Errorf("implementation did not create a PR - prNumber is missing or zero in output"))
-		}
-		state.PRNumber = summary.PRNumber
-		if err := o.stateManager.SaveState(state.Name, state); err != nil {
-			return fmt.Errorf("failed to save state with PR number: %w", err)
-		}
-
 		spinner.Success("Implementation complete")
 
+		// Store PR number from implementation output, or create PR if not provided.
+		// The PR is required for CI checks.
 		workingDir := state.WorktreePath
 		if workingDir == "" {
 			workingDir = o.config.BaseDir
+		}
+
+		if summary.PRNumber > 0 {
+			state.PRNumber = summary.PRNumber
+		} else {
+			// Claude Code didn't create a PR - create one as fallback
+			fmt.Printf("\n%s Claude Code did not create a PR, creating one now...\n", Yellow("⚠"))
+
+			prManager := o.getPRManager(workingDir)
+
+			// First ensure the branch is pushed
+			pushSpinner := NewSpinner("Pushing branch to origin...")
+			pushSpinner.Start()
+			if err := prManager.PushBranch(ctx); err != nil {
+				pushSpinner.Fail("Failed to push branch")
+				return o.failWorkflow(state, fmt.Errorf("failed to push branch: %w", err))
+			}
+			pushSpinner.Success("Branch pushed")
+
+			// Create PR with workflow name as title
+			prSpinner := NewSpinner("Creating PR...")
+			prSpinner.Start()
+			prNumber, err := prManager.EnsurePR(ctx, fmt.Sprintf("feat: %s", state.Name), summary.Summary)
+			if err != nil {
+				prSpinner.Fail("Failed to create PR")
+				return o.failWorkflow(state, fmt.Errorf("failed to create PR: %w", err))
+			}
+			prSpinner.Success(fmt.Sprintf("PR #%d created", prNumber))
+			state.PRNumber = prNumber
+		}
+
+		if err := o.stateManager.SaveState(state.Name, state); err != nil {
+			return fmt.Errorf("failed to save state with PR number: %w", err)
 		}
 
 		ciSpinner := NewSpinner("Waiting for CI to complete...")
@@ -995,4 +1019,12 @@ func (o *Orchestrator) getCIChecker(workingDir string) CIChecker {
 		return o.ciCheckerFactory(workingDir, o.config.CICheckInterval)
 	}
 	return NewCIChecker(workingDir, o.config.CICheckInterval)
+}
+
+// getPRManager creates or retrieves a PRManager for the given working directory
+func (o *Orchestrator) getPRManager(workingDir string) PRManager {
+	if o.prManagerFactory != nil {
+		return o.prManagerFactory(workingDir)
+	}
+	return NewPRManager(workingDir)
 }

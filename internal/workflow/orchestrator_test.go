@@ -179,6 +179,31 @@ func (m *MockCIChecker) WaitForCIWithOptions(ctx context.Context, prNumber int, 
 	return args.Get(0).(*CIResult), args.Error(1)
 }
 
+// MockPRManager is a mock implementation of PRManager
+type MockPRManager struct {
+	mock.Mock
+}
+
+func (m *MockPRManager) CreatePR(ctx context.Context, title, body string) (int, error) {
+	args := m.Called(ctx, title, body)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *MockPRManager) GetCurrentBranchPR(ctx context.Context) (int, error) {
+	args := m.Called(ctx)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *MockPRManager) EnsurePR(ctx context.Context, title, body string) (int, error) {
+	args := m.Called(ctx, title, body)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *MockPRManager) PushBranch(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 // MockOutputParser is a mock implementation of OutputParser
 type MockOutputParser struct {
 	mock.Mock
@@ -490,7 +515,7 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 	tests := []struct {
 		name             string
 		initialWorktree  string
-		setupMocks       func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockOutputParser, *MockCIChecker, *MockWorktreeManager)
+		setupMocks       func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockOutputParser, *MockCIChecker, *MockWorktreeManager, *MockPRManager)
 		wantErr          bool
 		wantNextPhase    Phase
 		wantWorktreePath string
@@ -498,7 +523,7 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 		{
 			name:            "successfully implements plan with pre-commit passing",
 			initialWorktree: "",
-			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager) {
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager, pr *MockPRManager) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 				wm.On("CreateWorktree", "test-workflow").Return("/tmp/worktrees/test-workflow", nil)
 				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
@@ -521,7 +546,7 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 		{
 			name:            "skips worktree creation when WorktreePath already set (resume scenario)",
 			initialWorktree: "/existing/worktree/path",
-			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager) {
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager, pr *MockPRManager) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 				// Note: CreateWorktree should NOT be called
 				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
@@ -544,7 +569,7 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 		{
 			name:            "fails when worktree creation fails",
 			initialWorktree: "",
-			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager) {
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager, pr *MockPRManager) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 				wm.On("CreateWorktree", "test-workflow").Return("", errors.New("branch already exists"))
 			},
@@ -553,9 +578,9 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 			wantWorktreePath: "",
 		},
 		{
-			name:            "fails when PR number is zero in implementation output",
+			name:            "creates PR when PR number is zero in implementation output",
 			initialWorktree: "",
-			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager) {
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager, pr *MockPRManager) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 				wm.On("CreateWorktree", "test-workflow").Return("/tmp/worktrees/test-workflow", nil)
 				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
@@ -567,16 +592,19 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\", \"prNumber\": 0}", nil)
 				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented", PRNumber: 0}, nil)
 				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
-				// CI checker should NOT be called since we fail before reaching CI check
+				// PR manager should be called to create PR
+				pr.On("PushBranch", mock.Anything).Return(nil)
+				pr.On("EnsurePR", mock.Anything, "feat: test-workflow", "implemented").Return(789, nil)
+				ci.On("WaitForCI", mock.Anything, 789, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
 			},
-			wantErr:          true,
-			wantNextPhase:    PhaseFailed,
+			wantErr:          false,
+			wantNextPhase:    PhaseRefactoring,
 			wantWorktreePath: "/tmp/worktrees/test-workflow",
 		},
 		{
-			name:            "fails when PR number is missing from implementation output",
+			name:            "fails when PR creation fails",
 			initialWorktree: "",
-			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager) {
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager, pr *MockPRManager) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 				wm.On("CreateWorktree", "test-workflow").Return("/tmp/worktrees/test-workflow", nil)
 				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
@@ -586,9 +614,11 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 					ExitCode: 0,
 				}, nil)
 				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\"}", nil)
-				// PRNumber defaults to 0 when not present in JSON
 				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented"}, nil)
 				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
+				// PR manager fails to create PR
+				pr.On("PushBranch", mock.Anything).Return(nil)
+				pr.On("EnsurePR", mock.Anything, "feat: test-workflow", "implemented").Return(0, errors.New("failed to create PR"))
 			},
 			wantErr:          true,
 			wantNextPhase:    PhaseFailed,
@@ -604,8 +634,9 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 			mockOP := new(MockOutputParser)
 			mockCI := new(MockCIChecker)
 			mockWM := new(MockWorktreeManager)
+			mockPR := new(MockPRManager)
 
-			tt.setupMocks(mockSM, mockExec, mockPG, mockOP, mockCI, mockWM)
+			tt.setupMocks(mockSM, mockExec, mockPG, mockOP, mockCI, mockWM, mockPR)
 
 			o := &Orchestrator{
 				stateManager:    mockSM,
@@ -616,6 +647,9 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 				worktreeManager: mockWM,
 				ciCheckerFactory: func(workingDir string, checkInterval time.Duration) CIChecker {
 					return mockCI
+				},
+				prManagerFactory: func(workingDir string) PRManager {
+					return mockPR
 				},
 			}
 
