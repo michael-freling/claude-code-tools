@@ -28,8 +28,13 @@ func NewOutputParser() OutputParser {
 	}
 }
 
-// ExtractJSON extracts JSON from markdown code blocks
+// ExtractJSON extracts JSON from output, trying direct JSON first then markdown code blocks
 func (p *outputParser) ExtractJSON(output string) (string, error) {
+	trimmed := strings.TrimSpace(output)
+	if json.Valid([]byte(trimmed)) {
+		return trimmed, nil
+	}
+
 	blocks := p.findJSONBlocks(output)
 	if len(blocks) == 0 {
 		return "", fmt.Errorf("no JSON blocks found in output: %w", ErrParseJSON)

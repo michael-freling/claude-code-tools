@@ -247,8 +247,9 @@ func (o *Orchestrator) executePlanning(ctx context.Context, state *WorkflowState
 	spinner.Start()
 
 	result, err := o.executor.Execute(ctx, ExecuteConfig{
-		Prompt:  prompt,
-		Timeout: o.config.Timeouts.Planning,
+		Prompt:     prompt,
+		Timeout:    o.config.Timeouts.Planning,
+		JSONSchema: PlanSchema,
 	})
 
 	if err != nil {
@@ -357,8 +358,9 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 		spinner.Start()
 
 		result, err := o.executor.Execute(ctx, ExecuteConfig{
-			Prompt:  prompt,
-			Timeout: o.config.Timeouts.Implementation,
+			Prompt:     prompt,
+			Timeout:    o.config.Timeouts.Implementation,
+			JSONSchema: ImplementationSummarySchema,
 		})
 
 		if err != nil {
@@ -485,8 +487,9 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 		spinner.Start()
 
 		result, err := o.executor.Execute(ctx, ExecuteConfig{
-			Prompt:  prompt,
-			Timeout: o.config.Timeouts.Refactoring,
+			Prompt:     prompt,
+			Timeout:    o.config.Timeouts.Refactoring,
+			JSONSchema: RefactoringSummarySchema,
 		})
 
 		if err != nil {
@@ -640,8 +643,9 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 		spinner.Start()
 
 		result, err := o.executor.Execute(ctx, ExecuteConfig{
-			Prompt:  prompt,
-			Timeout: o.config.Timeouts.PRSplit,
+			Prompt:     prompt,
+			Timeout:    o.config.Timeouts.PRSplit,
+			JSONSchema: PRSplitResultSchema,
 		})
 
 		if err != nil {

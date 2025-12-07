@@ -19,6 +19,7 @@ type ExecuteConfig struct {
 	WorkingDirectory string
 	Timeout          time.Duration
 	Env              map[string]string
+	JSONSchema       string
 }
 
 // ExecuteResult holds the result of Claude CLI execution
@@ -65,7 +66,12 @@ func (e *claudeExecutor) Execute(ctx context.Context, config ExecuteConfig) (*Ex
 		return result, fmt.Errorf("claude CLI not found: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, claudePath, "--print", config.Prompt)
+	args := []string{"--print"}
+	if config.JSONSchema != "" {
+		args = append(args, "--json-schema", config.JSONSchema)
+	}
+	args = append(args, config.Prompt)
+	cmd := exec.CommandContext(ctx, claudePath, args...)
 
 	if config.WorkingDirectory != "" {
 		cmd.Dir = config.WorkingDirectory

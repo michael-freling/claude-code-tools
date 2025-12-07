@@ -35,6 +35,15 @@ func TestOutputParser_ExtractJSON(t *testing.T) {
 		wantContain string
 	}{
 		{
+			name: "extracts direct JSON without markdown",
+			output: `{
+  "summary": "test plan",
+  "contextType": "feature"
+}`,
+			wantErr:     false,
+			wantContain: "test plan",
+		},
+		{
 			name: "extracts JSON from markdown code block",
 			output: `Here is the plan:
 

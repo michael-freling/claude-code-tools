@@ -54,8 +54,7 @@ Ensure each child PR:
 - The LAST child PR must pass e2e tests
 
 ## Output Format
-Output the PR split plan as JSON in a code block:
-```json
+Output the PR split plan as JSON with the following structure:
 {
   "parentPR": {
     "number": 0,
@@ -73,6 +72,5 @@ Output the PR split plan as JSON in a code block:
   ],
   "summary": "Brief summary of the split strategy"
 }
-```
 
 After creating the PRs, fill in the actual PR numbers and URLs in the JSON output.
