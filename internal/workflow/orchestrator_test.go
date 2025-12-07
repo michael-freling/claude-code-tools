@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -1222,6 +1223,129 @@ func TestOrchestrator_failWorkflow(t *testing.T) {
 			assert.Equal(t, tt.err.Error(), state.Error.Message)
 			assert.Equal(t, StatusFailed, state.Phases[PhasePlanning].Status)
 			mockSM.AssertExpectations(t)
+		})
+	}
+}
+
+func TestDefaultConfirmFunc(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		wantApproved bool
+		wantFeedback string
+		wantErr      bool
+		wantErrMsg   string
+	}{
+		{
+			name:         "approves with y",
+			input:        "y\n",
+			wantApproved: true,
+			wantFeedback: "",
+			wantErr:      false,
+		},
+		{
+			name:         "approves with yes",
+			input:        "yes\n",
+			wantApproved: true,
+			wantFeedback: "",
+			wantErr:      false,
+		},
+		{
+			name:         "approves with Y uppercase",
+			input:        "Y\n",
+			wantApproved: true,
+			wantFeedback: "",
+			wantErr:      false,
+		},
+		{
+			name:         "approves with YES uppercase",
+			input:        "YES\n",
+			wantApproved: true,
+			wantFeedback: "",
+			wantErr:      false,
+		},
+		{
+			name:         "rejects with n",
+			input:        "n\n",
+			wantApproved: false,
+			wantFeedback: "",
+			wantErr:      true,
+			wantErrMsg:   "workflow cancelled by user",
+		},
+		{
+			name:         "rejects with no",
+			input:        "no\n",
+			wantApproved: false,
+			wantFeedback: "",
+			wantErr:      true,
+			wantErrMsg:   "workflow cancelled by user",
+		},
+		{
+			name:         "handles feedback input directly",
+			input:        "please add more tests\n",
+			wantApproved: false,
+			wantFeedback: "please add more tests",
+			wantErr:      false,
+		},
+		{
+			name:         "handles empty input then valid input",
+			input:        "\ny\n",
+			wantApproved: true,
+			wantFeedback: "",
+			wantErr:      false,
+		},
+		{
+			name:         "handles whitespace-only input then valid input",
+			input:        "   \ny\n",
+			wantApproved: true,
+			wantFeedback: "",
+			wantErr:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a pipe to simulate stdin
+			r, w, err := os.Pipe()
+			require.NoError(t, err)
+			defer r.Close()
+
+			// Save original stdin and restore after test
+			oldStdin := os.Stdin
+			os.Stdin = r
+			defer func() { os.Stdin = oldStdin }()
+
+			// Write test input in a goroutine
+			go func() {
+				defer w.Close()
+				w.WriteString(tt.input)
+			}()
+
+			plan := &Plan{
+				Summary: "Test plan summary",
+				Phases: []PlanPhase{
+					{
+						Name:           "Phase 1",
+						Description:    "Test phase",
+						EstimatedFiles: 1,
+						EstimatedLines: 10,
+					},
+				},
+			}
+
+			approved, feedback, err := defaultConfirmFunc(plan)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.wantErrMsg != "" {
+					assert.Contains(t, err.Error(), tt.wantErrMsg)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantApproved, approved)
+			assert.Equal(t, tt.wantFeedback, feedback)
 		})
 	}
 }

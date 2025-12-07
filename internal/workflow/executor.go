@@ -78,6 +78,7 @@ func (e *claudeExecutor) Execute(ctx context.Context, config ExecuteConfig) (*Ex
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	cmd.Stdin = nil // Prevent subprocess from reading parent's stdin
 
 	err = cmd.Run()
 	result.Duration = time.Since(start)

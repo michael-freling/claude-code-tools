@@ -872,36 +872,35 @@ func defaultConfirmFunc(plan *Plan) (bool, string, error) {
 	fmt.Println()
 	fmt.Println(Cyan("Full plan saved to: .claude/workflow/<name>/plan.md"))
 	fmt.Println()
-	fmt.Print(Bold("Approve this plan? [y/n/feedback]: "))
 
 	scanner := bufio.NewScanner(os.Stdin)
-	if !scanner.Scan() {
-		return false, "", fmt.Errorf("failed to read input")
+
+	for {
+		fmt.Print(Bold("Approve this plan? [y/n/feedback]: "))
+
+		if !scanner.Scan() {
+			return false, "", fmt.Errorf("failed to read input")
+		}
+
+		response := strings.TrimSpace(strings.ToLower(scanner.Text()))
+
+		if response == "" {
+			fmt.Println(Yellow("Please enter 'y' to approve, 'n' to cancel, or type your feedback."))
+			continue
+		}
+
+		if response == "yes" || response == "y" {
+			return true, "", nil
+		}
+
+		if response == "no" || response == "n" {
+			return false, "", ErrUserCancelled
+		}
+
+		// Treat any other non-empty input as feedback
+		fmt.Println(Green("✓") + " Feedback received. Replanning with your suggestions...")
+		return false, response, nil
 	}
-
-	response := strings.TrimSpace(strings.ToLower(scanner.Text()))
-
-	if response == "yes" || response == "y" {
-		return true, "", nil
-	}
-
-	if response == "no" || response == "n" {
-		return false, "", ErrUserCancelled
-	}
-
-	fmt.Print(Yellow("Please provide your feedback: "))
-	if !scanner.Scan() {
-		return false, "", fmt.Errorf("failed to read feedback")
-	}
-
-	feedback := strings.TrimSpace(scanner.Text())
-	if feedback == "" {
-		return false, "", fmt.Errorf("feedback cannot be empty")
-	}
-
-	fmt.Println(Green("✓") + " Feedback received. Replanning with your suggestions...")
-
-	return false, feedback, nil
 }
 
 // formatPreCommitErrors formats pre-commit errors for the fix prompt
