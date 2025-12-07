@@ -7,7 +7,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/michael-freling/claude-code-config/templates"
+	"github.com/michael-freling/claude-code-config/internal/templates"
 )
 
 // ItemType represents the type of item to generate

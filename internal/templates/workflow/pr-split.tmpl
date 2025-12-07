@@ -1,0 +1,76 @@
+You need to split the current changes into multiple pull requests for easier review.
+
+## Change Metrics
+- Lines Changed: {{.LinesChanged}}
+- Files Changed: {{.FilesChanged}}
+
+{{if .FilesAdded}}
+### Files Added
+{{range .FilesAdded}}- {{.}}
+{{end}}
+{{end}}
+
+{{if .FilesModified}}
+### Files Modified
+{{range .FilesModified}}- {{.}}
+{{end}}
+{{end}}
+
+{{if .FilesDeleted}}
+### Files Deleted
+{{range .FilesDeleted}}- {{.}}
+{{end}}
+{{end}}
+
+## Instructions
+1. Analyze the changes and identify logical groups
+2. Create a parent PR that will track the overall feature
+3. Split changes into child PRs that:
+   - Are independently reviewable
+   - Have clear boundaries
+   - Can be merged sequentially
+   - Each address a specific aspect of the change
+
+## Guidelines
+- Each child PR should be <100 lines or <10 files when possible
+- Child PRs should have dependencies in the right order
+- Parent PR should reference all child PRs
+- Each PR should have a clear, descriptive title and description
+
+## Verification Process
+After you create the PRs:
+1. Pre-commit hooks will run on each child PR
+2. CI will run on each child PR
+3. For child PRs 1 to N-1: e2e tests are skipped (partial implementation)
+4. For the LAST child PR: ALL tests must pass including e2e tests
+5. If any check fails, you will receive the errors and must fix them
+6. The parent PR should be empty (just a target branch)
+
+Ensure each child PR:
+- Is self-contained and can be reviewed independently
+- Passes all linting and formatting checks
+- Builds successfully
+- Unit and integration tests pass
+- The LAST child PR must pass e2e tests
+
+## Output Format
+Output the PR split plan as JSON with the following structure:
+{
+  "parentPR": {
+    "number": 0,
+    "url": "",
+    "title": "Parent PR title describing the overall feature",
+    "description": "Parent PR description with links to child PRs"
+  },
+  "childPRs": [
+    {
+      "number": 0,
+      "url": "",
+      "title": "Child PR 1 title",
+      "description": "Child PR 1 description"
+    }
+  ],
+  "summary": "Brief summary of the split strategy"
+}
+
+After creating the PRs, fill in the actual PR numbers and URLs in the JSON output.

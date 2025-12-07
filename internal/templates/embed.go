@@ -4,5 +4,5 @@ import (
 	"embed"
 )
 
-//go:embed all:prompts
+//go:embed all:prompts all:workflow
 var FS embed.FS
