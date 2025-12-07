@@ -635,3 +635,77 @@ func TestPromptGenerator_TemplateNotLoadedError(t *testing.T) {
 		})
 	}
 }
+
+func TestPromptGenerator_TemplateExecutionError(t *testing.T) {
+	tests := []struct {
+		name         string
+		templateName string
+		templateText string
+		genFunc      func(*promptGenerator) (string, error)
+		errContains  string
+	}{
+		{
+			name:         "planning template execution error with invalid field reference",
+			templateName: "planning.tmpl",
+			templateText: "{{.NonExistentField}}",
+			genFunc: func(pg *promptGenerator) (string, error) {
+				return pg.GeneratePlanningPrompt(WorkflowTypeFeature, "test", nil)
+			},
+			errContains: "failed to execute planning template",
+		},
+		{
+			name:         "implementation template execution error with invalid field reference",
+			templateName: "implementation.tmpl",
+			templateText: "{{.InvalidField}}",
+			genFunc: func(pg *promptGenerator) (string, error) {
+				return pg.GenerateImplementationPrompt(&Plan{Summary: "test"})
+			},
+			errContains: "failed to execute implementation template",
+		},
+		{
+			name:         "refactoring template execution error with invalid field reference",
+			templateName: "refactoring.tmpl",
+			templateText: "{{.BadField}}",
+			genFunc: func(pg *promptGenerator) (string, error) {
+				return pg.GenerateRefactoringPrompt(&Plan{Summary: "test"})
+			},
+			errContains: "failed to execute refactoring template",
+		},
+		{
+			name:         "pr-split template execution error with invalid field reference",
+			templateName: "pr-split.tmpl",
+			templateText: "{{.WrongField}}",
+			genFunc: func(pg *promptGenerator) (string, error) {
+				return pg.GeneratePRSplitPrompt(&PRMetrics{LinesChanged: 100, FilesChanged: 5})
+			},
+			errContains: "failed to execute pr-split template",
+		},
+		{
+			name:         "fix-ci template execution error with invalid function call",
+			templateName: "fix-ci.tmpl",
+			templateText: "{{.NonExistentMethod}}",
+			genFunc: func(pg *promptGenerator) (string, error) {
+				return pg.GenerateFixCIPrompt("test failure")
+			},
+			errContains: "failed to execute fix-ci template",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pg := &promptGenerator{
+				templates: make(map[string]*template.Template),
+			}
+
+			tmpl, err := template.New(tt.templateName).Parse(tt.templateText)
+			require.NoError(t, err)
+			pg.templates[tt.templateName] = tmpl
+
+			got, err := tt.genFunc(pg)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errContains)
+			assert.Empty(t, got)
+		})
+	}
+}
