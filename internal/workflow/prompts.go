@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"text/template"
 
-	"github.com/michael-freling/claude-code-config/templates"
+	"github.com/michael-freling/claude-code-config/internal/templates"
 )
 
 // PromptGenerator generates prompts for workflow phases
