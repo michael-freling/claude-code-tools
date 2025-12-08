@@ -281,6 +281,7 @@ type StreamingSpinner struct {
 	lastTool  string
 	toolCount int
 	startTime time.Time
+	logger    Logger
 }
 
 // NewStreamingSpinner creates a new streaming spinner with the given message
@@ -290,6 +291,17 @@ func NewStreamingSpinner(message string) *StreamingSpinner {
 		done:      make(chan bool),
 		running:   false,
 		startTime: time.Now(),
+	}
+}
+
+// NewStreamingSpinnerWithLogger creates a new streaming spinner with a logger for verbose output
+func NewStreamingSpinnerWithLogger(message string, logger Logger) *StreamingSpinner {
+	return &StreamingSpinner{
+		message:   message,
+		done:      make(chan bool),
+		running:   false,
+		startTime: time.Now(),
+		logger:    logger,
 	}
 }
 
@@ -354,6 +366,19 @@ func (s *StreamingSpinner) OnProgress(event ProgressEvent) {
 			fmt.Printf("\r\033[K  %s %s\n", Red("✗"), event.Text)
 		}
 		// Don't print successful tool results to avoid clutter
+	case "text":
+		// Show raw Claude text output in verbose mode
+		if s.logger != nil && s.logger.IsVerbose() && event.Text != "" {
+			// Clear the current line and print the text output
+			fmt.Printf("\r\033[K")
+			// Print each line with indentation for better readability
+			lines := strings.Split(strings.TrimSpace(event.Text), "\n")
+			for _, line := range lines {
+				if line != "" {
+					fmt.Printf("  %s %s\n", Yellow("│"), line)
+				}
+			}
+		}
 	}
 }
 

@@ -310,7 +310,7 @@ func (o *Orchestrator) executePlanning(ctx context.Context, state *WorkflowState
 
 	o.logger.Verbose("Generated planning prompt (%d characters)", len(prompt))
 
-	spinner := NewStreamingSpinner("Analyzing codebase...")
+	spinner := NewStreamingSpinnerWithLogger("Analyzing codebase...", o.logger)
 	spinner.Start()
 
 	result, err := o.executor.ExecuteStreaming(ctx, ExecuteConfig{
@@ -469,7 +469,7 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 			fmt.Printf("\n%s Attempt %d/%d to fix CI errors\n", Yellow("⚠"), attempt, o.config.MaxFixAttempts)
 		}
 
-		spinner := NewStreamingSpinner("Implementing changes...")
+		spinner := NewStreamingSpinnerWithLogger("Implementing changes...", o.logger)
 		spinner.Start()
 
 		result, err := o.executor.ExecuteStreaming(ctx, ExecuteConfig{
@@ -612,7 +612,7 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 			fmt.Printf("\n%s Attempt %d/%d to fix CI errors\n", Yellow("⚠"), attempt, o.config.MaxFixAttempts)
 		}
 
-		spinner := NewStreamingSpinner("Refactoring code...")
+		spinner := NewStreamingSpinnerWithLogger("Refactoring code...", o.logger)
 		spinner.Start()
 
 		result, err := o.executor.ExecuteStreaming(ctx, ExecuteConfig{
@@ -770,7 +770,7 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 			fmt.Printf("\n%s Attempt %d/%d to fix errors\n", Yellow("⚠"), attempt, o.config.MaxFixAttempts)
 		}
 
-		spinner := NewStreamingSpinner("Splitting PR into manageable pieces...")
+		spinner := NewStreamingSpinnerWithLogger("Splitting PR into manageable pieces...", o.logger)
 		spinner.Start()
 
 		result, err := o.executor.ExecuteStreaming(ctx, ExecuteConfig{
