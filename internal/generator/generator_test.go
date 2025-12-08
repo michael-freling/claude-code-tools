@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,14 +40,25 @@ func TestNewGenerator(t *testing.T) {
 
 func TestNewGeneratorWithFS(t *testing.T) {
 	tests := []struct {
-		name    string
-		fsys    fs.FS
-		wantErr bool
+		name        string
+		fsys        fs.FS
+		wantErr     bool
+		errContains string
 	}{
 		{
 			name:    "creates generator with embedded FS successfully",
 			fsys:    templatesFS,
 			wantErr: false,
+		},
+		{
+			name: "returns error when template parsing fails",
+			fsys: fstest.MapFS{
+				"prompts/skills/invalid.tmpl": &fstest.MapFile{
+					Data: []byte("{{invalid syntax"),
+				},
+			},
+			wantErr:     true,
+			errContains: "failed to create engine",
 		},
 	}
 
@@ -55,6 +67,7 @@ func TestNewGeneratorWithFS(t *testing.T) {
 			got, err := NewGeneratorWithFS(tt.fsys)
 			if tt.wantErr {
 				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
 				return
 			}
 
@@ -263,6 +276,43 @@ func TestGenerator_GenerateAll_Success(t *testing.T) {
 			for _, want := range tt.wantContains {
 				assert.Contains(t, got, want)
 			}
+		})
+	}
+}
+
+func TestGenerator_GenerateAll_Errors(t *testing.T) {
+	tests := []struct {
+		name        string
+		fsys        fs.FS
+		itemType    ItemType
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "returns error when template execution fails",
+			fsys: fstest.MapFS{
+				"prompts/skills/broken.tmpl": &fstest.MapFile{
+					Data: []byte("{{.NonExistentField}}"),
+				},
+			},
+			itemType:    ItemTypeSkill,
+			wantErr:     true,
+			errContains: "failed to generate",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gen, err := NewGeneratorWithFS(tt.fsys)
+			require.NoError(t, err)
+
+			err = gen.GenerateAll(tt.itemType)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+			require.NoError(t, err)
 		})
 	}
 }

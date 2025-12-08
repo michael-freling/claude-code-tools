@@ -2023,3 +2023,51 @@ func TestCISpinner_Fail(t *testing.T) {
 		})
 	}
 }
+
+func TestCISpinner_DoubleStop(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{
+			name: "double-stop is idempotent",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spinner := NewCISpinner("Testing")
+
+			spinner.Start()
+			time.Sleep(10 * time.Millisecond)
+
+			spinner.Stop()
+			time.Sleep(10 * time.Millisecond)
+			assert.False(t, spinner.running)
+
+			spinner.Stop()
+			time.Sleep(10 * time.Millisecond)
+			assert.False(t, spinner.running)
+		})
+	}
+}
+
+func TestCISpinner_StopWithoutStart(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{
+			name: "Stop without Start is safe",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spinner := NewCISpinner("Testing")
+			assert.False(t, spinner.running)
+
+			spinner.Stop()
+			time.Sleep(10 * time.Millisecond)
+			assert.False(t, spinner.running)
+		})
+	}
+}

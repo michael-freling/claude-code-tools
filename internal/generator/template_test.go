@@ -3,6 +3,7 @@ package generator
 import (
 	"io/fs"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,13 +45,49 @@ func TestNewEngine(t *testing.T) {
 
 func TestNewEngineWithFS(t *testing.T) {
 	tests := []struct {
-		name    string
-		fsys    fs.FS
-		wantErr bool
+		name        string
+		fsys        fs.FS
+		wantErr     bool
+		errContains string
 	}{
 		{
 			name:    "successfully loads embedded templates",
 			fsys:    templatesFS,
+			wantErr: false,
+		},
+		{
+			name: "returns error when template has invalid syntax",
+			fsys: fstest.MapFS{
+				"prompts/skills/invalid.tmpl": &fstest.MapFile{
+					Data: []byte("{{invalid template syntax"),
+				},
+			},
+			wantErr:     true,
+			errContains: "failed to load templates for skill",
+		},
+		{
+			name: "returns error when partials file has invalid syntax",
+			fsys: fstest.MapFS{
+				"prompts/skills/_partials.tmpl": &fstest.MapFile{
+					Data: []byte("{{define \"partial\"}}{{invalid"),
+				},
+			},
+			wantErr:     true,
+			errContains: "failed to load templates for skill",
+		},
+		{
+			name: "successfully loads templates ignoring non-template files",
+			fsys: fstest.MapFS{
+				"prompts/skills/valid.tmpl": &fstest.MapFile{
+					Data: []byte("Valid template content"),
+				},
+				"prompts/skills/README.md": &fstest.MapFile{
+					Data: []byte("This is a readme"),
+				},
+				"prompts/skills/subdir/nested.tmpl": &fstest.MapFile{
+					Data: []byte("Nested template"),
+				},
+			},
 			wantErr: false,
 		},
 	}
@@ -60,6 +97,7 @@ func TestNewEngineWithFS(t *testing.T) {
 			got, err := NewEngineWithFS(tt.fsys)
 			if tt.wantErr {
 				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
 				return
 			}
 
@@ -101,6 +139,11 @@ func TestEngine_List(t *testing.T) {
 			name:     "list skills returns multiple templates",
 			itemType: ItemTypeSkill,
 			wantLen:  2,
+		},
+		{
+			name:     "list unknown type returns empty slice",
+			itemType: ItemType("unknown"),
+			wantLen:  0,
 		},
 	}
 
@@ -214,11 +257,9 @@ func TestEngine_Generate_Success(t *testing.T) {
 }
 
 func TestEngine_Generate_Errors(t *testing.T) {
-	engine, err := NewEngine()
-	require.NoError(t, err)
-
 	tests := []struct {
 		name         string
+		fsys         fs.FS
 		itemType     ItemType
 		templateName string
 		wantErr      bool
@@ -226,6 +267,7 @@ func TestEngine_Generate_Errors(t *testing.T) {
 	}{
 		{
 			name:         "returns error for non-existent template",
+			fsys:         nil,
 			itemType:     ItemTypeSkill,
 			templateName: "non-existent-template",
 			wantErr:      true,
@@ -233,6 +275,7 @@ func TestEngine_Generate_Errors(t *testing.T) {
 		},
 		{
 			name:         "returns error for non-existent agent template",
+			fsys:         nil,
 			itemType:     ItemTypeAgent,
 			templateName: "invalid-agent",
 			wantErr:      true,
@@ -240,15 +283,45 @@ func TestEngine_Generate_Errors(t *testing.T) {
 		},
 		{
 			name:         "returns error for non-existent command template",
+			fsys:         nil,
 			itemType:     ItemTypeCommand,
 			templateName: "invalid-command",
 			wantErr:      true,
 			errContains:  "not found",
 		},
+		{
+			name: "returns error when template execution fails",
+			fsys: fstest.MapFS{
+				"prompts/skills/broken.tmpl": &fstest.MapFile{
+					Data: []byte("{{.NonExistentField}}"),
+				},
+			},
+			itemType:     ItemTypeSkill,
+			templateName: "broken",
+			wantErr:      true,
+			errContains:  "failed to execute template",
+		},
+		{
+			name:         "returns error for unknown item type",
+			fsys:         nil,
+			itemType:     ItemType("unknown"),
+			templateName: "test",
+			wantErr:      true,
+			errContains:  "no templates found for type",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var engine *Engine
+			var err error
+			if tt.fsys != nil {
+				engine, err = NewEngineWithFS(tt.fsys)
+			} else {
+				engine, err = NewEngine()
+			}
+			require.NoError(t, err)
+
 			got, err := engine.Generate(tt.itemType, tt.templateName)
 			if tt.wantErr {
 				require.Error(t, err)

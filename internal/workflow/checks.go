@@ -1,7 +1,6 @@
 package workflow
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -61,6 +60,7 @@ type ciChecker struct {
 	checkInterval  time.Duration
 	commandTimeout time.Duration
 	initialDelay   time.Duration
+	ghRunner       GhRunner
 }
 
 // NewCIChecker creates a new CI checker
@@ -71,11 +71,13 @@ func NewCIChecker(workingDir string, checkInterval time.Duration, commandTimeout
 	if commandTimeout == 0 {
 		commandTimeout = 2 * time.Minute
 	}
+	cmdRunner := NewCommandRunner()
 	return &ciChecker{
 		workingDir:     workingDir,
 		checkInterval:  checkInterval,
-		commandTimeout: 2 * time.Minute,
+		commandTimeout: commandTimeout,
 		initialDelay:   1 * time.Minute,
+		ghRunner:       NewGhRunner(cmdRunner),
 	}
 }
 
@@ -90,11 +92,33 @@ func NewCICheckerWithOptions(workingDir string, checkInterval, commandTimeout, i
 	if initialDelay == 0 {
 		initialDelay = 1 * time.Minute
 	}
+	cmdRunner := NewCommandRunner()
 	return &ciChecker{
 		workingDir:     workingDir,
 		checkInterval:  checkInterval,
 		commandTimeout: commandTimeout,
 		initialDelay:   initialDelay,
+		ghRunner:       NewGhRunner(cmdRunner),
+	}
+}
+
+// NewCICheckerWithRunner creates a new CI checker with injected GhRunner (for testing)
+func NewCICheckerWithRunner(workingDir string, checkInterval, commandTimeout, initialDelay time.Duration, ghRunner GhRunner) CIChecker {
+	if checkInterval == 0 {
+		checkInterval = 30 * time.Second
+	}
+	if commandTimeout == 0 {
+		commandTimeout = 2 * time.Minute
+	}
+	if initialDelay == 0 {
+		initialDelay = 1 * time.Minute
+	}
+	return &ciChecker{
+		workingDir:     workingDir,
+		checkInterval:  checkInterval,
+		commandTimeout: commandTimeout,
+		initialDelay:   initialDelay,
+		ghRunner:       ghRunner,
 	}
 }
 
@@ -138,23 +162,7 @@ func (c *ciChecker) checkCIOnce(ctx context.Context, prNumber int) (*CIResult, e
 	cmdCtx, cancel := context.WithTimeout(ctx, c.commandTimeout)
 	defer cancel()
 
-	// Use --json flag for reliable parsing
-	var cmd *exec.Cmd
-	if prNumber > 0 {
-		cmd = exec.CommandContext(cmdCtx, "gh", "pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "name,state")
-	} else {
-		cmd = exec.CommandContext(cmdCtx, "gh", "pr", "checks", "--json", "name,state")
-	}
-	if c.workingDir != "" {
-		cmd.Dir = c.workingDir
-	}
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	output := stdout.String()
+	output, err := c.ghRunner.PRChecks(cmdCtx, c.workingDir, prNumber, "name,state")
 	result.Output = output
 
 	if err != nil {
@@ -162,7 +170,7 @@ func (c *ciChecker) checkCIOnce(ctx context.Context, prNumber int) (*CIResult, e
 			return result, ErrCICheckTimeout
 		}
 
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		if exitErr, ok := errors.Unwrap(err).(*exec.ExitError); ok {
 			if exitErr.String() == "signal: killed" {
 				return result, ErrCICheckTimeout
 			}
@@ -171,14 +179,13 @@ func (c *ciChecker) checkCIOnce(ctx context.Context, prNumber int) (*CIResult, e
 			case 127:
 				return result, fmt.Errorf("gh CLI not found: is it installed?")
 			case 8:
-				// Exit code 8 means no PR found or checks pending
 				return result, fmt.Errorf("no PR found for the current branch: ensure a PR exists before checking CI status")
 			case 1:
-				return result, fmt.Errorf("failed to check CI status: %w (stderr: %s)", err, stderr.String())
+				return result, err
 			}
 		}
 
-		return result, fmt.Errorf("failed to check CI status: %w (stderr: %s)", err, stderr.String())
+		return result, err
 	}
 
 	result.Status, result.FailedJobs = parseCIOutput(output)

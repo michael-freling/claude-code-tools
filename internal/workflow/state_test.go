@@ -293,6 +293,7 @@ func TestFileStateManager_SaveState_Errors(t *testing.T) {
 		name         string
 		workflowName string
 		state        *WorkflowState
+		setup        func(tmpDir string)
 		wantErr      bool
 		errContains  string
 	}{
@@ -309,6 +310,7 @@ func TestFileStateManager_SaveState_Errors(t *testing.T) {
 				UpdatedAt:    time.Now(),
 				Phases:       make(map[Phase]*PhaseState),
 			},
+			setup:       func(tmpDir string) {},
 			wantErr:     true,
 			errContains: "invalid workflow name",
 		},
@@ -317,6 +319,9 @@ func TestFileStateManager_SaveState_Errors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
+			if tt.setup != nil {
+				tt.setup(tmpDir)
+			}
 			sm := NewStateManager(tmpDir)
 
 			err := sm.SaveState(tt.workflowName, tt.state)
@@ -330,6 +335,24 @@ func TestFileStateManager_SaveState_Errors(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestFileStateManager_SaveState_UpdatesTimestamp(t *testing.T) {
+	tmpDir := t.TempDir()
+	sm := NewStateManager(tmpDir)
+
+	workflowName := "test-workflow"
+	state, err := sm.InitState(workflowName, "test", WorkflowTypeFeature)
+	require.NoError(t, err)
+
+	originalTime := state.UpdatedAt
+	time.Sleep(10 * time.Millisecond)
+
+	state.CurrentPhase = PhaseImplementation
+	err = sm.SaveState(workflowName, state)
+	require.NoError(t, err)
+
+	assert.True(t, state.UpdatedAt.After(originalTime))
 }
 
 func TestFileStateManager_LoadState_Errors(t *testing.T) {
@@ -415,6 +438,55 @@ func TestFileStateManager_SaveAndLoadPlan(t *testing.T) {
 				EstimatedTotalFiles: 5,
 			},
 		},
+		{
+			name: "saves and loads plan with minimal fields",
+			plan: &Plan{
+				Summary:     "minimal plan",
+				ContextType: "fix",
+				Architecture: Architecture{
+					Overview:   "fix overview",
+					Components: []string{},
+				},
+				Phases:              []PlanPhase{},
+				Complexity:          "small",
+				EstimatedTotalLines: 10,
+				EstimatedTotalFiles: 1,
+			},
+		},
+		{
+			name: "saves and loads plan with many phases",
+			plan: &Plan{
+				Summary:     "complex plan",
+				ContextType: "feature",
+				Architecture: Architecture{
+					Overview:   "complex architecture",
+					Components: []string{"auth", "db", "api", "ui"},
+				},
+				Phases: []PlanPhase{
+					{
+						Name:           "database",
+						Description:    "setup database",
+						EstimatedFiles: 3,
+						EstimatedLines: 50,
+					},
+					{
+						Name:           "api",
+						Description:    "implement api",
+						EstimatedFiles: 10,
+						EstimatedLines: 200,
+					},
+					{
+						Name:           "ui",
+						Description:    "build ui",
+						EstimatedFiles: 15,
+						EstimatedLines: 300,
+					},
+				},
+				Complexity:          "high",
+				EstimatedTotalLines: 550,
+				EstimatedTotalFiles: 28,
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -435,6 +507,7 @@ func TestFileStateManager_SaveAndLoadPlan(t *testing.T) {
 			assert.Equal(t, tt.plan.Summary, got.Summary)
 			assert.Equal(t, tt.plan.ContextType, got.ContextType)
 			assert.Equal(t, tt.plan.Complexity, got.Complexity)
+			assert.Equal(t, len(tt.plan.Phases), len(got.Phases))
 		})
 	}
 }
@@ -502,6 +575,7 @@ func TestFileStateManager_SavePlan_Errors(t *testing.T) {
 		name         string
 		workflowName string
 		plan         *Plan
+		setup        func(tmpDir string) string
 		wantErr      bool
 		errContains  string
 	}{
@@ -512,12 +586,34 @@ func TestFileStateManager_SavePlan_Errors(t *testing.T) {
 			wantErr:      true,
 			errContains:  "invalid workflow name",
 		},
+		{
+			name:         "successfully saves valid plan",
+			workflowName: "valid-workflow",
+			plan:         &Plan{Summary: "test plan", Complexity: "medium"},
+			wantErr:      false,
+		},
+		{
+			name:         "successfully creates workflow directory if needed",
+			workflowName: "new-workflow",
+			plan:         &Plan{Summary: "test", Complexity: "low"},
+			wantErr:      false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tmpDir := t.TempDir()
+			var tmpDir string
+			if tt.setup != nil {
+				tmpDir = tt.setup(t.TempDir())
+			} else {
+				tmpDir = t.TempDir()
+			}
 			sm := NewStateManager(tmpDir)
+
+			if !tt.wantErr {
+				_, err := sm.InitState(tt.workflowName, "test", WorkflowTypeFeature)
+				require.NoError(t, err)
+			}
 
 			err := sm.SavePlan(tt.workflowName, tt.plan)
 
@@ -540,6 +636,38 @@ func TestFileStateManager_SavePlanMarkdown(t *testing.T) {
 		{
 			name:     "saves plan markdown successfully",
 			markdown: "# Test Plan\n\nThis is a test plan.",
+		},
+		{
+			name:     "saves empty markdown",
+			markdown: "",
+		},
+		{
+			name: "saves complex markdown with formatting",
+			markdown: `# Feature Implementation Plan
+
+## Overview
+This plan outlines the implementation of authentication.
+
+## Components
+- User service
+- Auth middleware
+- Database schema
+
+## Phases
+1. Database setup
+2. API implementation
+3. Frontend integration
+
+## Risks
+- Token expiration handling
+- Password security
+
+## Timeline
+Estimated: 2 weeks`,
+		},
+		{
+			name:     "saves markdown with special characters",
+			markdown: "# Plan\n\n- Item 1 `code`\n- Item 2 **bold**\n- Item 3 *italic*",
 		},
 	}
 
@@ -579,12 +707,23 @@ func TestFileStateManager_SavePlanMarkdown_Errors(t *testing.T) {
 			wantErr:      true,
 			errContains:  "invalid workflow name",
 		},
+		{
+			name:         "successfully saves valid markdown",
+			workflowName: "valid-workflow",
+			markdown:     "# Test Plan\n\nThis is a test",
+			wantErr:      false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 			sm := NewStateManager(tmpDir)
+
+			if !tt.wantErr {
+				_, err := sm.InitState(tt.workflowName, "test", WorkflowTypeFeature)
+				require.NoError(t, err)
+			}
 
 			err := sm.SavePlanMarkdown(tt.workflowName, tt.markdown)
 
@@ -724,12 +863,24 @@ func TestFileStateManager_SavePhaseOutput_Errors(t *testing.T) {
 			wantErr:      true,
 			errContains:  "invalid workflow name",
 		},
+		{
+			name:         "successfully saves valid phase output",
+			workflowName: "valid-workflow",
+			phase:        PhaseImplementation,
+			data:         &ImplementationSummary{Summary: "test summary", LinesAdded: 100},
+			wantErr:      false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 			sm := NewStateManager(tmpDir)
+
+			if !tt.wantErr {
+				_, err := sm.InitState(tt.workflowName, "test", WorkflowTypeFeature)
+				require.NoError(t, err)
+			}
 
 			err := sm.SavePhaseOutput(tt.workflowName, tt.phase, tt.data)
 
@@ -927,6 +1078,27 @@ func TestFileStateManager_SaveRawOutput(t *testing.T) {
 			wantErr:      true,
 			errContains:  "invalid workflow name",
 		},
+		{
+			name:         "saves raw output for refactoring phase",
+			workflowName: "test-workflow",
+			phase:        PhaseRefactoring,
+			output:       "Refactoring output",
+			wantErr:      false,
+		},
+		{
+			name:         "saves raw output for pr-split phase",
+			workflowName: "test-workflow",
+			phase:        PhasePRSplit,
+			output:       "PR split output",
+			wantErr:      false,
+		},
+		{
+			name:         "saves raw output for confirmation phase",
+			workflowName: "test-workflow",
+			phase:        PhaseConfirmation,
+			output:       "Confirmation output",
+			wantErr:      false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1022,4 +1194,174 @@ func TestFileStateManager_AtomicWrite_Error(t *testing.T) {
 	invalidPath := filepath.Join("/proc/invalid/path/that/cannot/exist", "file.json")
 	err := fsm.atomicWrite(invalidPath, []byte("test"))
 	assert.Error(t, err)
+}
+
+func TestFileStateManager_AtomicWrite_Success(t *testing.T) {
+	tmpDir := t.TempDir()
+	sm := NewStateManager(tmpDir)
+	fsm, ok := sm.(*fileStateManager)
+	require.True(t, ok)
+
+	testPath := filepath.Join(tmpDir, "subdir", "test.json")
+	testData := []byte("test data")
+
+	err := fsm.atomicWrite(testPath, testData)
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(testPath)
+	require.NoError(t, err)
+	assert.Equal(t, testData, content)
+}
+
+func TestFileStateManager_Unlock_NoLock(t *testing.T) {
+	tmpDir := t.TempDir()
+	sm := NewStateManager(tmpDir)
+	fsm, ok := sm.(*fileStateManager)
+	require.True(t, ok)
+
+	err := fsm.unlock("non-existent-workflow")
+	assert.NoError(t, err)
+}
+
+func TestFileStateManager_ListWorkflows_WithNonDirectoryEntries(t *testing.T) {
+	tmpDir := t.TempDir()
+	sm := NewStateManager(tmpDir)
+
+	_, err := sm.InitState("workflow1", "test1", WorkflowTypeFeature)
+	require.NoError(t, err)
+
+	err = os.WriteFile(filepath.Join(tmpDir, "regular-file.txt"), []byte("test"), 0644)
+	require.NoError(t, err)
+
+	workflows, err := sm.ListWorkflows()
+	require.NoError(t, err)
+
+	assert.Len(t, workflows, 1)
+	assert.Equal(t, "workflow1", workflows[0].Name)
+}
+
+func TestFileStateManager_EnsureWorkflowDir_CreateDirError(t *testing.T) {
+	tests := []struct {
+		name         string
+		workflowName string
+		wantErr      bool
+		errContains  string
+	}{
+		{
+			name:         "successfully creates workflow directory",
+			workflowName: "valid-workflow",
+			wantErr:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			sm := NewStateManager(tmpDir)
+
+			err := sm.EnsureWorkflowDir(tt.workflowName)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestFileStateManager_Lock_MultipleLocks(t *testing.T) {
+	tmpDir := t.TempDir()
+	sm := NewStateManager(tmpDir)
+
+	_, err := sm.InitState("test-workflow", "test", WorkflowTypeFeature)
+	require.NoError(t, err)
+
+	fsm, ok := sm.(*fileStateManager)
+	require.True(t, ok)
+
+	lock1, err := fsm.lock("test-workflow")
+	require.NoError(t, err)
+	require.NotNil(t, lock1)
+
+	err = fsm.unlock("test-workflow")
+	require.NoError(t, err)
+
+	err = fsm.unlock("test-workflow")
+	require.NoError(t, err)
+
+	lock2, err := fsm.lock("test-workflow")
+	require.NoError(t, err)
+	require.NotNil(t, lock2)
+
+	err = fsm.unlock("test-workflow")
+	require.NoError(t, err)
+
+	err = lock1.Close()
+	require.NoError(t, err)
+
+	err = lock2.Close()
+	require.NoError(t, err)
+}
+
+func TestFileStateManager_ListWorkflows_StatusDetection(t *testing.T) {
+	tests := []struct {
+		name       string
+		setupState func(*WorkflowState)
+		wantStatus string
+	}{
+		{
+			name: "completed workflow",
+			setupState: func(s *WorkflowState) {
+				s.CurrentPhase = PhaseCompleted
+			},
+			wantStatus: "completed",
+		},
+		{
+			name: "failed workflow",
+			setupState: func(s *WorkflowState) {
+				s.CurrentPhase = PhaseFailed
+			},
+			wantStatus: "failed",
+		},
+		{
+			name: "workflow with error",
+			setupState: func(s *WorkflowState) {
+				s.Error = &WorkflowError{
+					Message: "test error",
+					Phase:   PhasePlanning,
+				}
+			},
+			wantStatus: "failed",
+		},
+		{
+			name: "in progress workflow",
+			setupState: func(s *WorkflowState) {
+				s.CurrentPhase = PhaseImplementation
+			},
+			wantStatus: "in_progress",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			sm := NewStateManager(tmpDir)
+
+			state, err := sm.InitState("test-workflow", "test", WorkflowTypeFeature)
+			require.NoError(t, err)
+
+			tt.setupState(state)
+			err = sm.SaveState("test-workflow", state)
+			require.NoError(t, err)
+
+			workflows, err := sm.ListWorkflows()
+			require.NoError(t, err)
+
+			assert.Len(t, workflows, 1)
+			assert.Equal(t, tt.wantStatus, workflows[0].Status)
+		})
+	}
 }

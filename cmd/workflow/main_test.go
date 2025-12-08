@@ -1790,3 +1790,492 @@ func TestStatusCmd_WithExistingWorkflow(t *testing.T) {
 
 	assert.NoError(t, err)
 }
+
+func TestListCmd_OrchestratorCreationError(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseDir string
+		wantErr bool
+	}{
+		{
+			name:    "empty base dir causes error",
+			baseDir: "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rootCmd := newRootCmd()
+			rootCmd.SetArgs([]string{"list", "--base-dir", tt.baseDir})
+
+			buf := new(bytes.Buffer)
+			rootCmd.SetOut(buf)
+			rootCmd.SetErr(buf)
+
+			err := rootCmd.Execute()
+
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestDeleteCmd_OrchestratorCreationError(t *testing.T) {
+	rootCmd := newRootCmd()
+	rootCmd.SetArgs([]string{"delete", "test-workflow", "--force", "--base-dir", ""})
+
+	buf := new(bytes.Buffer)
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+
+	err := rootCmd.Execute()
+
+	assert.Error(t, err)
+}
+
+func TestCleanCmd_OrchestratorCreationError(t *testing.T) {
+	rootCmd := newRootCmd()
+	rootCmd.SetArgs([]string{"clean", "--force", "--base-dir", ""})
+
+	buf := new(bytes.Buffer)
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+
+	err := rootCmd.Execute()
+
+	assert.Error(t, err)
+}
+
+func TestResumeCmd_OrchestratorCreationError(t *testing.T) {
+	rootCmd := newRootCmd()
+	rootCmd.SetArgs([]string{"resume", "test-workflow", "--base-dir", ""})
+
+	buf := new(bytes.Buffer)
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+
+	err := rootCmd.Execute()
+
+	assert.Error(t, err)
+}
+
+func TestListCmd_WithMultipleWorkflows(t *testing.T) {
+	tempDir := t.TempDir()
+
+	workflows := []struct {
+		name   string
+		status workflow.Phase
+	}{
+		{"workflow-1", workflow.PhasePlanning},
+		{"workflow-2", workflow.PhaseCompleted},
+		{"workflow-3", workflow.PhaseFailed},
+	}
+
+	for _, wf := range workflows {
+		state := workflow.WorkflowState{
+			Version:      "1.0",
+			Name:         wf.name,
+			Type:         workflow.WorkflowTypeFeature,
+			Description:  "test workflow",
+			CurrentPhase: wf.status,
+			CreatedAt:    time.Now().Add(-1 * time.Hour),
+			UpdatedAt:    time.Now(),
+			Phases:       make(map[workflow.Phase]*workflow.PhaseState),
+		}
+
+		workflowDir := filepath.Join(tempDir, wf.name)
+		err := os.MkdirAll(workflowDir, 0755)
+		require.NoError(t, err)
+
+		stateFile := filepath.Join(workflowDir, "state.json")
+		data, err := json.Marshal(state)
+		require.NoError(t, err)
+
+		err = os.WriteFile(stateFile, data, 0644)
+		require.NoError(t, err)
+	}
+
+	rootCmd := newRootCmd()
+	rootCmd.SetArgs([]string{"list", "--base-dir", tempDir})
+
+	buf := new(bytes.Buffer)
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+
+	err := rootCmd.Execute()
+
+	assert.NoError(t, err)
+}
+
+func TestCleanCmd_WithMixedWorkflows(t *testing.T) {
+	tempDir := t.TempDir()
+
+	workflows := []struct {
+		name   string
+		status workflow.Phase
+	}{
+		{"completed-1", workflow.PhaseCompleted},
+		{"in-progress", workflow.PhasePlanning},
+		{"completed-2", workflow.PhaseCompleted},
+		{"failed", workflow.PhaseFailed},
+	}
+
+	for _, wf := range workflows {
+		state := workflow.WorkflowState{
+			Version:      "1.0",
+			Name:         wf.name,
+			Type:         workflow.WorkflowTypeFeature,
+			Description:  "test workflow",
+			CurrentPhase: wf.status,
+			CreatedAt:    time.Now().Add(-1 * time.Hour),
+			UpdatedAt:    time.Now(),
+			Phases:       make(map[workflow.Phase]*workflow.PhaseState),
+		}
+
+		workflowDir := filepath.Join(tempDir, wf.name)
+		err := os.MkdirAll(workflowDir, 0755)
+		require.NoError(t, err)
+
+		stateFile := filepath.Join(workflowDir, "state.json")
+		data, err := json.Marshal(state)
+		require.NoError(t, err)
+
+		err = os.WriteFile(stateFile, data, 0644)
+		require.NoError(t, err)
+	}
+
+	rootCmd := newRootCmd()
+	rootCmd.SetArgs([]string{"clean", "--force", "--base-dir", tempDir})
+
+	buf := new(bytes.Buffer)
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+
+	err := rootCmd.Execute()
+
+	assert.NoError(t, err)
+
+	remainingFiles, _ := os.ReadDir(tempDir)
+	completedCount := 0
+	for _, f := range remainingFiles {
+		if f.Name() == "completed-1" || f.Name() == "completed-2" {
+			completedCount++
+		}
+	}
+	assert.Equal(t, 0, completedCount, "completed workflows should be deleted")
+}
+
+func TestDeleteCmd_ConfirmationPromptCancelled(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "user responds no",
+			input: "no\n",
+		},
+		{
+			name:  "user responds n",
+			input: "n\n",
+		},
+		{
+			name:  "user responds with empty line",
+			input: "\n",
+		},
+		{
+			name:  "user responds with random text",
+			input: "maybe\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+
+			state := workflow.WorkflowState{
+				Version:      "1.0",
+				Name:         "test-workflow",
+				Type:         workflow.WorkflowTypeFeature,
+				Description:  "test",
+				CurrentPhase: workflow.PhasePlanning,
+				CreatedAt:    time.Now(),
+				UpdatedAt:    time.Now(),
+				Phases:       make(map[workflow.Phase]*workflow.PhaseState),
+			}
+
+			workflowDir := filepath.Join(tempDir, "test-workflow")
+			err := os.MkdirAll(workflowDir, 0755)
+			require.NoError(t, err)
+
+			stateFile := filepath.Join(workflowDir, "state.json")
+			data, err := json.Marshal(state)
+			require.NoError(t, err)
+
+			err = os.WriteFile(stateFile, data, 0644)
+			require.NoError(t, err)
+
+			oldStdin := os.Stdin
+			defer func() { os.Stdin = oldStdin }()
+
+			r, w, err := os.Pipe()
+			require.NoError(t, err)
+			os.Stdin = r
+
+			_, err = w.Write([]byte(tt.input))
+			require.NoError(t, err)
+			w.Close()
+
+			rootCmd := newRootCmd()
+			rootCmd.SetArgs([]string{"delete", "test-workflow", "--base-dir", tempDir})
+
+			buf := new(bytes.Buffer)
+			rootCmd.SetOut(buf)
+			rootCmd.SetErr(buf)
+
+			err = rootCmd.Execute()
+
+			assert.NoError(t, err)
+
+			_, err = os.Stat(workflowDir)
+			assert.NoError(t, err, "workflow should still exist after cancellation")
+		})
+	}
+}
+
+func TestDeleteCmd_ConfirmationPromptAccepted(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "user responds yes",
+			input: "yes\n",
+		},
+		{
+			name:  "user responds y",
+			input: "y\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+
+			state := workflow.WorkflowState{
+				Version:      "1.0",
+				Name:         "test-workflow",
+				Type:         workflow.WorkflowTypeFeature,
+				Description:  "test",
+				CurrentPhase: workflow.PhasePlanning,
+				CreatedAt:    time.Now(),
+				UpdatedAt:    time.Now(),
+				Phases:       make(map[workflow.Phase]*workflow.PhaseState),
+			}
+
+			workflowDir := filepath.Join(tempDir, "test-workflow")
+			err := os.MkdirAll(workflowDir, 0755)
+			require.NoError(t, err)
+
+			stateFile := filepath.Join(workflowDir, "state.json")
+			data, err := json.Marshal(state)
+			require.NoError(t, err)
+
+			err = os.WriteFile(stateFile, data, 0644)
+			require.NoError(t, err)
+
+			oldStdin := os.Stdin
+			defer func() { os.Stdin = oldStdin }()
+
+			r, w, err := os.Pipe()
+			require.NoError(t, err)
+			os.Stdin = r
+
+			_, err = w.Write([]byte(tt.input))
+			require.NoError(t, err)
+			w.Close()
+
+			rootCmd := newRootCmd()
+			rootCmd.SetArgs([]string{"delete", "test-workflow", "--base-dir", tempDir})
+
+			buf := new(bytes.Buffer)
+			rootCmd.SetOut(buf)
+			rootCmd.SetErr(buf)
+
+			err = rootCmd.Execute()
+
+			assert.NoError(t, err)
+
+			_, err = os.Stat(workflowDir)
+			assert.True(t, os.IsNotExist(err), "workflow should be deleted")
+		})
+	}
+}
+
+func TestDeleteCmd_OrchestratorDeleteError(t *testing.T) {
+	tempDir := t.TempDir()
+
+	rootCmd := newRootCmd()
+	rootCmd.SetArgs([]string{"delete", "nonexistent-workflow", "--force", "--base-dir", tempDir})
+
+	buf := new(bytes.Buffer)
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+
+	err := rootCmd.Execute()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to delete workflow")
+}
+
+func TestCleanCmd_NoCompletedWorkflows(t *testing.T) {
+	tempDir := t.TempDir()
+
+	workflows := []struct {
+		name   string
+		status workflow.Phase
+	}{
+		{"in-progress-1", workflow.PhasePlanning},
+		{"failed-1", workflow.PhaseFailed},
+	}
+
+	for _, wf := range workflows {
+		state := workflow.WorkflowState{
+			Version:      "1.0",
+			Name:         wf.name,
+			Type:         workflow.WorkflowTypeFeature,
+			Description:  "test workflow",
+			CurrentPhase: wf.status,
+			CreatedAt:    time.Now().Add(-1 * time.Hour),
+			UpdatedAt:    time.Now(),
+			Phases:       make(map[workflow.Phase]*workflow.PhaseState),
+		}
+
+		workflowDir := filepath.Join(tempDir, wf.name)
+		err := os.MkdirAll(workflowDir, 0755)
+		require.NoError(t, err)
+
+		stateFile := filepath.Join(workflowDir, "state.json")
+		data, err := json.Marshal(state)
+		require.NoError(t, err)
+
+		err = os.WriteFile(stateFile, data, 0644)
+		require.NoError(t, err)
+	}
+
+	rootCmd := newRootCmd()
+	rootCmd.SetArgs([]string{"clean", "--force", "--base-dir", tempDir})
+
+	buf := new(bytes.Buffer)
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+
+	err := rootCmd.Execute()
+
+	assert.NoError(t, err)
+
+	for _, wf := range workflows {
+		workflowDir := filepath.Join(tempDir, wf.name)
+		_, err := os.Stat(workflowDir)
+		assert.NoError(t, err, "non-completed workflow %s should not be deleted", wf.name)
+	}
+}
+
+func TestCleanCmd_CleanError(t *testing.T) {
+	tempDir := t.TempDir()
+
+	err := os.Chmod(tempDir, 0000)
+	require.NoError(t, err)
+
+	defer func() {
+		os.Chmod(tempDir, 0755)
+	}()
+
+	rootCmd := newRootCmd()
+	rootCmd.SetArgs([]string{"clean", "--force", "--base-dir", tempDir})
+
+	buf := new(bytes.Buffer)
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+
+	err = rootCmd.Execute()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to")
+}
+
+func TestCleanCmd_ConfirmationPromptCancelled(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "user responds no",
+			input: "no\n",
+		},
+		{
+			name:  "user responds n",
+			input: "n\n",
+		},
+		{
+			name:  "user responds with empty line",
+			input: "\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+
+			state := workflow.WorkflowState{
+				Version:      "1.0",
+				Name:         "completed-workflow",
+				Type:         workflow.WorkflowTypeFeature,
+				Description:  "completed test",
+				CurrentPhase: workflow.PhaseCompleted,
+				CreatedAt:    time.Now().Add(-1 * time.Hour),
+				UpdatedAt:    time.Now(),
+				Phases:       make(map[workflow.Phase]*workflow.PhaseState),
+			}
+
+			workflowDir := filepath.Join(tempDir, "completed-workflow")
+			err := os.MkdirAll(workflowDir, 0755)
+			require.NoError(t, err)
+
+			stateFile := filepath.Join(workflowDir, "state.json")
+			data, err := json.Marshal(state)
+			require.NoError(t, err)
+
+			err = os.WriteFile(stateFile, data, 0644)
+			require.NoError(t, err)
+
+			oldStdin := os.Stdin
+			defer func() { os.Stdin = oldStdin }()
+
+			r, w, err := os.Pipe()
+			require.NoError(t, err)
+			os.Stdin = r
+
+			_, err = w.Write([]byte(tt.input))
+			require.NoError(t, err)
+			w.Close()
+
+			rootCmd := newRootCmd()
+			rootCmd.SetArgs([]string{"clean", "--base-dir", tempDir})
+
+			buf := new(bytes.Buffer)
+			rootCmd.SetOut(buf)
+			rootCmd.SetErr(buf)
+
+			err = rootCmd.Execute()
+
+			assert.NoError(t, err)
+
+			_, err = os.Stat(workflowDir)
+			assert.NoError(t, err, "workflow should still exist after cancellation")
+		})
+	}
+}

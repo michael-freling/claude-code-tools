@@ -1,12 +1,10 @@
 package workflow
 
 import (
-	"bytes"
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 )
 
 // WorktreeManager handles git worktree operations
@@ -18,13 +16,24 @@ type WorktreeManager interface {
 
 // worktreeManager implements WorktreeManager interface
 type worktreeManager struct {
-	baseDir string
+	baseDir   string
+	gitRunner GitRunner
 }
 
 // NewWorktreeManager creates a new worktree manager
 func NewWorktreeManager(baseDir string) WorktreeManager {
+	cmdRunner := NewCommandRunner()
 	return &worktreeManager{
-		baseDir: baseDir,
+		baseDir:   baseDir,
+		gitRunner: NewGitRunner(cmdRunner),
+	}
+}
+
+// NewWorktreeManagerWithRunner creates a new worktree manager with a custom GitRunner
+func NewWorktreeManagerWithRunner(baseDir string, gitRunner GitRunner) WorktreeManager {
+	return &worktreeManager{
+		baseDir:   baseDir,
+		gitRunner: gitRunner,
 	}
 }
 
@@ -54,17 +63,9 @@ func (w *worktreeManager) CreateWorktree(workflowName string) (string, error) {
 
 	branchName := fmt.Sprintf("workflow/%s", workflowName)
 
-	cmd := exec.Command("git", "worktree", "add", absWorktreePath, "-b", branchName)
-	cmd.Dir = w.baseDir
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		if strings.Contains(stderr.String(), "already exists") {
-			return "", fmt.Errorf("branch %s already exists", branchName)
-		}
-		return "", fmt.Errorf("failed to create worktree: %w (stderr: %s)", err, stderr.String())
+	ctx := context.Background()
+	if err := w.gitRunner.WorktreeAdd(ctx, w.baseDir, absWorktreePath, branchName); err != nil {
+		return "", err
 	}
 
 	return absWorktreePath, nil
@@ -100,14 +101,9 @@ func (w *worktreeManager) DeleteWorktree(path string) error {
 		return nil
 	}
 
-	cmd := exec.Command("git", "worktree", "remove", path)
-	cmd.Dir = w.baseDir
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to remove worktree: %w (stderr: %s)", err, stderr.String())
+	ctx := context.Background()
+	if err := w.gitRunner.WorktreeRemove(ctx, w.baseDir, path); err != nil {
+		return err
 	}
 
 	return nil

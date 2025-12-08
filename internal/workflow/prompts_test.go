@@ -919,6 +919,41 @@ func TestPromptGenerator_GenerateFixCIPrompt_EdgeCases(t *testing.T) {
 	}
 }
 
+func TestPromptGenerator_LoadTemplates_ErrorHandling(t *testing.T) {
+	tests := []struct {
+		name    string
+		wantErr bool
+	}{
+		{
+			name:    "loadTemplates succeeds with valid embedded templates",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pg := &promptGenerator{
+				templates: make(map[string]*template.Template),
+			}
+
+			err := pg.loadTemplates()
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Len(t, pg.templates, 5)
+			assert.NotNil(t, pg.templates["planning.tmpl"])
+			assert.NotNil(t, pg.templates["implementation.tmpl"])
+			assert.NotNil(t, pg.templates["refactoring.tmpl"])
+			assert.NotNil(t, pg.templates["pr-split.tmpl"])
+			assert.NotNil(t, pg.templates["fix-ci.tmpl"])
+		})
+	}
+}
+
 func TestPromptGenerator_GenerateFixCIPrompt_RealWorldScenarios(t *testing.T) {
 	tests := []struct {
 		name        string

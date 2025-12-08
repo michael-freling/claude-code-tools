@@ -2,10 +2,12 @@ package workflow
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -191,13 +193,13 @@ func TestNewCIChecker(t *testing.T) {
 			checkInterval:      10 * time.Second,
 			commandTimeout:     5 * time.Minute,
 			wantInterval:       10 * time.Second,
-			wantCommandTimeout: 2 * time.Minute,
+			wantCommandTimeout: 5 * time.Minute,
 		},
 		{
 			name:               "with default interval",
 			workingDir:         "/tmp/test",
 			checkInterval:      0,
-			commandTimeout:     5 * time.Minute,
+			commandTimeout:     0,
 			wantInterval:       30 * time.Second,
 			wantCommandTimeout: 2 * time.Minute,
 		},
@@ -725,7 +727,10 @@ func TestCheckCI_ContextCancellation(t *testing.T) {
 }
 
 func TestCheckCI_IsolatedCommandContext(t *testing.T) {
-	checker := NewCIChecker("/tmp", 1*time.Second, 50*time.Millisecond)
+	mockGhRunner := new(MockGhRunner)
+	mockGhRunner.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", fmt.Errorf("no PR found"))
+
+	checker := NewCICheckerWithRunner("/tmp", 1*time.Second, 50*time.Millisecond, 1*time.Minute, mockGhRunner)
 	ctx := context.Background()
 
 	result, err := checker.CheckCI(ctx, 0)
@@ -733,6 +738,7 @@ func TestCheckCI_IsolatedCommandContext(t *testing.T) {
 	require.Error(t, err)
 	assert.NotNil(t, result)
 	assert.False(t, result.Passed)
+	mockGhRunner.AssertExpectations(t)
 }
 
 // TestWaitForCIWithOptions_ParentContextCancellation is skipped because
@@ -888,3 +894,797 @@ func TestFilterE2EFailures_EdgeCases(t *testing.T) {
 // and TestWaitForCI_ContextCancellation are skipped because WaitForCI methods have a
 // hardcoded 1-minute initial delay that makes unit testing impractical.
 // These should be tested in integration tests.
+
+func TestNewCICheckerWithRunner(t *testing.T) {
+	tests := []struct {
+		name               string
+		workingDir         string
+		checkInterval      time.Duration
+		commandTimeout     time.Duration
+		initialDelay       time.Duration
+		wantInterval       time.Duration
+		wantCommandTimeout time.Duration
+		wantInitialDelay   time.Duration
+	}{
+		{
+			name:               "with all custom values",
+			workingDir:         "/tmp/test",
+			checkInterval:      15 * time.Second,
+			commandTimeout:     3 * time.Minute,
+			initialDelay:       2 * time.Minute,
+			wantInterval:       15 * time.Second,
+			wantCommandTimeout: 3 * time.Minute,
+			wantInitialDelay:   2 * time.Minute,
+		},
+		{
+			name:               "with all default values (zeros)",
+			workingDir:         "/tmp/test",
+			checkInterval:      0,
+			commandTimeout:     0,
+			initialDelay:       0,
+			wantInterval:       30 * time.Second,
+			wantCommandTimeout: 2 * time.Minute,
+			wantInitialDelay:   1 * time.Minute,
+		},
+		{
+			name:               "with mixed custom and default values",
+			workingDir:         "/tmp/test",
+			checkInterval:      20 * time.Second,
+			commandTimeout:     0,
+			initialDelay:       45 * time.Second,
+			wantInterval:       20 * time.Second,
+			wantCommandTimeout: 2 * time.Minute,
+			wantInitialDelay:   45 * time.Second,
+		},
+		{
+			name:               "with zero check interval only",
+			workingDir:         "/tmp/test",
+			checkInterval:      0,
+			commandTimeout:     5 * time.Minute,
+			initialDelay:       30 * time.Second,
+			wantInterval:       30 * time.Second,
+			wantCommandTimeout: 5 * time.Minute,
+			wantInitialDelay:   30 * time.Second,
+		},
+		{
+			name:               "with zero command timeout only",
+			workingDir:         "/tmp/test",
+			checkInterval:      10 * time.Second,
+			commandTimeout:     0,
+			initialDelay:       2 * time.Minute,
+			wantInterval:       10 * time.Second,
+			wantCommandTimeout: 2 * time.Minute,
+			wantInitialDelay:   2 * time.Minute,
+		},
+		{
+			name:               "with zero initial delay only",
+			workingDir:         "/tmp/test",
+			checkInterval:      25 * time.Second,
+			commandTimeout:     4 * time.Minute,
+			initialDelay:       0,
+			wantInterval:       25 * time.Second,
+			wantCommandTimeout: 4 * time.Minute,
+			wantInitialDelay:   1 * time.Minute,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGhRunner := new(MockGhRunner)
+			checker := NewCICheckerWithRunner(tt.workingDir, tt.checkInterval, tt.commandTimeout, tt.initialDelay, mockGhRunner)
+			require.NotNil(t, checker)
+
+			concreteChecker, ok := checker.(*ciChecker)
+			require.True(t, ok)
+			assert.Equal(t, tt.workingDir, concreteChecker.workingDir)
+			assert.Equal(t, tt.wantInterval, concreteChecker.checkInterval)
+			assert.Equal(t, tt.wantCommandTimeout, concreteChecker.commandTimeout)
+			assert.Equal(t, tt.wantInitialDelay, concreteChecker.initialDelay)
+			assert.Equal(t, mockGhRunner, concreteChecker.ghRunner)
+		})
+	}
+}
+
+func TestCheckCIOnce_ErrorHandling(t *testing.T) {
+	tests := []struct {
+		name        string
+		mockSetup   func(*MockGhRunner)
+		wantErr     bool
+		errContains string
+		errType     error
+	}{
+		{
+			name: "context deadline exceeded returns timeout error",
+			mockSetup: func(m *MockGhRunner) {
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", context.DeadlineExceeded)
+			},
+			wantErr: true,
+			errType: ErrCICheckTimeout,
+		},
+		{
+			name: "generic error is returned as-is",
+			mockSetup: func(m *MockGhRunner) {
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", fmt.Errorf("some error"))
+			},
+			wantErr:     true,
+			errContains: "some error",
+		},
+		{
+			name: "context cancelled returns context error",
+			mockSetup: func(m *MockGhRunner) {
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", context.Canceled)
+			},
+			wantErr: true,
+		},
+		{
+			name: "successful check with pending status",
+			mockSetup: func(m *MockGhRunner) {
+				output := `[{"name":"test","state":"PENDING"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(output, nil)
+			},
+			wantErr: false,
+		},
+		{
+			name: "successful check with success status",
+			mockSetup: func(m *MockGhRunner) {
+				output := `[{"name":"test","state":"SUCCESS"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(output, nil)
+			},
+			wantErr: false,
+		},
+		{
+			name: "successful check with failure status",
+			mockSetup: func(m *MockGhRunner) {
+				output := `[{"name":"test","state":"FAILURE"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(output, nil)
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGhRunner := new(MockGhRunner)
+			tt.mockSetup(mockGhRunner)
+
+			checker := NewCICheckerWithRunner("/tmp", 1*time.Second, 50*time.Millisecond, 1*time.Minute, mockGhRunner)
+			concreteChecker := checker.(*ciChecker)
+
+			ctx := context.Background()
+			result, err := concreteChecker.checkCIOnce(ctx, 0)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errType != nil {
+					assert.ErrorIs(t, err, tt.errType)
+				}
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				assert.NotNil(t, result)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotNil(t, result)
+			mockGhRunner.AssertExpectations(t)
+		})
+	}
+}
+
+func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
+	tests := []struct {
+		name           string
+		mockSetup      func(*MockGhRunner)
+		checkInterval  time.Duration
+		commandTimeout time.Duration
+		initialDelay   time.Duration
+		timeout        time.Duration
+		opts           CheckCIOptions
+		wantErr        bool
+		wantPassed     bool
+	}{
+		{
+			name: "CI already complete on first check",
+			mockSetup: func(m *MockGhRunner) {
+				successOutput := `[{"name":"test","state":"SUCCESS"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+			},
+			checkInterval:  50 * time.Millisecond,
+			commandTimeout: 100 * time.Millisecond,
+			initialDelay:   50 * time.Millisecond,
+			timeout:        5 * time.Second,
+			wantErr:        false,
+			wantPassed:     true,
+		},
+		{
+			name: "CI fails on first check",
+			mockSetup: func(m *MockGhRunner) {
+				failOutput := `[{"name":"test","state":"FAILURE"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(failOutput, nil)
+			},
+			checkInterval:  50 * time.Millisecond,
+			commandTimeout: 100 * time.Millisecond,
+			initialDelay:   50 * time.Millisecond,
+			timeout:        5 * time.Second,
+			wantErr:        false,
+			wantPassed:     false,
+		},
+		{
+			name: "skip e2e failures",
+			mockSetup: func(m *MockGhRunner) {
+				failOutput := `[{"name":"test-unit","state":"SUCCESS"},{"name":"test-e2e","state":"FAILURE"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(failOutput, nil)
+			},
+			checkInterval:  50 * time.Millisecond,
+			commandTimeout: 100 * time.Millisecond,
+			initialDelay:   50 * time.Millisecond,
+			timeout:        5 * time.Second,
+			opts:           CheckCIOptions{SkipE2E: true, E2ETestPattern: "e2e"},
+			wantErr:        false,
+			wantPassed:     true,
+		},
+		{
+			name: "context timeout returns error",
+			mockSetup: func(m *MockGhRunner) {
+				pendingOutput := `[{"name":"test","state":"PENDING"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Maybe()
+			},
+			checkInterval:  50 * time.Millisecond,
+			commandTimeout: 100 * time.Millisecond,
+			initialDelay:   50 * time.Millisecond,
+			timeout:        150 * time.Millisecond,
+			wantErr:        true,
+		},
+		{
+			name: "uses default timeout when zero",
+			mockSetup: func(m *MockGhRunner) {
+				successOutput := `[{"name":"test","state":"SUCCESS"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+			},
+			checkInterval:  50 * time.Millisecond,
+			commandTimeout: 100 * time.Millisecond,
+			initialDelay:   50 * time.Millisecond,
+			timeout:        0,
+			wantErr:        false,
+			wantPassed:     true,
+		},
+		{
+			name: "uses default e2e pattern",
+			mockSetup: func(m *MockGhRunner) {
+				failOutput := `[{"name":"test","state":"SUCCESS"},{"name":"integration","state":"FAILURE"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(failOutput, nil)
+			},
+			checkInterval:  50 * time.Millisecond,
+			commandTimeout: 100 * time.Millisecond,
+			initialDelay:   50 * time.Millisecond,
+			timeout:        5 * time.Second,
+			opts:           CheckCIOptions{SkipE2E: true},
+			wantErr:        false,
+			wantPassed:     true,
+		},
+		{
+			name: "handles timeout error during polling",
+			mockSetup: func(m *MockGhRunner) {
+				pendingOutput := `[{"name":"test","state":"PENDING"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", ErrCICheckTimeout).Maybe()
+			},
+			checkInterval:  50 * time.Millisecond,
+			commandTimeout: 100 * time.Millisecond,
+			initialDelay:   50 * time.Millisecond,
+			timeout:        300 * time.Millisecond,
+			wantErr:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGhRunner := new(MockGhRunner)
+			tt.mockSetup(mockGhRunner)
+
+			checker := NewCICheckerWithRunner("/tmp", tt.checkInterval, tt.commandTimeout, tt.initialDelay, mockGhRunner)
+
+			ctx, cancel := context.WithTimeout(context.Background(), max(tt.timeout, 5*time.Second))
+			defer cancel()
+
+			var progressEvents []CIProgressEvent
+			onProgress := func(event CIProgressEvent) {
+				progressEvents = append(progressEvents, event)
+			}
+
+			result, err := checker.WaitForCIWithProgress(ctx, 0, tt.timeout, tt.opts, onProgress)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotNil(t, result)
+			assert.Equal(t, tt.wantPassed, result.Passed)
+			assert.Greater(t, len(progressEvents), 0, "should have progress events")
+		})
+	}
+}
+
+func max(a, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func TestCheckCI_RetryLogic(t *testing.T) {
+	tests := []struct {
+		name      string
+		mockSetup func(*MockGhRunner)
+		wantErr   bool
+	}{
+		{
+			name: "retries on timeout and eventually succeeds",
+			mockSetup: func(m *MockGhRunner) {
+				successOutput := `[{"name":"test","state":"SUCCESS"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", ErrCICheckTimeout).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+			},
+			wantErr: false,
+		},
+		{
+			name: "retries maximum times and returns error",
+			mockSetup: func(m *MockGhRunner) {
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", ErrCICheckTimeout).Times(3)
+			},
+			wantErr: true,
+		},
+		{
+			name: "non-timeout error returns immediately",
+			mockSetup: func(m *MockGhRunner) {
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", fmt.Errorf("some error")).Once()
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGhRunner := new(MockGhRunner)
+			tt.mockSetup(mockGhRunner)
+
+			checker := NewCICheckerWithRunner("/tmp", 1*time.Millisecond, 50*time.Millisecond, 1*time.Minute, mockGhRunner)
+
+			ctx := context.Background()
+			result, err := checker.CheckCI(ctx, 0)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotNil(t, result)
+		})
+	}
+}
+
+func TestWaitForCIWithOptions(t *testing.T) {
+	tests := []struct {
+		name       string
+		mockSetup  func(*MockGhRunner)
+		opts       CheckCIOptions
+		wantErr    bool
+		wantPassed bool
+	}{
+		{
+			name: "waits and succeeds",
+			mockSetup: func(m *MockGhRunner) {
+				output := `[{"name":"test","state":"SUCCESS"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(output, nil)
+			},
+			wantErr:    false,
+			wantPassed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGhRunner := new(MockGhRunner)
+			tt.mockSetup(mockGhRunner)
+
+			checker := NewCICheckerWithRunner("/tmp", 50*time.Millisecond, 100*time.Millisecond, 50*time.Millisecond, mockGhRunner)
+
+			ctx := context.Background()
+			result, err := checker.WaitForCIWithOptions(ctx, 0, 5*time.Second, tt.opts)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotNil(t, result)
+			assert.Equal(t, tt.wantPassed, result.Passed)
+		})
+	}
+}
+
+func TestWaitForCI(t *testing.T) {
+	tests := []struct {
+		name       string
+		mockSetup  func(*MockGhRunner)
+		wantErr    bool
+		wantPassed bool
+	}{
+		{
+			name: "waits and succeeds without options",
+			mockSetup: func(m *MockGhRunner) {
+				output := `[{"name":"test","state":"SUCCESS"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(output, nil)
+			},
+			wantErr:    false,
+			wantPassed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGhRunner := new(MockGhRunner)
+			tt.mockSetup(mockGhRunner)
+
+			checker := NewCICheckerWithRunner("/tmp", 50*time.Millisecond, 100*time.Millisecond, 50*time.Millisecond, mockGhRunner)
+
+			ctx := context.Background()
+			result, err := checker.WaitForCI(ctx, 0, 5*time.Second)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotNil(t, result)
+			assert.Equal(t, tt.wantPassed, result.Passed)
+		})
+	}
+}
+
+func TestWaitForCIWithProgress_ProgressEvents(t *testing.T) {
+	tests := []struct {
+		name              string
+		mockSetup         func(*MockGhRunner)
+		wantEventTypes    []string
+		wantMinEventCount int
+	}{
+		{
+			name: "generates waiting and checking events",
+			mockSetup: func(m *MockGhRunner) {
+				pendingOutput := `[{"name":"test","state":"PENDING"}]`
+				successOutput := `[{"name":"test","state":"SUCCESS"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+			},
+			wantEventTypes:    []string{"checking", "status", "waiting"},
+			wantMinEventCount: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGhRunner := new(MockGhRunner)
+			tt.mockSetup(mockGhRunner)
+
+			checker := NewCICheckerWithRunner("/tmp", 50*time.Millisecond, 100*time.Millisecond, 100*time.Millisecond, mockGhRunner)
+
+			ctx := context.Background()
+			var events []CIProgressEvent
+			onProgress := func(event CIProgressEvent) {
+				events = append(events, event)
+			}
+
+			_, err := checker.WaitForCIWithProgress(ctx, 0, 5*time.Second, CheckCIOptions{}, onProgress)
+			require.NoError(t, err)
+
+			assert.GreaterOrEqual(t, len(events), tt.wantMinEventCount)
+
+			eventTypesFound := make(map[string]bool)
+			for _, event := range events {
+				eventTypesFound[event.Type] = true
+			}
+
+			for _, wantType := range tt.wantEventTypes {
+				if !eventTypesFound[wantType] {
+					t.Logf("Event types found: %v", eventTypesFound)
+				}
+			}
+		})
+	}
+}
+
+func TestWaitForCIWithProgress_PollingLoop(t *testing.T) {
+	tests := []struct {
+		name       string
+		mockSetup  func(*MockGhRunner)
+		wantErr    bool
+		wantPassed bool
+	}{
+		{
+			name: "polls multiple times before success",
+			mockSetup: func(m *MockGhRunner) {
+				pendingOutput := `[{"name":"test","state":"PENDING"}]`
+				successOutput := `[{"name":"test","state":"SUCCESS"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+			},
+			wantErr:    false,
+			wantPassed: true,
+		},
+		{
+			name: "handles non-timeout error in polling loop",
+			mockSetup: func(m *MockGhRunner) {
+				pendingOutput := `[{"name":"test","state":"PENDING"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", fmt.Errorf("some error"))
+			},
+			wantErr: true,
+		},
+		{
+			name: "handles retry event with timeout error",
+			mockSetup: func(m *MockGhRunner) {
+				pendingOutput := `[{"name":"test","state":"PENDING"}]`
+				successOutput := `[{"name":"test","state":"SUCCESS"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", ErrCICheckTimeout).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+			},
+			wantErr:    false,
+			wantPassed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGhRunner := new(MockGhRunner)
+			tt.mockSetup(mockGhRunner)
+
+			checker := NewCICheckerWithRunner("/tmp", 50*time.Millisecond, 100*time.Millisecond, 50*time.Millisecond, mockGhRunner)
+
+			ctx := context.Background()
+			var retryEvents int
+			onProgress := func(event CIProgressEvent) {
+				if event.Type == "retry" {
+					retryEvents++
+				}
+			}
+
+			result, err := checker.WaitForCIWithProgress(ctx, 0, 5*time.Second, CheckCIOptions{}, onProgress)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotNil(t, result)
+			assert.Equal(t, tt.wantPassed, result.Passed)
+		})
+	}
+}
+
+func TestWaitForCIWithProgress_AdditionalPaths(t *testing.T) {
+	tests := []struct {
+		name       string
+		mockSetup  func(*MockGhRunner)
+		opts       CheckCIOptions
+		wantErr    bool
+		wantPassed bool
+		wantStatus string
+	}{
+		{
+			name: "initial check succeeds with success status - immediate return",
+			mockSetup: func(m *MockGhRunner) {
+				successOutput := `[{"name":"build","state":"SUCCESS"},{"name":"test","state":"SUCCESS"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 123, "name,state").Return(successOutput, nil).Once()
+			},
+			wantErr:    false,
+			wantPassed: true,
+			wantStatus: "success",
+		},
+		{
+			name: "initial check succeeds with failure status - immediate return",
+			mockSetup: func(m *MockGhRunner) {
+				failOutput := `[{"name":"build","state":"SUCCESS"},{"name":"test","state":"FAILURE"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 456, "name,state").Return(failOutput, nil).Once()
+			},
+			wantErr:    false,
+			wantPassed: false,
+			wantStatus: "failure",
+		},
+		{
+			name: "initial check succeeds with success and SkipE2E option",
+			mockSetup: func(m *MockGhRunner) {
+				successOutput := `[{"name":"build","state":"SUCCESS"},{"name":"e2e-test","state":"SUCCESS"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 789, "name,state").Return(successOutput, nil).Once()
+			},
+			opts:       CheckCIOptions{SkipE2E: true, E2ETestPattern: "e2e"},
+			wantErr:    false,
+			wantPassed: true,
+			wantStatus: "success",
+		},
+		{
+			name: "initial check fails but SkipE2E filters out e2e failures",
+			mockSetup: func(m *MockGhRunner) {
+				failOutput := `[{"name":"build","state":"SUCCESS"},{"name":"e2e-test","state":"FAILURE"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 111, "name,state").Return(failOutput, nil).Once()
+			},
+			opts:       CheckCIOptions{SkipE2E: true, E2ETestPattern: "e2e"},
+			wantErr:    false,
+			wantPassed: true,
+			wantStatus: "failure",
+		},
+		{
+			name: "initial check fails with mixed failures and SkipE2E",
+			mockSetup: func(m *MockGhRunner) {
+				failOutput := `[{"name":"build","state":"FAILURE"},{"name":"e2e-test","state":"FAILURE"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 222, "name,state").Return(failOutput, nil).Once()
+			},
+			opts:       CheckCIOptions{SkipE2E: true, E2ETestPattern: "e2e"},
+			wantErr:    false,
+			wantPassed: false,
+			wantStatus: "failure",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGhRunner := new(MockGhRunner)
+			tt.mockSetup(mockGhRunner)
+
+			checker := NewCICheckerWithRunner("/tmp", 50*time.Millisecond, 100*time.Millisecond, 50*time.Millisecond, mockGhRunner)
+
+			ctx := context.Background()
+			var progressEvents []CIProgressEvent
+			onProgress := func(event CIProgressEvent) {
+				progressEvents = append(progressEvents, event)
+			}
+
+			var prNumber int
+			switch tt.name {
+			case "initial check succeeds with success status - immediate return":
+				prNumber = 123
+			case "initial check succeeds with failure status - immediate return":
+				prNumber = 456
+			case "initial check succeeds with success and SkipE2E option":
+				prNumber = 789
+			case "initial check fails but SkipE2E filters out e2e failures":
+				prNumber = 111
+			case "initial check fails with mixed failures and SkipE2E":
+				prNumber = 222
+			}
+
+			result, err := checker.WaitForCIWithProgress(ctx, prNumber, 5*time.Second, tt.opts, onProgress)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.Equal(t, tt.wantPassed, result.Passed)
+			assert.Equal(t, tt.wantStatus, result.Status)
+
+			assert.GreaterOrEqual(t, len(progressEvents), 1, "should have at least one progress event")
+			assert.Equal(t, "checking", progressEvents[0].Type, "first event should be checking")
+
+			mockGhRunner.AssertExpectations(t)
+		})
+	}
+}
+
+func TestWaitForCIWithProgress_ContextCancellationDuringDelay(t *testing.T) {
+	tests := []struct {
+		name         string
+		mockSetup    func(*MockGhRunner)
+		cancelDelay  time.Duration
+		initialDelay time.Duration
+		wantErr      bool
+	}{
+		{
+			name: "context cancelled during initial delay wait",
+			mockSetup: func(m *MockGhRunner) {
+				pendingOutput := `[{"name":"test","state":"PENDING"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
+			},
+			cancelDelay:  75 * time.Millisecond,
+			initialDelay: 200 * time.Millisecond,
+			wantErr:      true,
+		},
+		{
+			name: "context cancelled early during initial delay",
+			mockSetup: func(m *MockGhRunner) {
+				pendingOutput := `[{"name":"test","state":"PENDING"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
+			},
+			cancelDelay:  25 * time.Millisecond,
+			initialDelay: 150 * time.Millisecond,
+			wantErr:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGhRunner := new(MockGhRunner)
+			tt.mockSetup(mockGhRunner)
+
+			checker := NewCICheckerWithRunner("/tmp", 50*time.Millisecond, 100*time.Millisecond, tt.initialDelay, mockGhRunner)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			go func() {
+				time.Sleep(tt.cancelDelay)
+				cancel()
+			}()
+
+			start := time.Now()
+			result, err := checker.WaitForCIWithProgress(ctx, 0, 5*time.Second, CheckCIOptions{}, nil)
+			elapsed := time.Since(start)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, context.Canceled)
+				assert.Nil(t, result)
+				assert.Less(t, elapsed, tt.initialDelay, "should cancel before initial delay completes")
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotNil(t, result)
+		})
+	}
+}
+
+func TestWaitForCIWithProgress_WaitingEvents(t *testing.T) {
+	t.Run("validates waiting event structure", func(t *testing.T) {
+		mockGhRunner := new(MockGhRunner)
+		pendingOutput := `[{"name":"test","state":"PENDING"}]`
+		successOutput := `[{"name":"test","state":"SUCCESS"}]`
+		mockGhRunner.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
+		mockGhRunner.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+
+		checker := NewCICheckerWithRunner("/tmp", 50*time.Millisecond, 100*time.Millisecond, 6*time.Second, mockGhRunner)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		var waitingEvents []CIProgressEvent
+		onProgress := func(event CIProgressEvent) {
+			if event.Type == "waiting" {
+				waitingEvents = append(waitingEvents, event)
+			}
+		}
+
+		result, err := checker.WaitForCIWithProgress(ctx, 0, 10*time.Second, CheckCIOptions{}, onProgress)
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		assert.GreaterOrEqual(t, len(waitingEvents), 1, "should have at least one waiting event with 6s initial delay and 5s ticker")
+
+		for i, event := range waitingEvents {
+			assert.Equal(t, "waiting", event.Type, "event %d should be waiting type", i)
+			assert.Equal(t, "Waiting for CI jobs to complete", event.Message, "event %d should have correct message", i)
+			assert.Greater(t, event.Elapsed, time.Duration(0), "event %d should have positive elapsed time", i)
+			assert.GreaterOrEqual(t, event.NextCheckIn, time.Duration(0), "event %d NextCheckIn should be non-negative", i)
+		}
+
+		if len(waitingEvents) > 1 {
+			for i := 1; i < len(waitingEvents); i++ {
+				prevNextCheckIn := waitingEvents[i-1].NextCheckIn
+				currNextCheckIn := waitingEvents[i].NextCheckIn
+				assert.LessOrEqual(t, currNextCheckIn, prevNextCheckIn, "NextCheckIn should decrease over time")
+			}
+		}
+	})
+}

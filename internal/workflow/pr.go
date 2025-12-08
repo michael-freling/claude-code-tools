@@ -1,10 +1,8 @@
 package workflow
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -27,41 +25,42 @@ type PRManager interface {
 // prManager implements PRManager interface
 type prManager struct {
 	workingDir string
+	gitRunner  GitRunner
+	ghRunner   GhRunner
 }
 
 // NewPRManager creates a new PR manager
 func NewPRManager(workingDir string) PRManager {
+	cmdRunner := NewCommandRunner()
 	return &prManager{
 		workingDir: workingDir,
+		gitRunner:  NewGitRunner(cmdRunner),
+		ghRunner:   NewGhRunner(cmdRunner),
+	}
+}
+
+// NewPRManagerWithRunners creates a new PR manager with injected runners for testing
+func NewPRManagerWithRunners(workingDir string, gitRunner GitRunner, ghRunner GhRunner) PRManager {
+	return &prManager{
+		workingDir: workingDir,
+		gitRunner:  gitRunner,
+		ghRunner:   ghRunner,
 	}
 }
 
 // CreatePR creates a new PR for the current branch
 func (p *prManager) CreatePR(ctx context.Context, title, body string) (int, error) {
-	// Get current branch name to use with --head flag
 	branchName, err := p.getCurrentBranch(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get current branch: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "gh", "pr", "create", "--title", title, "--body", body, "--head", branchName)
-	if p.workingDir != "" {
-		cmd.Dir = p.workingDir
-	}
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err = cmd.Run()
+	prURL, err := p.ghRunner.PRCreate(ctx, p.workingDir, title, body, branchName)
 	if err != nil {
-		return 0, fmt.Errorf("failed to create PR: %w (stderr: %s)", err, stderr.String())
+		return 0, err
 	}
 
-	// Parse PR URL from output to extract PR number
-	// Output format: https://github.com/owner/repo/pull/123
-	prURL := strings.TrimSpace(stdout.String())
-	prNumber, err := extractPRNumberFromURL(prURL)
+	prNumber, err := extractPRNumberFromURL(strings.TrimSpace(prURL))
 	if err != nil {
 		return 0, fmt.Errorf("failed to extract PR number from URL %q: %w", prURL, err)
 	}
@@ -71,42 +70,19 @@ func (p *prManager) CreatePR(ctx context.Context, title, body string) (int, erro
 
 // getCurrentBranch returns the current branch name
 func (p *prManager) getCurrentBranch(ctx context.Context) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
-	if p.workingDir != "" {
-		cmd.Dir = p.workingDir
-	}
-
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-
-	if err := cmd.Run(); err != nil {
-		return "", err
-	}
-
-	return strings.TrimSpace(stdout.String()), nil
+	return p.gitRunner.GetCurrentBranch(ctx, p.workingDir)
 }
 
 // GetCurrentBranchPR returns the PR number for the current branch
 func (p *prManager) GetCurrentBranchPR(ctx context.Context) (int, error) {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "view", "--json", "number", "-q", ".number")
-	if p.workingDir != "" {
-		cmd.Dir = p.workingDir
-	}
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+	prNumberStr, err := p.ghRunner.PRView(ctx, p.workingDir, "number", ".number")
 	if err != nil {
-		// Check if the error is "no pull requests found"
-		if strings.Contains(stderr.String(), "no pull requests found") {
+		if strings.Contains(err.Error(), "no pull requests found") {
 			return 0, nil
 		}
-		return 0, fmt.Errorf("failed to get PR for current branch: %w (stderr: %s)", err, stderr.String())
+		return 0, err
 	}
 
-	prNumberStr := strings.TrimSpace(stdout.String())
 	if prNumberStr == "" {
 		return 0, nil
 	}
@@ -142,20 +118,7 @@ func (p *prManager) PushBranch(ctx context.Context) error {
 		return fmt.Errorf("failed to get current branch: %w", err)
 	}
 
-	// Push with upstream tracking and force to ensure it's up to date
-	pushCmd := exec.CommandContext(ctx, "git", "push", "-u", "origin", branchName)
-	if p.workingDir != "" {
-		pushCmd.Dir = p.workingDir
-	}
-
-	var stderr bytes.Buffer
-	pushCmd.Stderr = &stderr
-
-	if err := pushCmd.Run(); err != nil {
-		return fmt.Errorf("failed to push branch: %w (stderr: %s)", err, stderr.String())
-	}
-
-	return nil
+	return p.gitRunner.Push(ctx, p.workingDir, branchName)
 }
 
 // extractPRNumberFromURL extracts PR number from a GitHub PR URL

@@ -414,10 +414,16 @@ func TestOutputParser_ParsePRSplitResult(t *testing.T) {
 			errContains: "missing required field",
 		},
 		{
-			name:        "returns error for malformed JSON",
+			name:        "returns error for empty object missing summary",
 			jsonStr:     "{}",
 			wantErr:     true,
 			errContains: "missing required field",
+		},
+		{
+			name:        "returns error for invalid JSON syntax",
+			jsonStr:     "{invalid json",
+			wantErr:     true,
+			errContains: "invalid JSON",
 		},
 	}
 
