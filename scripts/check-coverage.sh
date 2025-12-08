@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-THRESHOLD=80
+THRESHOLD=90
 COVERAGE_FILE="coverage.txt"
 
 echo "Running tests with coverage..."
