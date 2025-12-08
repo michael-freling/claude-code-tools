@@ -404,6 +404,111 @@ func truncateForDisplay(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
+// CISpinner displays CI waiting progress
+type CISpinner struct {
+	message   string
+	startTime time.Time
+	done      chan bool
+	running   bool
+	mu        sync.Mutex
+	lastEvent CIProgressEvent
+}
+
+// NewCISpinner creates a new CI spinner with the given message
+func NewCISpinner(message string) *CISpinner {
+	return &CISpinner{
+		message:   message,
+		done:      make(chan bool),
+		running:   false,
+		startTime: time.Now(),
+	}
+}
+
+// Start begins the CI spinner animation
+func (s *CISpinner) Start() {
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
+		return
+	}
+	s.running = true
+	s.done = make(chan bool)
+	s.startTime = time.Now()
+	s.mu.Unlock()
+
+	go func() {
+		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		i := 0
+		for {
+			select {
+			case <-s.done:
+				return
+			default:
+				s.mu.Lock()
+				displayMsg := s.formatMessage()
+				s.mu.Unlock()
+				fmt.Printf("\r%s %s", frames[i%len(frames)], displayMsg)
+				i++
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}()
+}
+
+// formatMessage formats the current spinner message based on the last event
+func (s *CISpinner) formatMessage() string {
+	event := s.lastEvent
+	elapsed := FormatDuration(event.Elapsed)
+
+	switch event.Type {
+	case "waiting":
+		nextCheckIn := FormatDuration(event.NextCheckIn)
+		return fmt.Sprintf("%s (%s) [initial delay, checking in %s]", s.message, elapsed, nextCheckIn)
+	case "checking":
+		return fmt.Sprintf("%s (%s) [checking...]", s.message, elapsed)
+	case "retry":
+		return fmt.Sprintf("%s (%s) [retrying after timeout]", s.message, elapsed)
+	case "status":
+		return fmt.Sprintf("%s (%s) [%d passed, %d failed, %d pending]",
+			s.message, elapsed, event.JobsPassed, event.JobsFailed, event.JobsPending)
+	default:
+		return fmt.Sprintf("%s (%s)", s.message, elapsed)
+	}
+}
+
+// OnProgress handles a progress event and updates the display
+func (s *CISpinner) OnProgress(event CIProgressEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastEvent = event
+}
+
+// Stop stops the spinner and clears the line
+func (s *CISpinner) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.running {
+		return
+	}
+
+	s.running = false
+	close(s.done)
+	fmt.Print("\r\033[K")
+}
+
+// Success stops the spinner and shows a success message
+func (s *CISpinner) Success(message string) {
+	s.Stop()
+	fmt.Printf("%s %s\n", Green("✓"), message)
+}
+
+// Fail stops the spinner and shows a failure message
+func (s *CISpinner) Fail(message string) {
+	s.Stop()
+	fmt.Printf("%s %s\n", Red("✗"), message)
+}
+
 // FormatWorkflowStatus formats a workflow state with colors
 func FormatWorkflowStatus(state *WorkflowState) string {
 	var b strings.Builder

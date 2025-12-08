@@ -490,11 +490,11 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 			return fmt.Errorf("failed to save state: %w", err)
 		}
 
-		ciSpinner := NewSpinner("Waiting for CI to complete...")
+		ciSpinner := NewCISpinner("Waiting for CI to complete")
 		ciSpinner.Start()
 
 		ciChecker := o.getCIChecker(workingDir)
-		ciResult, err := ciChecker.WaitForCI(ctx, 0, o.config.CICheckTimeout)
+		ciResult, err := ciChecker.WaitForCIWithProgress(ctx, 0, o.config.CICheckTimeout, CheckCIOptions{}, ciSpinner.OnProgress)
 		if err != nil {
 			ciSpinner.Fail("CI check failed")
 			// Store the error message in feedback so resume can use it for CI fix prompt
@@ -630,11 +630,11 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 			workingDir = o.config.BaseDir
 		}
 
-		ciSpinner := NewSpinner("Waiting for CI to complete...")
+		ciSpinner := NewCISpinner("Waiting for CI to complete")
 		ciSpinner.Start()
 
 		ciChecker := o.getCIChecker(workingDir)
-		ciResult, err := ciChecker.WaitForCI(ctx, 0, o.config.CICheckTimeout)
+		ciResult, err := ciChecker.WaitForCIWithProgress(ctx, 0, o.config.CICheckTimeout, CheckCIOptions{}, ciSpinner.OnProgress)
 		if err != nil {
 			ciSpinner.Fail("CI check failed")
 			// Store the error message in feedback so resume can use it for CI fix prompt
@@ -795,11 +795,11 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 				SkipE2E: !isLastChild,
 			}
 
-			ciSpinner := NewSpinner("Waiting for CI to complete...")
+			ciSpinner := NewCISpinner("Waiting for CI to complete")
 			ciSpinner.Start()
 
 			ciChecker := o.getCIChecker(workingDir)
-			ciResult, err := ciChecker.WaitForCIWithOptions(ctx, childPR.Number, o.config.CICheckTimeout, opts)
+			ciResult, err := ciChecker.WaitForCIWithProgress(ctx, childPR.Number, o.config.CICheckTimeout, opts, ciSpinner.OnProgress)
 			if err != nil {
 				ciSpinner.Fail("CI check failed")
 				return o.failWorkflowCI(state, fmt.Errorf("failed to check CI on child PR #%d: %w", childPR.Number, err))

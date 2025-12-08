@@ -179,6 +179,14 @@ func (m *MockCIChecker) WaitForCIWithOptions(ctx context.Context, prNumber int, 
 	return args.Get(0).(*CIResult), args.Error(1)
 }
 
+func (m *MockCIChecker) WaitForCIWithProgress(ctx context.Context, prNumber int, timeout time.Duration, opts CheckCIOptions, onProgress CIProgressCallback) (*CIResult, error) {
+	args := m.Called(ctx, prNumber, timeout, opts, onProgress)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*CIResult), args.Error(1)
+}
+
 // MockOutputParser is a mock implementation of OutputParser
 type MockOutputParser struct {
 	mock.Mock
@@ -513,7 +521,7 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\"}", nil)
 				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented"}, nil)
 				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
-				ci.On("WaitForCI", mock.Anything, 0, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
+				ci.On("WaitForCIWithProgress", mock.Anything, 0, mock.Anything, mock.Anything, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
 			},
 			wantErr:          false,
 			wantNextPhase:    PhaseRefactoring,
@@ -536,7 +544,7 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 				op.On("ExtractJSON", mock.Anything).Return("{\"summary\": \"implemented\"}", nil)
 				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented"}, nil)
 				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
-				ci.On("WaitForCI", mock.Anything, 0, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
+				ci.On("WaitForCIWithProgress", mock.Anything, 0, mock.Anything, mock.Anything, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
 			},
 			wantErr:          false,
 			wantNextPhase:    PhaseRefactoring,
@@ -569,7 +577,7 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{Summary: "implemented"}, nil)
 				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
 				// CI check uses 0 for PR number (auto-detect current branch)
-				ci.On("WaitForCI", mock.Anything, 0, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
+				ci.On("WaitForCIWithProgress", mock.Anything, 0, mock.Anything, mock.Anything, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
 			},
 			wantErr:          false,
 			wantNextPhase:    PhaseRefactoring,
@@ -1000,7 +1008,7 @@ func TestOrchestrator_Resume_PreservesCIFailure(t *testing.T) {
 				Name:         "test-workflow",
 				CurrentPhase: PhaseFailed,
 				Phases: map[Phase]*PhaseState{
-					PhaseRefactoring:    {
+					PhaseRefactoring: {
 						Status:   StatusFailed,
 						Feedback: []string{"CI check error: CI check timeout after 30m0s"},
 					},
@@ -1400,7 +1408,7 @@ func TestOrchestrator_executePRSplit_CIFailureRetry(t *testing.T) {
 	mockSM.On("SavePhaseOutput", "test-workflow", PhasePRSplit, mock.Anything).Return(nil)
 
 	// First CI check fails
-	mockCI.On("WaitForCIWithOptions", mock.Anything, 2, mock.Anything, mock.Anything).Return(&CIResult{
+	mockCI.On("WaitForCIWithProgress", mock.Anything, 2, mock.Anything, mock.Anything, mock.Anything).Return(&CIResult{
 		Passed:     false,
 		Status:     "failure",
 		FailedJobs: []string{"build"},
@@ -1419,7 +1427,7 @@ func TestOrchestrator_executePRSplit_CIFailureRetry(t *testing.T) {
 	}, nil).Once()
 
 	// Second CI check passes
-	mockCI.On("WaitForCIWithOptions", mock.Anything, 2, mock.Anything, mock.Anything).Return(&CIResult{
+	mockCI.On("WaitForCIWithProgress", mock.Anything, 2, mock.Anything, mock.Anything, mock.Anything).Return(&CIResult{
 		Passed: true,
 		Status: "success",
 	}, nil).Once()
