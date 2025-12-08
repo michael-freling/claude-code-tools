@@ -709,3 +709,337 @@ func TestPromptGenerator_TemplateExecutionError(t *testing.T) {
 		})
 	}
 }
+
+func TestPromptGenerator_GenerateFixCIPrompt_TemplateContent(t *testing.T) {
+	tests := []struct {
+		name        string
+		failures    string
+		wantContain []string
+	}{
+		{
+			name:     "prompt includes CI failure header",
+			failures: "test error",
+			wantContain: []string{
+				"CI checks have failed",
+				"CI Failure Output",
+			},
+		},
+		{
+			name:     "prompt includes instructions section",
+			failures: "build failed",
+			wantContain: []string{
+				"Instructions",
+				"Analyze the CI failure output",
+				"Fix all issues reported by the CI system",
+				"DO NOT skip or ignore any errors",
+			},
+		},
+		{
+			name:     "prompt includes output format section",
+			failures: "lint error",
+			wantContain: []string{
+				"Output Format",
+				"filesChanged",
+				"linesAdded",
+				"linesRemoved",
+				"summary",
+				"nextSteps",
+			},
+		},
+		{
+			name:     "prompt includes common CI failures list",
+			failures: "test failure",
+			wantContain: []string{
+				"Common CI failures",
+				"Unit tests failing",
+				"Integration tests failing",
+				"Build failures",
+				"Linting issues",
+				"Race conditions",
+			},
+		},
+		{
+			name:     "prompt includes important reminders",
+			failures: "error occurred",
+			wantContain: []string{
+				"IMPORTANT",
+				"Fix ALL CI failures",
+				"Ensure all tests pass locally",
+				"Do not skip or disable failing tests",
+				"Address root causes, not symptoms",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pg, err := NewPromptGenerator()
+			require.NoError(t, err)
+
+			got, err := pg.GenerateFixCIPrompt(tt.failures)
+
+			require.NoError(t, err)
+			assert.NotEmpty(t, got)
+
+			for _, want := range tt.wantContain {
+				assert.Contains(t, got, want, "prompt should contain: %s", want)
+			}
+
+			assert.Contains(t, got, tt.failures, "prompt should contain the failure message")
+		})
+	}
+}
+
+func TestPromptGenerator_GenerateFixCIPrompt_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name        string
+		failures    string
+		wantErr     bool
+		errContains string
+		checkOutput func(t *testing.T, output string)
+	}{
+		{
+			name:     "whitespace-only failures treated as valid input",
+			failures: "   \t\n   ",
+			wantErr:  false,
+			checkOutput: func(t *testing.T, output string) {
+				assert.Contains(t, output, "CI Failure Output")
+				assert.Contains(t, output, "   \t\n   ")
+			},
+		},
+		{
+			name:     "single character failure works",
+			failures: "X",
+			wantErr:  false,
+			checkOutput: func(t *testing.T, output string) {
+				assert.Contains(t, output, "X")
+				assert.Contains(t, output, "CI Failure Output")
+			},
+		},
+		{
+			name:     "very long failure message is preserved",
+			failures: strings.Repeat("Error: test failed with long message. ", 100),
+			wantErr:  false,
+			checkOutput: func(t *testing.T, output string) {
+				assert.Contains(t, output, "Error: test failed with long message.")
+				assert.Greater(t, len(output), 1000)
+			},
+		},
+		{
+			name:     "failures with tabs and mixed whitespace preserved",
+			failures: "Error:\tfailed\n\t\tat line 42",
+			wantErr:  false,
+			checkOutput: func(t *testing.T, output string) {
+				assert.Contains(t, output, "Error:\tfailed")
+				assert.Contains(t, output, "\t\tat line 42")
+			},
+		},
+		{
+			name:     "failures with unicode characters work correctly",
+			failures: "Error: テスト失敗 ❌ Failed test 🚨",
+			wantErr:  false,
+			checkOutput: func(t *testing.T, output string) {
+				assert.Contains(t, output, "テスト失敗")
+				assert.Contains(t, output, "❌")
+				assert.Contains(t, output, "🚨")
+			},
+		},
+		{
+			name:     "failures with code snippets preserved correctly",
+			failures: "Error in code:\n```go\nfunc test() {\n\treturn nil\n}\n```",
+			wantErr:  false,
+			checkOutput: func(t *testing.T, output string) {
+				assert.Contains(t, output, "```go")
+				assert.Contains(t, output, "func test() {")
+				assert.Contains(t, output, "\treturn nil")
+			},
+		},
+		{
+			name:     "failures with JSON data preserved",
+			failures: `{"error": "test failed", "details": {"line": 42, "file": "test.go"}}`,
+			wantErr:  false,
+			checkOutput: func(t *testing.T, output string) {
+				assert.Contains(t, output, `"error": "test failed"`)
+				assert.Contains(t, output, `"line": 42`)
+				assert.Contains(t, output, `"file": "test.go"`)
+			},
+		},
+		{
+			name:     "failures with ANSI color codes work",
+			failures: "\033[31mError:\033[0m test failed\n\033[33mWarning:\033[0m check this",
+			wantErr:  false,
+			checkOutput: func(t *testing.T, output string) {
+				assert.Contains(t, output, "\033[31mError:\033[0m")
+				assert.Contains(t, output, "\033[33mWarning:\033[0m")
+			},
+		},
+		{
+			name:     "failures with backticks and quotes preserved",
+			failures: `Error: can't parse 'value' with "quotes" and ` + "`backticks`",
+			wantErr:  false,
+			checkOutput: func(t *testing.T, output string) {
+				assert.Contains(t, output, "can't parse")
+				assert.Contains(t, output, "'value'")
+				assert.Contains(t, output, `"quotes"`)
+				assert.Contains(t, output, "`backticks`")
+			},
+		},
+		{
+			name:     "failures with URLs preserved",
+			failures: "Error: failed to fetch https://api.example.com/v1/resource?key=value&other=param",
+			wantErr:  false,
+			checkOutput: func(t *testing.T, output string) {
+				assert.Contains(t, output, "https://api.example.com/v1/resource?key=value&other=param")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pg, err := NewPromptGenerator()
+			require.NoError(t, err)
+
+			got, err := pg.GenerateFixCIPrompt(tt.failures)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotEmpty(t, got)
+
+			if tt.checkOutput != nil {
+				tt.checkOutput(t, got)
+			}
+		})
+	}
+}
+
+func TestPromptGenerator_GenerateFixCIPrompt_RealWorldScenarios(t *testing.T) {
+	tests := []struct {
+		name        string
+		failures    string
+		wantContain []string
+	}{
+		{
+			name: "go test failure with stack trace",
+			failures: `=== RUN   TestCalculate
+--- FAIL: TestCalculate (0.00s)
+    calculator_test.go:15:
+        	Error Trace:	calculator_test.go:15
+        	Error:      	Not equal:
+        	            	expected: 4
+        	            	actual  : 5
+        	Test:       	TestCalculate
+FAIL
+FAIL	github.com/example/calculator	0.002s`,
+			wantContain: []string{
+				"=== RUN   TestCalculate",
+				"--- FAIL: TestCalculate",
+				"calculator_test.go:15",
+				"expected: 4",
+				"actual  : 5",
+				"github.com/example/calculator",
+			},
+		},
+		{
+			name: "go build failure with compiler error",
+			failures: `# github.com/example/app
+./main.go:42:2: undefined: nonExistentFunction
+./main.go:43:15: cannot use "string" (untyped string constant) as int value in assignment
+./main.go:44:9: syntax error: unexpected newline, expecting comma or }`,
+			wantContain: []string{
+				"github.com/example/app",
+				"main.go:42:2: undefined: nonExistentFunction",
+				"main.go:43:15: cannot use",
+				"syntax error",
+			},
+		},
+		{
+			name: "golangci-lint failure",
+			failures: `main.go:10:2: SA4006: this value of err is never used (staticcheck)
+	err := doSomething()
+	^
+handlers.go:25:1: ST1003: should not use underscores in Go names; func get_user should be getUser (stylecheck)
+service.go:15:15: Error return value is not checked (errcheck)`,
+			wantContain: []string{
+				"SA4006",
+				"this value of err is never used",
+				"ST1003",
+				"should not use underscores",
+				"Error return value is not checked",
+			},
+		},
+		{
+			name: "race detector failure",
+			failures: `==================
+WARNING: DATA RACE
+Read at 0x00c0000b6010 by goroutine 8:
+  main.updateCounter()
+      /path/to/main.go:45 +0x3a
+
+Previous write at 0x00c0000b6010 by goroutine 7:
+  main.updateCounter()
+      /path/to/main.go:45 +0x52
+
+Goroutine 8 (running) created at:
+  main.main()
+      /path/to/main.go:30 +0x7e
+==================`,
+			wantContain: []string{
+				"WARNING: DATA RACE",
+				"Read at 0x00c0000b6010 by goroutine 8",
+				"Previous write at 0x00c0000b6010",
+				"main.updateCounter()",
+			},
+		},
+		{
+			name: "coverage threshold failure",
+			failures: `coverage: 45.2% of statements
+FAIL	coverage threshold not met: got 45.2%, want >= 80.0%
+exit status 1`,
+			wantContain: []string{
+				"coverage: 45.2% of statements",
+				"coverage threshold not met",
+				"got 45.2%, want >= 80.0%",
+			},
+		},
+		{
+			name: "docker build failure",
+			failures: `Step 5/12 : RUN go build -o /app/server
+ ---> Running in 8a9b7c6d5e4f
+# github.com/example/app
+./main.go:10:2: undefined: missingPackage
+The command '/bin/sh -c go build -o /app/server' returned a non-zero code: 2`,
+			wantContain: []string{
+				"Step 5/12",
+				"RUN go build -o /app/server",
+				"undefined: missingPackage",
+				"returned a non-zero code: 2",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pg, err := NewPromptGenerator()
+			require.NoError(t, err)
+
+			got, err := pg.GenerateFixCIPrompt(tt.failures)
+
+			require.NoError(t, err)
+			assert.NotEmpty(t, got)
+
+			for _, want := range tt.wantContain {
+				assert.Contains(t, got, want, "prompt should contain: %s", want)
+			}
+
+			assert.Contains(t, got, "CI Failure Output")
+			assert.Contains(t, got, "Output Format")
+		})
+	}
+}

@@ -1160,3 +1160,607 @@ func TestStreamingSpinner_OnProgress_LongToolInput(t *testing.T) {
 		})
 	}
 }
+
+func TestStreamingSpinner_DoubleStart(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{
+			name: "double-start is idempotent",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spinner := NewStreamingSpinner("Testing")
+
+			spinner.Start()
+			time.Sleep(10 * time.Millisecond)
+			assert.True(t, spinner.running)
+
+			spinner.Start()
+			time.Sleep(10 * time.Millisecond)
+			assert.True(t, spinner.running)
+
+			spinner.Stop()
+			time.Sleep(10 * time.Millisecond)
+			assert.False(t, spinner.running)
+		})
+	}
+}
+
+func TestStreamingSpinner_DoubleStop(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{
+			name: "double-stop is idempotent",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spinner := NewStreamingSpinner("Testing")
+
+			spinner.Start()
+			time.Sleep(10 * time.Millisecond)
+
+			spinner.Stop()
+			time.Sleep(10 * time.Millisecond)
+			assert.False(t, spinner.running)
+
+			spinner.Stop()
+			time.Sleep(10 * time.Millisecond)
+			assert.False(t, spinner.running)
+		})
+	}
+}
+
+func TestFormatDuration_Rounding(t *testing.T) {
+	tests := []struct {
+		name     string
+		duration time.Duration
+		want     string
+	}{
+		{
+			name:     "rounds down from 499ms",
+			duration: 30*time.Second + 499*time.Millisecond,
+			want:     "30s",
+		},
+		{
+			name:     "rounds up from 500ms",
+			duration: 30*time.Second + 500*time.Millisecond,
+			want:     "31s",
+		},
+		{
+			name:     "rounds up from 999ms",
+			duration: 30*time.Second + 999*time.Millisecond,
+			want:     "31s",
+		},
+		{
+			name:     "complex duration with milliseconds",
+			duration: 1*time.Hour + 23*time.Minute + 45*time.Second + 678*time.Millisecond,
+			want:     "1h 23m 46s",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatDuration(tt.duration)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestTruncateForDisplay_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		maxLen int
+		want   string
+	}{
+		{
+			name:   "empty string with maxLen 10",
+			input:  "",
+			maxLen: 10,
+			want:   "",
+		},
+		{
+			name:   "whitespace only string",
+			input:  "    ",
+			maxLen: 10,
+			want:   "",
+		},
+		{
+			name:   "string with only newlines",
+			input:  "\n\n\n",
+			maxLen: 10,
+			want:   "",
+		},
+		{
+			name:   "mixed whitespace characters",
+			input:  " \t\n \t\n ",
+			maxLen: 10,
+			want:   "",
+		},
+		{
+			name:   "very short maxLen still truncates",
+			input:  "hello world",
+			maxLen: 5,
+			want:   "he...",
+		},
+		{
+			name:   "maxLen exactly 3 produces ellipsis",
+			input:  "hello world",
+			maxLen: 3,
+			want:   "...",
+		},
+		{
+			name:   "string with newlines and truncation",
+			input:  "hello\nworld\ntest",
+			maxLen: 10,
+			want:   "hello w...",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateForDisplay(tt.input, tt.maxLen)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestFormatPlanSummary_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name         string
+		plan         *Plan
+		wantContains []string
+	}{
+		{
+			name: "plan with empty architecture overview but with components",
+			plan: &Plan{
+				Summary:             "Feature",
+				Complexity:          "Low",
+				EstimatedTotalLines: 100,
+				EstimatedTotalFiles: 5,
+				Architecture: Architecture{
+					Overview:   "",
+					Components: []string{"Component A", "Component B"},
+				},
+				Phases: []PlanPhase{
+					{
+						Name:           "Phase 1",
+						EstimatedFiles: 5,
+						EstimatedLines: 100,
+					},
+				},
+			},
+			wantContains: []string{
+				"Architecture",
+				"Components:",
+				"Component A",
+				"Component B",
+			},
+		},
+		{
+			name: "plan with empty work stream dependencies",
+			plan: &Plan{
+				Summary:             "Feature",
+				Complexity:          "Low",
+				EstimatedTotalLines: 100,
+				EstimatedTotalFiles: 5,
+				Phases: []PlanPhase{
+					{
+						Name:           "Phase 1",
+						EstimatedFiles: 5,
+						EstimatedLines: 100,
+					},
+				},
+				WorkStreams: []WorkStream{
+					{
+						Name:      "Backend",
+						Tasks:     []string{"Task 1"},
+						DependsOn: []string{},
+					},
+				},
+			},
+			wantContains: []string{
+				"Work Streams",
+				"Backend",
+				"Task 1",
+			},
+		},
+		{
+			name: "plan with multiple phases and descriptions",
+			plan: &Plan{
+				Summary:             "Complex feature",
+				Complexity:          "High",
+				EstimatedTotalLines: 1000,
+				EstimatedTotalFiles: 50,
+				Phases: []PlanPhase{
+					{
+						Name:           "Phase 1",
+						Description:    "First phase description",
+						EstimatedFiles: 10,
+						EstimatedLines: 200,
+					},
+					{
+						Name:           "Phase 2",
+						Description:    "Second phase description",
+						EstimatedFiles: 20,
+						EstimatedLines: 400,
+					},
+					{
+						Name:           "Phase 3",
+						Description:    "",
+						EstimatedFiles: 20,
+						EstimatedLines: 400,
+					},
+				},
+			},
+			wantContains: []string{
+				"Phases (3 total)",
+				"Phase 1",
+				"First phase description",
+				"Phase 2",
+				"Second phase description",
+				"Phase 3",
+				"10 files, ~200 lines",
+				"20 files, ~400 lines",
+			},
+		},
+		{
+			name: "plan with empty risks array",
+			plan: &Plan{
+				Summary:             "Feature",
+				Complexity:          "Low",
+				EstimatedTotalLines: 100,
+				EstimatedTotalFiles: 5,
+				Phases: []PlanPhase{
+					{
+						Name:           "Phase 1",
+						EstimatedFiles: 5,
+						EstimatedLines: 100,
+					},
+				},
+				Risks: []string{},
+			},
+			wantContains: []string{
+				"Feature",
+				"Phase 1",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatPlanSummary(tt.plan)
+			for _, want := range tt.wantContains {
+				assert.Contains(t, got, want)
+			}
+		})
+	}
+}
+
+func TestFormatWorkflowStatus_PhaseHistory(t *testing.T) {
+	now := time.Now()
+	earlier := now.Add(-30 * time.Second)
+
+	tests := []struct {
+		name         string
+		state        *WorkflowState
+		wantContains []string
+	}{
+		{
+			name: "workflow with multiple phase states",
+			state: &WorkflowState{
+				Name:         "feature/test",
+				Type:         WorkflowTypeFeature,
+				Description:  "Test workflow",
+				CurrentPhase: PhaseImplementation,
+				CreatedAt:    earlier,
+				Phases: map[Phase]*PhaseState{
+					PhasePlanning: {
+						Status:   StatusCompleted,
+						Attempts: 1,
+					},
+					PhaseConfirmation: {
+						Status:   StatusCompleted,
+						Attempts: 1,
+					},
+					PhaseImplementation: {
+						Status:   StatusInProgress,
+						Attempts: 2,
+					},
+				},
+			},
+			wantContains: []string{
+				"Phase History:",
+				"Planning",
+				"Confirmation",
+				"Implementation",
+				"(attempts: 2)",
+			},
+		},
+		{
+			name: "workflow with skipped phase",
+			state: &WorkflowState{
+				Name:         "feature/test",
+				Type:         WorkflowTypeFeature,
+				Description:  "Test workflow",
+				CurrentPhase: PhaseImplementation,
+				CreatedAt:    earlier,
+				Phases: map[Phase]*PhaseState{
+					PhasePlanning: {
+						Status:   StatusCompleted,
+						Attempts: 1,
+					},
+					PhaseConfirmation: {
+						Status:   StatusSkipped,
+						Attempts: 0,
+					},
+					PhaseImplementation: {
+						Status:   StatusInProgress,
+						Attempts: 1,
+					},
+				},
+			},
+			wantContains: []string{
+				"Phase History:",
+				"Planning",
+				"Confirmation",
+				"Implementation",
+			},
+		},
+		{
+			name: "workflow with failed phase",
+			state: &WorkflowState{
+				Name:         "feature/test",
+				Type:         WorkflowTypeFeature,
+				Description:  "Test workflow",
+				CurrentPhase: PhaseFailed,
+				CreatedAt:    earlier,
+				Phases: map[Phase]*PhaseState{
+					PhasePlanning: {
+						Status:   StatusCompleted,
+						Attempts: 1,
+					},
+					PhaseConfirmation: {
+						Status:   StatusFailed,
+						Attempts: 3,
+					},
+				},
+			},
+			wantContains: []string{
+				"Phase History:",
+				"Planning",
+				"Confirmation",
+				"(attempts: 3)",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatWorkflowStatus(tt.state)
+			for _, want := range tt.wantContains {
+				assert.Contains(t, got, want)
+			}
+		})
+	}
+}
+
+func TestColorFunctions_MultipleWrapping(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "Green and Bold combined",
+			input: "test",
+		},
+		{
+			name:  "Red and Bold combined",
+			input: "error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			greenBold := Green(Bold(tt.input))
+			assert.Contains(t, greenBold, tt.input)
+			assert.Contains(t, greenBold, ansiGreen)
+			assert.Contains(t, greenBold, ansiBold)
+
+			boldRed := Bold(Red(tt.input))
+			assert.Contains(t, boldRed, tt.input)
+			assert.Contains(t, boldRed, ansiRed)
+			assert.Contains(t, boldRed, ansiBold)
+		})
+	}
+}
+
+func TestFormatPlanSummary_LargeScale(t *testing.T) {
+	tests := []struct {
+		name         string
+		plan         *Plan
+		wantContains []string
+	}{
+		{
+			name: "plan with many phases",
+			plan: &Plan{
+				Summary:             "Large refactoring",
+				Complexity:          "High",
+				EstimatedTotalLines: 5000,
+				EstimatedTotalFiles: 100,
+				Phases: []PlanPhase{
+					{Name: "Phase 1", EstimatedFiles: 20, EstimatedLines: 1000},
+					{Name: "Phase 2", EstimatedFiles: 20, EstimatedLines: 1000},
+					{Name: "Phase 3", EstimatedFiles: 20, EstimatedLines: 1000},
+					{Name: "Phase 4", EstimatedFiles: 20, EstimatedLines: 1000},
+					{Name: "Phase 5", EstimatedFiles: 20, EstimatedLines: 1000},
+				},
+			},
+			wantContains: []string{
+				"Phases (5 total)",
+				"Phase 1",
+				"Phase 2",
+				"Phase 3",
+				"Phase 4",
+				"Phase 5",
+				"~5000 lines across 100 files",
+			},
+		},
+		{
+			name: "plan with many work streams",
+			plan: &Plan{
+				Summary:             "Multi-stream project",
+				Complexity:          "High",
+				EstimatedTotalLines: 3000,
+				EstimatedTotalFiles: 60,
+				Phases: []PlanPhase{
+					{Name: "Phase 1", EstimatedFiles: 60, EstimatedLines: 3000},
+				},
+				WorkStreams: []WorkStream{
+					{Name: "Frontend", Tasks: []string{"Task 1", "Task 2"}},
+					{Name: "Backend", Tasks: []string{"Task 3", "Task 4"}},
+					{Name: "Database", Tasks: []string{"Task 5", "Task 6"}},
+					{Name: "Testing", Tasks: []string{"Task 7", "Task 8"}},
+				},
+			},
+			wantContains: []string{
+				"Work Streams",
+				"Frontend",
+				"Backend",
+				"Database",
+				"Testing",
+			},
+		},
+		{
+			name: "plan with many risks",
+			plan: &Plan{
+				Summary:             "Risky feature",
+				Complexity:          "High",
+				EstimatedTotalLines: 2000,
+				EstimatedTotalFiles: 40,
+				Phases: []PlanPhase{
+					{Name: "Phase 1", EstimatedFiles: 40, EstimatedLines: 2000},
+				},
+				Risks: []string{
+					"Risk 1: Data migration complexity",
+					"Risk 2: Breaking API changes",
+					"Risk 3: Performance degradation",
+					"Risk 4: Security vulnerabilities",
+					"Risk 5: Backward compatibility",
+				},
+			},
+			wantContains: []string{
+				"Risks",
+				"Risk 1",
+				"Risk 2",
+				"Risk 3",
+				"Risk 4",
+				"Risk 5",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatPlanSummary(tt.plan)
+			for _, want := range tt.wantContains {
+				assert.Contains(t, got, want)
+			}
+		})
+	}
+}
+
+func TestIndentText_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name   string
+		text   string
+		spaces int
+		want   string
+	}{
+		{
+			name:   "text with consecutive newlines",
+			text:   "line1\n\n\nline2",
+			spaces: 2,
+			want:   "  line1\n\n\n  line2",
+		},
+		{
+			name:   "text with only newlines",
+			text:   "\n\n\n",
+			spaces: 2,
+			want:   "\n\n\n",
+		},
+		{
+			name:   "single newline",
+			text:   "\n",
+			spaces: 2,
+			want:   "\n",
+		},
+		{
+			name:   "text with leading newline",
+			text:   "\nhello",
+			spaces: 2,
+			want:   "\n  hello",
+		},
+		{
+			name:   "large indentation",
+			text:   "test",
+			spaces: 10,
+			want:   "          test",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := indentText(tt.text, tt.spaces)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestSpinner_StopWithoutStart(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{
+			name: "Stop without Start is safe",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spinner := NewSpinner("Testing")
+			assert.False(t, spinner.running)
+
+			spinner.Stop()
+			time.Sleep(10 * time.Millisecond)
+			assert.False(t, spinner.running)
+		})
+	}
+}
+
+func TestStreamingSpinner_StopWithoutStart(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{
+			name: "Stop without Start is safe",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spinner := NewStreamingSpinner("Testing")
+			assert.False(t, spinner.running)
+
+			spinner.Stop()
+			time.Sleep(10 * time.Millisecond)
+			assert.False(t, spinner.running)
+		})
+	}
+}

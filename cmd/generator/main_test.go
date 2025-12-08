@@ -147,6 +147,32 @@ func TestCreateGenerator(t *testing.T) {
 			errContains: "template path is not a directory",
 		},
 		{
+			name: "directory access error returns error",
+			setupFunc: func(t *testing.T) string {
+				saved := saveTemplateDir()
+				tempDir, err := os.MkdirTemp("", "test-templates-*")
+				require.NoError(t, err)
+
+				subDir := filepath.Join(tempDir, "subdir")
+				err = os.MkdirAll(subDir, 0755)
+				require.NoError(t, err)
+
+				err = os.Chmod(subDir, 0000)
+				require.NoError(t, err)
+
+				templateDir = filepath.Join(subDir, "inaccessible")
+				return saved
+			},
+			cleanupFunc: func(t *testing.T, saved string) {
+				parentDir := filepath.Dir(templateDir)
+				os.Chmod(parentDir, 0755)
+				os.RemoveAll(parentDir)
+				restoreTemplateDir(saved)
+			},
+			wantErr:     true,
+			errContains: "failed to access template directory",
+		},
+		{
 			name: "valid custom directory works",
 			setupFunc: func(t *testing.T) string {
 				saved := saveTemplateDir()

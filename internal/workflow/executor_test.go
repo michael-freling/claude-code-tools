@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -465,6 +466,78 @@ func TestExtractToolInputSummary(t *testing.T) {
 			name:     "missing expected field returns empty string",
 			toolName: "Read",
 			input:    []byte(`{"other_field": "value"}`),
+			want:     "",
+		},
+		{
+			name:     "Read tool with non-string file_path returns empty string",
+			toolName: "Read",
+			input:    []byte(`{"file_path": 123}`),
+			want:     "",
+		},
+		{
+			name:     "Edit tool with non-string file_path returns empty string",
+			toolName: "Edit",
+			input:    []byte(`{"file_path": true}`),
+			want:     "",
+		},
+		{
+			name:     "Write tool with non-string file_path returns empty string",
+			toolName: "Write",
+			input:    []byte(`{"file_path": ["array"]}`),
+			want:     "",
+		},
+		{
+			name:     "Glob tool with non-string pattern returns empty string",
+			toolName: "Glob",
+			input:    []byte(`{"pattern": null}`),
+			want:     "",
+		},
+		{
+			name:     "Grep tool with non-string pattern returns empty string",
+			toolName: "Grep",
+			input:    []byte(`{"pattern": {"nested": "object"}}`),
+			want:     "",
+		},
+		{
+			name:     "Bash tool with non-string command returns empty string",
+			toolName: "Bash",
+			input:    []byte(`{"command": 456}`),
+			want:     "",
+		},
+		{
+			name:     "Task tool with non-string description returns empty string",
+			toolName: "Task",
+			input:    []byte(`{"description": false}`),
+			want:     "",
+		},
+		{
+			name:     "Read tool with additional fields extracts file_path",
+			toolName: "Read",
+			input:    []byte(`{"file_path": "/test.go", "other": "value", "limit": 100}`),
+			want:     "/test.go",
+		},
+		{
+			name:     "Bash tool with complex command string",
+			toolName: "Bash",
+			input:    []byte(`{"command": "cd /tmp && go test -v -race ./..."}`),
+			want:     "cd /tmp && go test -v -race ./...",
+		},
+		{
+			name:     "Grep tool with regex pattern containing special chars",
+			toolName: "Grep",
+			input:    []byte(`{"pattern": "func\\s+Test.*\\(t\\s+\\*testing\\.T\\)"}`),
+			want:     "func\\s+Test.*\\(t\\s+\\*testing\\.T\\)",
+		},
+		{
+			name:     "empty JSON object returns empty string",
+			toolName: "Read",
+			input:    []byte(`{}`),
+			want:     "",
+		},
+		{
+			name:     "empty string input returns empty string",
+			toolName: "Read",
+			input:    []byte(``),
 			want:     "",
 		},
 	}
@@ -939,6 +1012,193 @@ func TestMockExecutor_ExecuteStreaming_ExitCode(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, 0, got.ExitCode)
+		})
+	}
+}
+
+func TestMockExecutor_ExecuteStreaming_StructuredOutput(t *testing.T) {
+	tests := []struct {
+		name           string
+		config         ExecuteConfig
+		mockFunc       func(ctx context.Context, config ExecuteConfig, onProgress func(ProgressEvent)) (*ExecuteResult, error)
+		wantOutputJSON bool
+		wantErr        bool
+	}{
+		{
+			name: "returns structured output in envelope format",
+			config: ExecuteConfig{
+				Prompt:     "test prompt",
+				JSONSchema: `{"type": "object", "properties": {"name": {"type": "string"}}}`,
+			},
+			mockFunc: func(ctx context.Context, config ExecuteConfig, onProgress func(ProgressEvent)) (*ExecuteResult, error) {
+				envelope := `{"type":"result","result":"Success","structured_output":{"name":"test"},"is_error":false}`
+				return &ExecuteResult{
+					Output:   envelope,
+					ExitCode: 0,
+					Duration: 50 * time.Millisecond,
+				}, nil
+			},
+			wantOutputJSON: true,
+			wantErr:        false,
+		},
+		{
+			name: "returns plain text when no structured output",
+			config: ExecuteConfig{
+				Prompt: "test prompt",
+			},
+			mockFunc: func(ctx context.Context, config ExecuteConfig, onProgress func(ProgressEvent)) (*ExecuteResult, error) {
+				return &ExecuteResult{
+					Output:   "plain text result",
+					ExitCode: 0,
+					Duration: 50 * time.Millisecond,
+				}, nil
+			},
+			wantOutputJSON: false,
+			wantErr:        false,
+		},
+		{
+			name: "handles structured output with error flag",
+			config: ExecuteConfig{
+				Prompt:     "test prompt",
+				JSONSchema: `{"type": "object"}`,
+			},
+			mockFunc: func(ctx context.Context, config ExecuteConfig, onProgress func(ProgressEvent)) (*ExecuteResult, error) {
+				envelope := `{"type":"result","result":"Error occurred","structured_output":{},"is_error":true}`
+				return &ExecuteResult{
+					Output:   envelope,
+					ExitCode: 0,
+					Duration: 50 * time.Millisecond,
+				}, nil
+			},
+			wantOutputJSON: true,
+			wantErr:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			executor := &mockExecutor{
+				executeStreamingFunc: tt.mockFunc,
+			}
+
+			ctx := context.Background()
+			got, err := executor.ExecuteStreaming(ctx, tt.config, nil)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.NotEmpty(t, got.Output)
+
+			if tt.wantOutputJSON {
+				var envelope map[string]interface{}
+				err := json.Unmarshal([]byte(got.Output), &envelope)
+				require.NoError(t, err)
+				assert.Equal(t, "result", envelope["type"])
+			}
+		})
+	}
+}
+
+func TestMockExecutor_Execute_DangerouslySkipPermissions(t *testing.T) {
+	tests := []struct {
+		name                       string
+		dangerouslySkipPermissions bool
+		wantErr                    bool
+	}{
+		{
+			name:                       "executes with DangerouslySkipPermissions enabled",
+			dangerouslySkipPermissions: true,
+			wantErr:                    false,
+		},
+		{
+			name:                       "executes with DangerouslySkipPermissions disabled",
+			dangerouslySkipPermissions: false,
+			wantErr:                    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			executor := &mockExecutor{
+				executeFunc: func(ctx context.Context, config ExecuteConfig) (*ExecuteResult, error) {
+					assert.Equal(t, tt.dangerouslySkipPermissions, config.DangerouslySkipPermissions)
+					return &ExecuteResult{
+						Output:   "success",
+						ExitCode: 0,
+						Duration: 50 * time.Millisecond,
+					}, nil
+				},
+			}
+
+			ctx := context.Background()
+			config := ExecuteConfig{
+				Prompt:                     "test",
+				DangerouslySkipPermissions: tt.dangerouslySkipPermissions,
+			}
+
+			got, err := executor.Execute(ctx, config)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, "success", got.Output)
+		})
+	}
+}
+
+func TestMockExecutor_ExecuteStreaming_DangerouslySkipPermissions(t *testing.T) {
+	tests := []struct {
+		name                       string
+		dangerouslySkipPermissions bool
+		wantErr                    bool
+	}{
+		{
+			name:                       "executes with DangerouslySkipPermissions enabled",
+			dangerouslySkipPermissions: true,
+			wantErr:                    false,
+		},
+		{
+			name:                       "executes with DangerouslySkipPermissions disabled",
+			dangerouslySkipPermissions: false,
+			wantErr:                    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			executor := &mockExecutor{
+				executeStreamingFunc: func(ctx context.Context, config ExecuteConfig, onProgress func(ProgressEvent)) (*ExecuteResult, error) {
+					assert.Equal(t, tt.dangerouslySkipPermissions, config.DangerouslySkipPermissions)
+					return &ExecuteResult{
+						Output:   "success",
+						ExitCode: 0,
+						Duration: 50 * time.Millisecond,
+					}, nil
+				},
+			}
+
+			ctx := context.Background()
+			config := ExecuteConfig{
+				Prompt:                     "test",
+				DangerouslySkipPermissions: tt.dangerouslySkipPermissions,
+			}
+
+			got, err := executor.ExecuteStreaming(ctx, config, nil)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, "success", got.Output)
 		})
 	}
 }

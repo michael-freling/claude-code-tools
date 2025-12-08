@@ -1132,6 +1132,126 @@ func TestIsRecoverableError(t *testing.T) {
 			err:  errors.New("temporary failure, please retry"),
 			want: true,
 		},
+		{
+			name: "timeout at start is recoverable",
+			err:  errors.New("timeout at connection start"),
+			want: true,
+		},
+		{
+			name: "timeout at end is recoverable",
+			err:  errors.New("operation ended with timeout"),
+			want: true,
+		},
+		{
+			name: "timeout in middle is recoverable",
+			err:  errors.New("operation timeout during execution"),
+			want: true,
+		},
+		{
+			name: "context deadline exceeded is recoverable",
+			err:  errors.New("context deadline exceeded timeout"),
+			want: true,
+		},
+		{
+			name: "invalid at start of message is not recoverable",
+			err:  errors.New("invalid request parameters"),
+			want: false,
+		},
+		{
+			name: "invalid in middle of message is not recoverable",
+			err:  errors.New("request has invalid data"),
+			want: false,
+		},
+		{
+			name: "invalid workflow name with context is not recoverable",
+			err:  errors.New("invalid workflow name: cannot contain spaces"),
+			want: false,
+		},
+		{
+			name: "parse error in JSON is recoverable",
+			err:  errors.New("failed to parse JSON response from API"),
+			want: true,
+		},
+		{
+			name: "parse error with details is recoverable",
+			err:  errors.New("failed to parse output: unexpected character at position 42"),
+			want: true,
+		},
+		{
+			name: "claude execution failed with details is recoverable",
+			err:  errors.New("claude execution failed: connection reset by peer"),
+			want: true,
+		},
+		{
+			name: "claude execution failed with status code is recoverable",
+			err:  errors.New("claude execution failed: HTTP 503 Service Unavailable"),
+			want: true,
+		},
+		{
+			name: "database error is recoverable by default",
+			err:  errors.New("database connection failed"),
+			want: true,
+		},
+		{
+			name: "file not found is recoverable by default",
+			err:  errors.New("file not found: config.yaml"),
+			want: true,
+		},
+		{
+			name: "permission denied is recoverable by default",
+			err:  errors.New("permission denied accessing file"),
+			want: true,
+		},
+		{
+			name: "invalid type is not recoverable",
+			err:  errors.New("invalid type provided"),
+			want: false,
+		},
+		{
+			name: "invalid format is not recoverable",
+			err:  errors.New("invalid format specified"),
+			want: false,
+		},
+		{
+			name: "invalid state is not recoverable",
+			err:  errors.New("invalid state transition requested"),
+			want: false,
+		},
+		{
+			name: "disk full error is recoverable by default",
+			err:  errors.New("no space left on device"),
+			want: true,
+		},
+		{
+			name: "out of memory error is recoverable by default",
+			err:  errors.New("out of memory"),
+			want: true,
+		},
+		{
+			name: "rate limit error is recoverable by default",
+			err:  errors.New("rate limit exceeded, retry after 60s"),
+			want: true,
+		},
+		{
+			name: "service unavailable is recoverable by default",
+			err:  errors.New("service temporarily unavailable"),
+			want: true,
+		},
+		{
+			name: "error with timeout word capitalized is recoverable",
+			err:  errors.New("Request Timeout occurred"),
+			want: true,
+		},
+		{
+			name: "error with parse word capitalized is recoverable",
+			err:  errors.New("Failed to Parse the response"),
+			want: true,
+		},
+		{
+			name: "error with Invalid word capitalized is recoverable since check is case-sensitive",
+			err:  errors.New("Invalid configuration detected"),
+			want: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1330,6 +1450,127 @@ func TestParseDiffStat(t *testing.T) {
 				FilesChanged:  1,
 				FilesAdded:    []string{},
 				FilesModified: []string{"file1.go"},
+				FilesDeleted:  []string{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "whitespace-only line",
+			diffOutput: ` file1.go | 10 ++++++++++
+
+ 1 file changed, 10 insertions(+)`,
+			want: &PRMetrics{
+				LinesChanged:  10,
+				FilesChanged:  1,
+				FilesAdded:    []string{},
+				FilesModified: []string{"file1.go"},
+				FilesDeleted:  []string{},
+			},
+			wantErr: false,
+		},
+		{
+			name:       "only summary line no files",
+			diffOutput: ` 0 files changed`,
+			want: &PRMetrics{
+				LinesChanged:  0,
+				FilesChanged:  0,
+				FilesAdded:    []string{},
+				FilesModified: []string{},
+				FilesDeleted:  []string{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "file with very long path",
+			diffOutput: ` internal/very/deep/nested/path/to/some/file/in/the/project/structure/file.go | 5 +++++
+ 1 file changed, 5 insertions(+)`,
+			want: &PRMetrics{
+				LinesChanged:  5,
+				FilesChanged:  1,
+				FilesAdded:    []string{},
+				FilesModified: []string{"internal/very/deep/nested/path/to/some/file/in/the/project/structure/file.go"},
+				FilesDeleted:  []string{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "file with dots in name",
+			diffOutput: ` test.config.json | 3 +++
+ 1 file changed, 3 insertions(+)`,
+			want: &PRMetrics{
+				LinesChanged:  3,
+				FilesChanged:  1,
+				FilesAdded:    []string{},
+				FilesModified: []string{"test.config.json"},
+				FilesDeleted:  []string{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "file with numbers in name",
+			diffOutput: ` migration_001_initial.sql | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)`,
+			want: &PRMetrics{
+				LinesChanged:  20,
+				FilesChanged:  1,
+				FilesAdded:    []string{},
+				FilesModified: []string{"migration_001_initial.sql"},
+				FilesDeleted:  []string{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "summary with only files changed field",
+			diffOutput: ` file1.go | 10 ++++++++++
+ 1 file changed`,
+			want: &PRMetrics{
+				LinesChanged:  0,
+				FilesChanged:  1,
+				FilesAdded:    []string{},
+				FilesModified: []string{"file1.go"},
+				FilesDeleted:  []string{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "mixed new deleted and modified in complex scenario",
+			diffOutput: ` new1.go (new) | 30 ++++++++++++++++++++++++++++++
+ new2.go (new) | 15 +++++++++++++++
+ existing1.go | 10 ++++++++++
+ existing2.go | 5 -----
+ old1.go (gone) | 25 -------------------------
+ old2.go (gone) | 10 ----------
+ 6 files changed, 55 insertions(+), 40 deletions(-)`,
+			want: &PRMetrics{
+				LinesChanged:  55,
+				FilesChanged:  6,
+				FilesAdded:    []string{"new1.go", "new2.go"},
+				FilesModified: []string{"existing1.go", "existing2.go"},
+				FilesDeleted:  []string{"old1.go", "old2.go"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "trailing whitespace in diff output",
+			diffOutput: ` file1.go | 10 ++++++++++
+ 1 file changed, 10 insertions(+)   `,
+			want: &PRMetrics{
+				LinesChanged:  10,
+				FilesChanged:  1,
+				FilesAdded:    []string{},
+				FilesModified: []string{"file1.go"},
+				FilesDeleted:  []string{},
+			},
+			wantErr: false,
+		},
+		{
+			name:       "single line output with no newline",
+			diffOutput: ` 0 files changed`,
+			want: &PRMetrics{
+				LinesChanged:  0,
+				FilesChanged:  0,
+				FilesAdded:    []string{},
+				FilesModified: []string{},
 				FilesDeleted:  []string{},
 			},
 			wantErr: false,
@@ -1877,6 +2118,38 @@ func TestGetCIChecker(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_getPRMetrics(t *testing.T) {
+	tests := []struct {
+		name       string
+		gitDiff    string
+		want       *PRMetrics
+		wantErr    bool
+		setupMocks func(ctx context.Context, workingDir string)
+	}{
+		{
+			name: "successfully parses git diff output",
+			want: &PRMetrics{
+				LinesChanged:  10,
+				FilesChanged:  1,
+				FilesAdded:    []string{},
+				FilesModified: []string{"file.go"},
+				FilesDeleted:  []string{},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.want != nil {
+				metrics, err := parseDiffStat(" file.go | 10 ++++++++++\n 1 file changed, 10 insertions(+)")
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, metrics)
+			}
+		})
+	}
+}
+
 func TestFormatCIErrors(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1952,6 +2225,40 @@ func TestFormatCIErrors(t *testing.T) {
 				FailedJobs: nil,
 			},
 			want: "CI checks failed with the following errors:\n\nCI system error\n\nFailed jobs:\n",
+		},
+		{
+			name: "formats with long output",
+			result: &CIResult{
+				Passed: false,
+				Status: "failure",
+				Output: "Lorem ipsum dolor sit amet, consectetur adipiscing elit. " +
+					"Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. " +
+					"Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.",
+				FailedJobs: []string{"integration-test"},
+			},
+			want: "CI checks failed with the following errors:\n\nLorem ipsum dolor sit amet, consectetur adipiscing elit. " +
+				"Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. " +
+				"Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.\n\nFailed jobs:\n- integration-test\n",
+		},
+		{
+			name: "formats with job names containing spaces",
+			result: &CIResult{
+				Passed:     false,
+				Status:     "failure",
+				Output:     "Job failed",
+				FailedJobs: []string{"build and test", "deploy to staging"},
+			},
+			want: "CI checks failed with the following errors:\n\nJob failed\n\nFailed jobs:\n- build and test\n- deploy to staging\n",
+		},
+		{
+			name: "formats with job names containing special characters",
+			result: &CIResult{
+				Passed:     false,
+				Status:     "failure",
+				Output:     "Job failed",
+				FailedJobs: []string{"build/test/deploy", "test:unit"},
+			},
+			want: "CI checks failed with the following errors:\n\nJob failed\n\nFailed jobs:\n- build/test/deploy\n- test:unit\n",
 		},
 	}
 
