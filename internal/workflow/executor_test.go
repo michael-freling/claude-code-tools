@@ -3,6 +3,8 @@ package workflow
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -330,6 +332,8 @@ func TestClaudeExecutor_findClaudePath(t *testing.T) {
 
 			if tt.wantErr {
 				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrClaudeNotFound)
+				assert.Empty(t, got)
 				return
 			}
 
@@ -339,6 +343,38 @@ func TestClaudeExecutor_findClaudePath(t *testing.T) {
 			} else {
 				assert.NotEmpty(t, got)
 			}
+		})
+	}
+}
+
+func TestClaudeExecutor_findClaudePath_CustomPath(t *testing.T) {
+	tests := []struct {
+		name       string
+		claudePath string
+		wantPath   string
+	}{
+		{
+			name:       "returns custom path without validation",
+			claudePath: "/custom/path/to/claude",
+			wantPath:   "/custom/path/to/claude",
+		},
+		{
+			name:       "returns nonexistent custom path without validation",
+			claudePath: "/nonexistent/path/that/does/not/exist",
+			wantPath:   "/nonexistent/path/that/does/not/exist",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			executor := &claudeExecutor{
+				claudePath: tt.claudePath,
+			}
+
+			got, err := executor.findClaudePath()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantPath, got)
 		})
 	}
 }
@@ -394,6 +430,455 @@ func TestMockExecutor_Execute_ExitCode(t *testing.T) {
 			assert.Equal(t, 0, got.ExitCode)
 		})
 	}
+}
+
+func TestClaudeExecutor_Execute_WithMockScript(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tests := []struct {
+		name        string
+		script      string
+		config      ExecuteConfig
+		wantOutput  string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "successful execution",
+			script: `#!/bin/bash
+echo "Hello from mock claude"
+exit 0`,
+			config: ExecuteConfig{
+				Prompt:  "test prompt",
+				Timeout: 5 * time.Second,
+			},
+			wantOutput: "Hello from mock claude\n",
+			wantErr:    false,
+		},
+		{
+			name: "execution with JSON schema",
+			script: `#!/bin/bash
+echo '{"result": "success"}'
+exit 0`,
+			config: ExecuteConfig{
+				Prompt:     "test prompt",
+				JSONSchema: `{"type": "object"}`,
+				Timeout:    5 * time.Second,
+			},
+			wantOutput: "{\"result\": \"success\"}\n",
+			wantErr:    false,
+		},
+		{
+			name: "execution with working directory",
+			script: `#!/bin/bash
+pwd
+exit 0`,
+			config: ExecuteConfig{
+				Prompt:           "test prompt",
+				WorkingDirectory: tmpDir,
+				Timeout:          5 * time.Second,
+			},
+			wantOutput: tmpDir + "\n",
+			wantErr:    false,
+		},
+		{
+			name: "execution failure with non-zero exit code",
+			script: `#!/bin/bash
+echo "error message" >&2
+exit 1`,
+			config: ExecuteConfig{
+				Prompt:  "test prompt",
+				Timeout: 5 * time.Second,
+			},
+			wantErr:     true,
+			errContains: "exit code 1",
+		},
+		{
+			name: "execution with dangerously skip permissions",
+			script: `#!/bin/bash
+if [[ "$*" == *"--dangerously-skip-permissions"* ]]; then
+  echo "permissions skipped"
+else
+  echo "permissions not skipped"
+fi
+exit 0`,
+			config: ExecuteConfig{
+				Prompt:                     "test prompt",
+				DangerouslySkipPermissions: true,
+				Timeout:                    5 * time.Second,
+			},
+			wantOutput: "permissions skipped\n",
+			wantErr:    false,
+		},
+		{
+			name: "execution with environment variables",
+			script: `#!/bin/bash
+echo "output"
+exit 0`,
+			config: ExecuteConfig{
+				Prompt:  "test prompt",
+				Timeout: 5 * time.Second,
+				Env: map[string]string{
+					"TEST_VAR": "test_value",
+				},
+			},
+			wantOutput: "output\n",
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scriptPath := filepath.Join(tmpDir, "claude-"+tt.name)
+			err := os.WriteFile(scriptPath, []byte(tt.script), 0755)
+			require.NoError(t, err)
+
+			executor := NewClaudeExecutorWithPath(scriptPath)
+			ctx := context.Background()
+
+			got, err := executor.Execute(ctx, tt.config)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Equal(t, tt.wantOutput, got.Output)
+			assert.Equal(t, 0, got.ExitCode)
+		})
+	}
+}
+
+func TestClaudeExecutor_Execute_Timeout_Real(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	scriptPath := filepath.Join(tmpDir, "claude-slow")
+	script := `#!/bin/bash
+sleep 10
+echo "done"
+exit 0`
+	err := os.WriteFile(scriptPath, []byte(script), 0755)
+	require.NoError(t, err)
+
+	executor := NewClaudeExecutorWithPath(scriptPath)
+	ctx := context.Background()
+
+	config := ExecuteConfig{
+		Prompt:  "test prompt",
+		Timeout: 100 * time.Millisecond,
+	}
+
+	got, err := executor.Execute(ctx, config)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timeout")
+	assert.NotNil(t, got)
+}
+
+func TestClaudeExecutor_Execute_ContextCancellation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	scriptPath := filepath.Join(tmpDir, "claude-sleep")
+	script := `#!/bin/bash
+sleep 10
+echo "done"
+exit 0`
+	err := os.WriteFile(scriptPath, []byte(script), 0755)
+	require.NoError(t, err)
+
+	executor := NewClaudeExecutorWithPath(scriptPath)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	config := ExecuteConfig{
+		Prompt: "test prompt",
+	}
+
+	_, err = executor.Execute(ctx, config)
+
+	require.Error(t, err)
+}
+
+func TestClaudeExecutor_ExecuteStreaming_WithMockScript(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tests := []struct {
+		name           string
+		script         string
+		config         ExecuteConfig
+		wantOutput     string
+		wantErr        bool
+		errContains    string
+		wantToolEvents int
+	}{
+		{
+			name: "successful streaming execution",
+			script: `#!/bin/bash
+echo '{"type":"system","subtype":"init"}'
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"}]}}'
+echo '{"type":"result","result":"Final output","is_error":false}'
+exit 0`,
+			config: ExecuteConfig{
+				Prompt:  "test prompt",
+				Timeout: 5 * time.Second,
+			},
+			wantOutput: "Final output",
+			wantErr:    false,
+		},
+		{
+			name: "streaming with tool use",
+			script: `#!/bin/bash
+echo '{"type":"system","subtype":"init"}'
+echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/test/path"}}]}}'
+echo '{"type":"user","tool_use_result":"file contents"}'
+echo '{"type":"result","result":"Done","is_error":false}'
+exit 0`,
+			config: ExecuteConfig{
+				Prompt:  "test prompt",
+				Timeout: 5 * time.Second,
+			},
+			wantOutput:     "Done",
+			wantErr:        false,
+			wantToolEvents: 2,
+		},
+		{
+			name: "streaming with structured output",
+			script: `#!/bin/bash
+echo '{"type":"system","subtype":"init"}'
+echo '{"type":"result","result":"text result","structured_output":{"key":"value"},"is_error":false}'
+exit 0`,
+			config: ExecuteConfig{
+				Prompt:     "test prompt",
+				JSONSchema: `{"type":"object"}`,
+				Timeout:    5 * time.Second,
+			},
+			wantErr: false,
+		},
+		{
+			name: "streaming execution failure",
+			script: `#!/bin/bash
+echo "error" >&2
+exit 1`,
+			config: ExecuteConfig{
+				Prompt:  "test prompt",
+				Timeout: 5 * time.Second,
+			},
+			wantErr:     true,
+			errContains: "exit code 1",
+		},
+		{
+			name: "streaming with error tool result",
+			script: `#!/bin/bash
+echo '{"type":"system","subtype":"init"}'
+echo '{"type":"user","tool_use_result":"Error: something went wrong"}'
+echo '{"type":"result","result":"Done","is_error":false}'
+exit 0`,
+			config: ExecuteConfig{
+				Prompt:  "test prompt",
+				Timeout: 5 * time.Second,
+			},
+			wantOutput:     "Done",
+			wantErr:        false,
+			wantToolEvents: 1,
+		},
+		{
+			name: "streaming with dangerously skip permissions",
+			script: `#!/bin/bash
+if [[ "$*" == *"--dangerously-skip-permissions"* ]]; then
+  echo '{"type":"result","result":"permissions skipped","is_error":false}'
+else
+  echo '{"type":"result","result":"permissions not skipped","is_error":false}'
+fi
+exit 0`,
+			config: ExecuteConfig{
+				Prompt:                     "test prompt",
+				DangerouslySkipPermissions: true,
+				Timeout:                    5 * time.Second,
+			},
+			wantOutput: "permissions skipped",
+			wantErr:    false,
+		},
+		{
+			name: "streaming with working directory",
+			script: `#!/bin/bash
+echo '{"type":"result","result":"'$(pwd)'","is_error":false}'
+exit 0`,
+			config: ExecuteConfig{
+				Prompt:           "test prompt",
+				WorkingDirectory: tmpDir,
+				Timeout:          5 * time.Second,
+			},
+			wantErr: false,
+		},
+		{
+			name: "streaming with environment variables",
+			script: `#!/bin/bash
+echo '{"type":"result","result":"env set","is_error":false}'
+exit 0`,
+			config: ExecuteConfig{
+				Prompt:  "test prompt",
+				Timeout: 5 * time.Second,
+				Env: map[string]string{
+					"TEST_VAR": "test_value",
+				},
+			},
+			wantOutput: "env set",
+			wantErr:    false,
+		},
+		{
+			name: "streaming with empty lines in output",
+			script: `#!/bin/bash
+echo ''
+echo '{"type":"result","result":"done","is_error":false}'
+exit 0`,
+			config: ExecuteConfig{
+				Prompt:  "test prompt",
+				Timeout: 5 * time.Second,
+			},
+			wantOutput: "done",
+			wantErr:    false,
+		},
+		{
+			name: "streaming with malformed JSON lines",
+			script: `#!/bin/bash
+echo 'not valid json'
+echo '{"type":"result","result":"done","is_error":false}'
+exit 0`,
+			config: ExecuteConfig{
+				Prompt:  "test prompt",
+				Timeout: 5 * time.Second,
+			},
+			wantOutput: "done",
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scriptPath := filepath.Join(tmpDir, "claude-stream-"+tt.name)
+			err := os.WriteFile(scriptPath, []byte(tt.script), 0755)
+			require.NoError(t, err)
+
+			executor := NewClaudeExecutorWithPath(scriptPath)
+			ctx := context.Background()
+
+			var toolEvents []ProgressEvent
+			onProgress := func(event ProgressEvent) {
+				toolEvents = append(toolEvents, event)
+			}
+
+			got, err := executor.ExecuteStreaming(ctx, tt.config, onProgress)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, got)
+
+			if tt.wantOutput != "" {
+				assert.Contains(t, got.Output, tt.wantOutput)
+			}
+
+			if tt.wantToolEvents > 0 {
+				assert.Len(t, toolEvents, tt.wantToolEvents)
+			}
+		})
+	}
+}
+
+func TestClaudeExecutor_ExecuteStreaming_Timeout(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	scriptPath := filepath.Join(tmpDir, "claude-stream-slow")
+	// Use a script that will be killed by SIGTERM/SIGKILL
+	script := `#!/bin/bash
+trap 'exit 1' TERM INT
+while true; do sleep 0.1; done`
+	err := os.WriteFile(scriptPath, []byte(script), 0755)
+	require.NoError(t, err)
+
+	executor := NewClaudeExecutorWithPath(scriptPath)
+	ctx := context.Background()
+
+	config := ExecuteConfig{
+		Prompt:  "test prompt",
+		Timeout: 200 * time.Millisecond,
+	}
+
+	got, err := executor.ExecuteStreaming(ctx, config, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timeout")
+	assert.NotNil(t, got)
+}
+
+func TestNewClaudeExecutorWithRunner(t *testing.T) {
+	mockRunner := new(MockCommandRunner)
+
+	executor := NewClaudeExecutorWithRunner("/custom/claude", mockRunner)
+
+	require.NotNil(t, executor)
+	ce, ok := executor.(*claudeExecutor)
+	require.True(t, ok)
+	assert.Equal(t, "/custom/claude", ce.claudePath)
+	assert.Equal(t, mockRunner, ce.cmdRunner)
+}
+
+func TestClaudeExecutor_Execute_ClaudeNotFound(t *testing.T) {
+	executor := &claudeExecutor{
+		claudePath: "",
+		cmdRunner:  NewCommandRunner(),
+	}
+
+	// Temporarily override PATH to ensure claude isn't found
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", "/nonexistent")
+	defer os.Setenv("PATH", oldPath)
+
+	ctx := context.Background()
+	config := ExecuteConfig{
+		Prompt: "test",
+	}
+
+	_, err := executor.Execute(ctx, config)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "claude CLI not found")
+}
+
+func TestClaudeExecutor_ExecuteStreaming_ClaudeNotFound(t *testing.T) {
+	executor := &claudeExecutor{
+		claudePath: "",
+		cmdRunner:  NewCommandRunner(),
+	}
+
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", "/nonexistent")
+	defer os.Setenv("PATH", oldPath)
+
+	ctx := context.Background()
+	config := ExecuteConfig{
+		Prompt: "test",
+	}
+
+	_, err := executor.ExecuteStreaming(ctx, config, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "claude CLI not found")
 }
 
 func TestExtractToolInputSummary(t *testing.T) {

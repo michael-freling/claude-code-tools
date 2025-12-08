@@ -70,12 +70,14 @@ type ExecuteResult struct {
 // claudeExecutor implements ClaudeExecutor interface
 type claudeExecutor struct {
 	claudePath string
+	cmdRunner  CommandRunner
 }
 
 // NewClaudeExecutor creates executor with default settings
 func NewClaudeExecutor() ClaudeExecutor {
 	return &claudeExecutor{
 		claudePath: "claude",
+		cmdRunner:  NewCommandRunner(),
 	}
 }
 
@@ -83,6 +85,15 @@ func NewClaudeExecutor() ClaudeExecutor {
 func NewClaudeExecutorWithPath(claudePath string) ClaudeExecutor {
 	return &claudeExecutor{
 		claudePath: claudePath,
+		cmdRunner:  NewCommandRunner(),
+	}
+}
+
+// NewClaudeExecutorWithRunner creates executor with custom command runner (for testing)
+func NewClaudeExecutorWithRunner(claudePath string, cmdRunner CommandRunner) ClaudeExecutor {
+	return &claudeExecutor{
+		claudePath: claudePath,
+		cmdRunner:  cmdRunner,
 	}
 }
 

@@ -575,6 +575,7 @@ func TestFileStateManager_SavePlan_Errors(t *testing.T) {
 		name         string
 		workflowName string
 		plan         *Plan
+		setup        func(tmpDir string) string
 		wantErr      bool
 		errContains  string
 	}{
@@ -591,11 +592,22 @@ func TestFileStateManager_SavePlan_Errors(t *testing.T) {
 			plan:         &Plan{Summary: "test plan", Complexity: "medium"},
 			wantErr:      false,
 		},
+		{
+			name:         "successfully creates workflow directory if needed",
+			workflowName: "new-workflow",
+			plan:         &Plan{Summary: "test", Complexity: "low"},
+			wantErr:      false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tmpDir := t.TempDir()
+			var tmpDir string
+			if tt.setup != nil {
+				tmpDir = tt.setup(t.TempDir())
+			} else {
+				tmpDir = t.TempDir()
+			}
 			sm := NewStateManager(tmpDir)
 
 			if !tt.wantErr {
