@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 )
 
@@ -13,6 +14,10 @@ type GhRunner interface {
 	PRView(ctx context.Context, dir string, jsonFields string, jqQuery string) (output string, err error)
 	// PRChecks returns CI check status as JSON
 	PRChecks(ctx context.Context, dir string, prNumber int, jsonFields string) (output string, err error)
+	// RunRerun reruns failed/cancelled jobs for a workflow run
+	RunRerun(ctx context.Context, dir string, runID int64) error
+	// GetLatestRunID gets the latest workflow run ID for a PR
+	GetLatestRunID(ctx context.Context, dir string, prNumber int) (int64, error)
 }
 
 // ghRunner implements GhRunner interface
@@ -66,4 +71,41 @@ func (g *ghRunner) PRChecks(ctx context.Context, dir string, prNumber int, jsonF
 	}
 
 	return stdout, nil
+}
+
+// RunRerun reruns failed/cancelled jobs for a workflow run
+func (g *ghRunner) RunRerun(ctx context.Context, dir string, runID int64) error {
+	args := []string{"run", "rerun", fmt.Sprintf("%d", runID), "--failed"}
+
+	_, stderr, err := g.runner.RunInDir(ctx, dir, "gh", args...)
+	if err != nil {
+		return fmt.Errorf("failed to rerun workflow: %w (stderr: %s)", err, stderr)
+	}
+
+	return nil
+}
+
+// GetLatestRunID gets the latest workflow run ID for a PR
+func (g *ghRunner) GetLatestRunID(ctx context.Context, dir string, prNumber int) (int64, error) {
+	args := []string{"pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "databaseId"}
+
+	stdout, stderr, err := g.runner.RunInDir(ctx, dir, "gh", args...)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get workflow run ID: %w (stderr: %s)", err, stderr)
+	}
+
+	// Parse JSON array output: [{"databaseId": 123}, ...]
+	var checks []struct {
+		DatabaseID int64 `json:"databaseId"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &checks); err != nil {
+		return 0, fmt.Errorf("failed to parse workflow run ID from output: %w", err)
+	}
+
+	if len(checks) == 0 {
+		return 0, fmt.Errorf("no workflow runs found for PR %d", prNumber)
+	}
+
+	// Return the first (latest) run ID
+	return checks[0].DatabaseID, nil
 }

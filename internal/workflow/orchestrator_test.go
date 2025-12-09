@@ -3476,7 +3476,7 @@ func TestFormatCIErrors(t *testing.T) {
 				Output:     "Unknown error",
 				FailedJobs: []string{},
 			},
-			want: "CI checks failed with the following errors:\n\nUnknown error\n\nFailed jobs:\n",
+			want: "CI checks failed with the following errors:\n\nUnknown error",
 		},
 		{
 			name: "formats output with multiline errors",
@@ -3506,7 +3506,7 @@ func TestFormatCIErrors(t *testing.T) {
 				Output:     "CI system error",
 				FailedJobs: nil,
 			},
-			want: "CI checks failed with the following errors:\n\nCI system error\n\nFailed jobs:\n",
+			want: "CI checks failed with the following errors:\n\nCI system error",
 		},
 		{
 			name: "formats with long output",
@@ -3541,6 +3541,28 @@ func TestFormatCIErrors(t *testing.T) {
 				FailedJobs: []string{"build/test/deploy", "test:unit"},
 			},
 			want: "CI checks failed with the following errors:\n\nJob failed\n\nFailed jobs:\n- build/test/deploy\n- test:unit\n",
+		},
+		{
+			name: "formats with cancelled jobs only",
+			result: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				Output:        "Infrastructure error",
+				FailedJobs:    []string{},
+				CancelledJobs: []string{"job1", "job2"},
+			},
+			want: "CI checks failed with the following errors:\n\nInfrastructure error\n\nCancelled jobs (infrastructure issue, not code failure):\n- job1\n- job2\n",
+		},
+		{
+			name: "formats with both failed and cancelled jobs",
+			result: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				Output:        "Mixed errors",
+				FailedJobs:    []string{"build"},
+				CancelledJobs: []string{"deploy"},
+			},
+			want: "CI checks failed with the following errors:\n\nMixed errors\n\nFailed jobs:\n- build\n\nCancelled jobs (infrastructure issue, not code failure):\n- deploy\n",
 		},
 	}
 
@@ -3627,6 +3649,185 @@ func TestOrchestrator_executePlanning_ParseErrors(t *testing.T) {
 			mockExec.AssertExpectations(t)
 			mockPG.AssertExpectations(t)
 			mockOP.AssertExpectations(t)
+		})
+	}
+}
+
+func TestHandleCancelledCI(t *testing.T) {
+	tests := []struct {
+		name            string
+		ciResult        *CIResult
+		setupMocks      func(*MockGhRunner, *MockCIChecker)
+		wantPassed      bool
+		wantErr         bool
+		wantRerunCalled bool
+	}{
+		{
+			name: "only cancelled jobs - rerun successful",
+			ciResult: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{},
+				CancelledJobs: []string{"job1", "job2"},
+				Output:        "test output",
+			},
+			setupMocks: func(gh *MockGhRunner, ci *MockCIChecker) {
+				gh.On("GetLatestRunID", mock.Anything, "/test/dir", 123).Return(int64(456), nil)
+				gh.On("RunRerun", mock.Anything, "/test/dir", int64(456)).Return(nil)
+				ci.On("WaitForCIWithProgress", mock.Anything, 123, mock.Anything, mock.Anything, mock.Anything).Return(&CIResult{
+					Passed:        true,
+					Status:        "success",
+					FailedJobs:    []string{},
+					CancelledJobs: []string{},
+					Output:        "rerun output",
+				}, nil)
+			},
+			wantPassed:      true,
+			wantErr:         false,
+			wantRerunCalled: true,
+		},
+		{
+			name: "only cancelled jobs - rerun still fails",
+			ciResult: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{},
+				CancelledJobs: []string{"job1"},
+				Output:        "test output",
+			},
+			setupMocks: func(gh *MockGhRunner, ci *MockCIChecker) {
+				gh.On("GetLatestRunID", mock.Anything, "/test/dir", 123).Return(int64(456), nil)
+				gh.On("RunRerun", mock.Anything, "/test/dir", int64(456)).Return(nil)
+				ci.On("WaitForCIWithProgress", mock.Anything, 123, mock.Anything, mock.Anything, mock.Anything).Return(&CIResult{
+					Passed:        false,
+					Status:        "failure",
+					FailedJobs:    []string{"job1"},
+					CancelledJobs: []string{},
+					Output:        "rerun failed",
+				}, nil)
+			},
+			wantPassed:      false,
+			wantErr:         false,
+			wantRerunCalled: true,
+		},
+		{
+			name: "has failed jobs - no rerun",
+			ciResult: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{"job1"},
+				CancelledJobs: []string{"job2"},
+				Output:        "test output",
+			},
+			setupMocks: func(gh *MockGhRunner, ci *MockCIChecker) {
+				// No mocks should be called
+			},
+			wantPassed:      false,
+			wantErr:         false,
+			wantRerunCalled: false,
+		},
+		{
+			name: "no cancelled jobs - no rerun",
+			ciResult: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{"job1"},
+				CancelledJobs: []string{},
+				Output:        "test output",
+			},
+			setupMocks: func(gh *MockGhRunner, ci *MockCIChecker) {
+				// No mocks should be called
+			},
+			wantPassed:      false,
+			wantErr:         false,
+			wantRerunCalled: false,
+		},
+		{
+			name: "GetLatestRunID fails - return error",
+			ciResult: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{},
+				CancelledJobs: []string{"job1"},
+				Output:        "test output",
+			},
+			setupMocks: func(gh *MockGhRunner, ci *MockCIChecker) {
+				gh.On("GetLatestRunID", mock.Anything, "/test/dir", 123).Return(int64(0), errors.New("failed to get run ID"))
+			},
+			wantPassed:      false,
+			wantErr:         true,
+			wantRerunCalled: false,
+		},
+		{
+			name: "RunRerun fails - return error",
+			ciResult: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{},
+				CancelledJobs: []string{"job1"},
+				Output:        "test output",
+			},
+			setupMocks: func(gh *MockGhRunner, ci *MockCIChecker) {
+				gh.On("GetLatestRunID", mock.Anything, "/test/dir", 123).Return(int64(456), nil)
+				gh.On("RunRerun", mock.Anything, "/test/dir", int64(456)).Return(errors.New("rerun failed"))
+			},
+			wantPassed:      false,
+			wantErr:         true,
+			wantRerunCalled: false,
+		},
+		{
+			name: "WaitForCI fails - return error",
+			ciResult: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{},
+				CancelledJobs: []string{"job1"},
+				Output:        "test output",
+			},
+			setupMocks: func(gh *MockGhRunner, ci *MockCIChecker) {
+				gh.On("GetLatestRunID", mock.Anything, "/test/dir", 123).Return(int64(456), nil)
+				gh.On("RunRerun", mock.Anything, "/test/dir", int64(456)).Return(nil)
+				ci.On("WaitForCIWithProgress", mock.Anything, 123, mock.Anything, mock.Anything, mock.Anything).Return((*CIResult)(nil), errors.New("CI check failed"))
+			},
+			wantPassed:      false,
+			wantErr:         true,
+			wantRerunCalled: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGH := new(MockGhRunner)
+			mockCI := new(MockCIChecker)
+
+			tt.setupMocks(mockGH, mockCI)
+
+			o := &Orchestrator{
+				config:   DefaultConfig("/tmp/workflows"),
+				logger:   NewLogger(LogLevelNormal),
+				ghRunner: mockGH,
+				ciCheckerFactory: func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) CIChecker {
+					return mockCI
+				},
+			}
+
+			result, err := o.handleCancelledCI(context.Background(), 123, "/test/dir", tt.ciResult)
+
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			if tt.wantRerunCalled {
+				assert.Equal(t, tt.wantPassed, result.Passed)
+			} else {
+				// If no rerun, result should be the same as input
+				assert.Equal(t, tt.ciResult, result)
+			}
+
+			mockGH.AssertExpectations(t)
+			mockCI.AssertExpectations(t)
 		})
 	}
 }
