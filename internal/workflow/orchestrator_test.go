@@ -3831,3 +3831,57 @@ func TestHandleCancelledCI(t *testing.T) {
 		})
 	}
 }
+
+func TestDisplayCIFailure(t *testing.T) {
+	tests := []struct {
+		name     string
+		ciResult *CIResult
+	}{
+		{
+			name: "only failed jobs",
+			ciResult: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{"test-unit", "test-integration"},
+				CancelledJobs: []string{},
+				Output:        "Test failures detected",
+			},
+		},
+		{
+			name: "only cancelled jobs",
+			ciResult: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{},
+				CancelledJobs: []string{"build", "deploy"},
+				Output:        "Jobs were cancelled",
+			},
+		},
+		{
+			name: "both failed and cancelled jobs",
+			ciResult: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{"test-unit"},
+				CancelledJobs: []string{"deploy"},
+				Output:        "Mixed failures and cancellations",
+			},
+		},
+		{
+			name: "no failed or cancelled jobs",
+			ciResult: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{},
+				CancelledJobs: []string{},
+				Output:        "Unknown failure",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			displayCIFailure(tt.ciResult)
+		})
+	}
+}

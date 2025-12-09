@@ -828,6 +828,78 @@ func TestFilterE2EFailures(t *testing.T) {
 				Output:        "e2e tests failed",
 			},
 		},
+		{
+			name: "only e2e cancelled jobs",
+			result: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{},
+				CancelledJobs: []string{"test-e2e", "integration-test"},
+				Output:        "e2e tests cancelled",
+			},
+			e2ePattern: "e2e|integration",
+			want: &CIResult{
+				Passed:        true,
+				Status:        "failure",
+				FailedJobs:    []string{},
+				CancelledJobs: []string{},
+				Output:        "e2e tests cancelled",
+			},
+		},
+		{
+			name: "mixed cancelled jobs with e2e",
+			result: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{},
+				CancelledJobs: []string{"test-unit", "test-e2e", "lint"},
+				Output:        "multiple cancellations",
+			},
+			e2ePattern: "e2e|E2E",
+			want: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{},
+				CancelledJobs: []string{"test-unit", "lint"},
+				Output:        "multiple cancellations",
+			},
+		},
+		{
+			name: "both failed and cancelled jobs with e2e pattern match",
+			result: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{"test-unit", "test-e2e"},
+				CancelledJobs: []string{"integration-test", "lint"},
+				Output:        "mixed failures and cancellations",
+			},
+			e2ePattern: "e2e|integration",
+			want: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{"test-unit"},
+				CancelledJobs: []string{"lint"},
+				Output:        "mixed failures and cancellations",
+			},
+		},
+		{
+			name: "all cancelled jobs match e2e pattern",
+			result: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{"test-unit"},
+				CancelledJobs: []string{"e2e-smoke", "e2e-full"},
+				Output:        "unit test failed, e2e cancelled",
+			},
+			e2ePattern: "e2e",
+			want: &CIResult{
+				Passed:        false,
+				Status:        "failure",
+				FailedJobs:    []string{"test-unit"},
+				CancelledJobs: []string{},
+				Output:        "unit test failed, e2e cancelled",
+			},
+		},
 	}
 
 	for _, tt := range tests {
