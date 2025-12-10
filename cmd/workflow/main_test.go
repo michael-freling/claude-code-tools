@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/michael-freling/claude-code-config/internal/workflow"
+	"github.com/michael-freling/claude-code-tools/internal/workflow"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

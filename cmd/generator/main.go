@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/michael-freling/claude-code-config/internal/generator"
+	"github.com/michael-freling/claude-code-tools/internal/generator"
 	"github.com/spf13/cobra"
 )
 

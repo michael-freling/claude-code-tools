@@ -1,4 +1,4 @@
-module github.com/michael-freling/claude-code-config
+module github.com/michael-freling/claude-code-tools
 
 go 1.25
 

@@ -1,28 +1,110 @@
-# Claude Code Configuration Generator
+# Claude Code Tools
 
-A CLI tool to generate prompts for creating Claude Code skills, agents, and commands.
+A collection of CLI tools for working with Claude Code.
 
-## Overview
+## Tools
 
-This generator outputs PROMPTS to stdout that you can give to Claude to create skills, agents, and commands. It does NOT create the files directly - instead, it generates instructions that Claude can use.
+- **Generator** - Generate prompts for creating Claude Code skills, agents, and commands
+- **Workflow** - Orchestrate multi-phase development workflows with Claude Code
 
-## Installation
+## Workflow
+
+The `workflow` tool orchestrates multi-phase development workflows by invoking Claude Code CLI with persistent state management. It automates the process of planning, implementing, and refactoring code changes.
+
+### Workflow Phases
+
+```mermaid
+flowchart TD
+    Start([Start Workflow]) --> Planning[Planning Phase]
+    Planning --> |User Approval| Implementation[Implementation Phase]
+    Planning --> |User Rejection| Planning
+    Implementation --> Refactoring[Refactoring Phase]
+    Refactoring --> CICheck{CI Checks Pass?}
+    CICheck --> |Yes| PRSplit{Split PR?}
+    CICheck --> |No| FixCI[Fix CI Phase]
+    FixCI --> CICheck
+    PRSplit --> |Yes| Split[PR Split Phase]
+    PRSplit --> |No| Complete([Completed])
+    Split --> Complete
+```
+
+### Installation
+
+```bash
+go install github.com/michael-freling/claude-code-tools/cmd/workflow@latest
+```
+
+Or build from source:
+
+```bash
+go build -o workflow cmd/workflow/main.go
+```
+
+### Usage
+
+```bash
+# Start a new feature workflow
+workflow start my-feature "Add user authentication" --type feature
+
+# Start a bug fix workflow
+workflow start fix-login "Fix login form validation" --type fix
+
+# List all workflows
+workflow list
+
+# Check workflow status
+workflow status my-feature
+
+# Resume an interrupted workflow
+workflow resume my-feature
+
+# Delete a workflow
+workflow delete my-feature
+
+# Clean up completed workflows
+workflow clean
+```
+
+### Options
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--base-dir` | Base directory for workflow state | `.claude/workflow` |
+| `--split-pr` | Enable PR split phase for large PRs | `false` |
+| `--claude-path` | Path to Claude CLI executable | `claude` |
+| `--timeout-planning` | Planning phase timeout | `1h` |
+| `--timeout-implementation` | Implementation phase timeout | `6h` |
+| `--timeout-refactoring` | Refactoring phase timeout | `6h` |
+| `--timeout-pr-split` | PR split phase timeout | `1h` |
+| `-v, --verbose` | Enable verbose output | `false` |
+
+## Generator
+
+The `generator` tool outputs prompts to stdout that you can give to Claude to create skills, agents, and commands.
+
+### Installation
+
+```bash
+go install github.com/michael-freling/claude-code-tools/cmd/generator@latest
+```
+
+Or build from source:
 
 ```bash
 go build -o generator cmd/generator/main.go
 ```
 
-## Usage
+### Usage
 
-### Agents
+#### Agents
 
 ```bash
 # List all available agents
-./generator agents list
+generator agents list
 
 # Generate prompt for a specific agent
-./generator agents golang-engineer
-./generator agents software-architect
+generator agents golang-engineer
+generator agents software-architect
 ```
 
 Available agents:
@@ -33,17 +115,16 @@ Available agents:
 - `software-architect` - Design software architecture and API specifications
 - `architecture-reviewer` - Review architectural designs
 - `github-actions-workflow-engineer` - Create and test GitHub Actions workflows
-- `kubernetes-engineer` - Kubernetes deployment and configuration
 
-### Commands
+#### Commands
 
 ```bash
 # List all available commands
-./generator commands list
+generator commands list
 
 # Generate prompt for a specific command
-./generator commands feature
-./generator commands fix
+generator commands feature
+generator commands fix
 ```
 
 Available commands:
@@ -54,77 +135,30 @@ Available commands:
 - `document-guideline-monorepo` - Create guidelines for monorepo subprojects
 - `split-pr` - Split large PRs into smaller, reviewable child PRs
 
-### Skills
+#### Skills
 
 ```bash
 # List all available skills
-./generator skills list
+generator skills list
 
 # Generate prompt for a specific skill
-./generator skills coding
-./generator skills ci-error-fix
+generator skills coding
+generator skills ci-error-fix
 ```
 
 Available skills:
 - `coding` - Iterative development with Test-Driven Development (TDD)
 - `ci-error-fix` - Fix CI errors systematically
 
-### Custom Templates
+#### Custom Templates
 
-You can use your own templates by specifying a custom template directory:
-
-```bash
-./generator agents --template-dir /path/to/templates golang-engineer
-./generator commands -t /path/to/templates feature
-```
-
-## How It Works
-
-1. The generator uses Go templates with embedded filesystem
-2. Shared rules (COMMON_RULES, CODING_RULES, GOLANG_RULES, TYPESCRIPT_RULES, etc.) are defined in `_partials.tmpl`
-3. Each template includes relevant shared rules using `{{template "RULE_NAME"}}`
-4. Output is always to stdout - no files are written
-
-## Project Structure
-
-```
-.
-├── cmd/generator/
-│   └── main.go              # CLI entry point
-├── internal/generator/
-│   ├── generator.go         # High-level Generator wrapper
-│   ├── template.go          # Template Engine
-│   └── *_test.go            # Tests
-├── templates/
-│   ├── embed.go             # Embedded templates filesystem
-│   └── prompts/
-│       ├── _partials.tmpl   # Shared rule definitions
-│       ├── agents/          # Agent templates
-│       ├── commands/        # Command templates
-│       └── skills/          # Skill templates
-└── outputs/                 # Generated markdown outputs
-    ├── agents/
-    ├── commands/
-    └── skills/
-```
-
-## Development
-
-### Build
+Use your own templates by specifying a custom template directory:
 
 ```bash
-go build ./...
+generator agents --template-dir /path/to/templates golang-engineer
+generator commands -t /path/to/templates feature
 ```
 
-### Test
+## License
 
-```bash
-go test ./...
-```
-
-### Verify
-
-```bash
-go vet ./...
-go fmt ./...
-```
+MIT

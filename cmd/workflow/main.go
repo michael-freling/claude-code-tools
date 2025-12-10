@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/michael-freling/claude-code-config/internal/workflow"
+	"github.com/michael-freling/claude-code-tools/internal/workflow"
 	"github.com/spf13/cobra"
 )
 
