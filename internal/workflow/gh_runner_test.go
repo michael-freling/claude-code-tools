@@ -368,3 +368,178 @@ func TestGhRunner_PRChecks(t *testing.T) {
 		})
 	}
 }
+
+func TestGhRunner_RunRerun(t *testing.T) {
+	tests := []struct {
+		name        string
+		dir         string
+		runID       int64
+		setupMock   func(*MockCommandRunner)
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:  "reruns workflow successfully",
+			dir:   "/test/repo",
+			runID: 123456789,
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "run", "rerun", "123456789", "--failed").
+					Return("", "", nil)
+			},
+		},
+		{
+			name:  "reruns with different run ID",
+			dir:   "/test/repo",
+			runID: 987654321,
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "run", "rerun", "987654321", "--failed").
+					Return("", "", nil)
+			},
+		},
+		{
+			name:  "returns error when rerun fails",
+			dir:   "/test/repo",
+			runID: 111222333,
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "run", "rerun", "111222333", "--failed").
+					Return("", "workflow run not found", fmt.Errorf("exit status 1"))
+			},
+			wantErr:     true,
+			errContains: "failed to rerun workflow",
+		},
+		{
+			name:  "includes stderr in error message",
+			dir:   "/test/repo",
+			runID: 444555666,
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "run", "rerun", "444555666", "--failed").
+					Return("", "GraphQL: Could not resolve to a WorkflowRun", fmt.Errorf("exit status 1"))
+			},
+			wantErr:     true,
+			errContains: "stderr: GraphQL: Could not resolve to a WorkflowRun",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRunner := new(MockCommandRunner)
+			tt.setupMock(mockRunner)
+
+			ghRunner := NewGhRunner(mockRunner)
+			ctx := context.Background()
+
+			err := ghRunner.RunRerun(ctx, tt.dir, tt.runID)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				mockRunner.AssertExpectations(t)
+				return
+			}
+
+			require.NoError(t, err)
+			mockRunner.AssertExpectations(t)
+		})
+	}
+}
+
+func TestGhRunner_GetLatestRunID(t *testing.T) {
+	tests := []struct {
+		name        string
+		dir         string
+		prNumber    int
+		setupMock   func(*MockCommandRunner)
+		want        int64
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "gets latest run ID successfully",
+			dir:      "/test/repo",
+			prNumber: 123,
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "checks", "123", "--json", "databaseId").
+					Return(`[{"databaseId":987654321},{"databaseId":123456789}]`, "", nil)
+			},
+			want: 987654321,
+		},
+		{
+			name:     "gets run ID for different PR",
+			dir:      "/test/repo",
+			prNumber: 456,
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "checks", "456", "--json", "databaseId").
+					Return(`[{"databaseId":111222333}]`, "", nil)
+			},
+			want: 111222333,
+		},
+		{
+			name:     "returns error when command fails",
+			dir:      "/test/repo",
+			prNumber: 789,
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "checks", "789", "--json", "databaseId").
+					Return("", "no pull request found", fmt.Errorf("exit status 1"))
+			},
+			wantErr:     true,
+			errContains: "failed to get workflow run ID",
+		},
+		{
+			name:     "returns error when JSON parsing fails",
+			dir:      "/test/repo",
+			prNumber: 999,
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "checks", "999", "--json", "databaseId").
+					Return("invalid json", "", nil)
+			},
+			wantErr:     true,
+			errContains: "failed to parse workflow run ID from output",
+		},
+		{
+			name:     "returns error when no runs found",
+			dir:      "/test/repo",
+			prNumber: 111,
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "checks", "111", "--json", "databaseId").
+					Return("[]", "", nil)
+			},
+			wantErr:     true,
+			errContains: "no workflow runs found for PR 111",
+		},
+		{
+			name:     "includes stderr in error message",
+			dir:      "/test/repo",
+			prNumber: 222,
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "checks", "222", "--json", "databaseId").
+					Return("", "GraphQL: Could not resolve to a PullRequest", fmt.Errorf("exit status 1"))
+			},
+			wantErr:     true,
+			errContains: "stderr: GraphQL: Could not resolve to a PullRequest",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRunner := new(MockCommandRunner)
+			tt.setupMock(mockRunner)
+
+			ghRunner := NewGhRunner(mockRunner)
+			ctx := context.Background()
+
+			got, err := ghRunner.GetLatestRunID(ctx, tt.dir, tt.prNumber)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				assert.Equal(t, int64(0), got)
+				mockRunner.AssertExpectations(t)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			mockRunner.AssertExpectations(t)
+		})
+	}
+}

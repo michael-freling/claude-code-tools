@@ -64,6 +64,7 @@ type Orchestrator struct {
 	confirmFunc     func(plan *Plan) (bool, string, error)
 	worktreeManager WorktreeManager
 	logger          Logger
+	ghRunner        GhRunner
 
 	// For testing - if nil, creates real checker
 	ciCheckerFactory func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) CIChecker
@@ -94,6 +95,8 @@ func NewOrchestratorWithConfig(config *Config) (*Orchestrator, error) {
 	stateManager := NewStateManager(config.BaseDir)
 	parser := NewOutputParser()
 	worktreeManager := NewWorktreeManager(config.BaseDir)
+	cmdRunner := NewCommandRunner()
+	ghRunner := NewGhRunner(cmdRunner)
 
 	return &Orchestrator{
 		stateManager:    stateManager,
@@ -104,6 +107,7 @@ func NewOrchestratorWithConfig(config *Config) (*Orchestrator, error) {
 		confirmFunc:     defaultConfirmFunc,
 		worktreeManager: worktreeManager,
 		logger:          logger,
+		ghRunner:        ghRunner,
 	}, nil
 }
 
@@ -553,6 +557,20 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 		}
 
 		ciSpinner.Fail("CI failed")
+
+		// Check if only cancelled jobs - if so, auto-rerun once
+		if len(ciResult.CancelledJobs) > 0 && len(ciResult.FailedJobs) == 0 {
+			ciResult, err = o.handleCancelledCI(ctx, 0, workingDir, ciResult)
+			if err != nil {
+				fmt.Printf("%s Failed to rerun cancelled jobs: %v\n", Yellow("⚠"), err)
+				// Continue to fix loop with original result
+			} else if ciResult.Passed {
+				// CI passed after rerun, continue to next phase
+				return o.transitionPhase(state, PhaseRefactoring)
+			}
+			// If still has failures after rerun, continue to fix loop
+		}
+
 		lastError = formatCIErrors(ciResult)
 		displayCIFailure(ciResult)
 
@@ -689,6 +707,20 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 		}
 
 		ciSpinner.Fail("CI failed")
+
+		// Check if only cancelled jobs - if so, auto-rerun once
+		if len(ciResult.CancelledJobs) > 0 && len(ciResult.FailedJobs) == 0 {
+			ciResult, err = o.handleCancelledCI(ctx, 0, workingDir, ciResult)
+			if err != nil {
+				fmt.Printf("%s Failed to rerun cancelled jobs: %v\n", Yellow("⚠"), err)
+				// Continue to fix loop with original result
+			} else if ciResult.Passed {
+				// CI passed after rerun, break from loop
+				break
+			}
+			// If still has failures after rerun, continue to fix loop
+		}
+
 		lastError = formatCIErrors(ciResult)
 		displayCIFailure(ciResult)
 
@@ -842,6 +874,22 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 
 			if !ciResult.Passed {
 				ciSpinner.Fail("CI failed")
+
+				// Check if only cancelled jobs - if so, auto-rerun once
+				if len(ciResult.CancelledJobs) > 0 && len(ciResult.FailedJobs) == 0 {
+					ciResult, err = o.handleCancelledCI(ctx, childPR.Number, workingDir, ciResult)
+					if err != nil {
+						fmt.Printf("%s Failed to rerun cancelled jobs for child PR #%d: %v\n", Yellow("⚠"), childPR.Number, err)
+						// Continue with original result
+					} else if ciResult.Passed {
+						// CI passed after rerun
+						ciSpinner.Success("CI passed")
+						fmt.Printf("  %s Child PR #%d passed all checks after rerun\n", Green("✓"), childPR.Number)
+						continue // Check next child PR
+					}
+					// If still has failures after rerun, continue to handle failure
+				}
+
 				allPassed = false
 				if isLastChild {
 					fmt.Printf("%s\n", Yellow("Last child PR must pass e2e tests"))
@@ -1034,7 +1082,7 @@ func defaultConfirmFunc(plan *Plan) (bool, string, error) {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
-		fmt.Print(Bold("Approve this plan? [y/n/feedback]: "))
+		fmt.Print(Bold("Approve this plan? [y/n]: "))
 
 		if !scanner.Scan() {
 			return false, "", fmt.Errorf("failed to read input")
@@ -1043,7 +1091,7 @@ func defaultConfirmFunc(plan *Plan) (bool, string, error) {
 		response := strings.TrimSpace(strings.ToLower(scanner.Text()))
 
 		if response == "" {
-			fmt.Println(Yellow("Please enter 'y' to approve, 'n' to cancel, or type your feedback."))
+			fmt.Println(Yellow("Please enter 'y' to approve or 'n' to provide feedback."))
 			continue
 		}
 
@@ -1052,7 +1100,15 @@ func defaultConfirmFunc(plan *Plan) (bool, string, error) {
 		}
 
 		if response == "no" || response == "n" {
-			return false, "", ErrUserCancelled
+			fmt.Print("Please provide your feedback: ")
+
+			if !scanner.Scan() {
+				return false, "", fmt.Errorf("failed to read feedback input")
+			}
+
+			feedback := strings.TrimSpace(scanner.Text())
+			fmt.Println(Green("✓") + " Feedback received. Replanning with your suggestions...")
+			return false, feedback, nil
 		}
 
 		// Treat any other non-empty input as feedback
@@ -1066,22 +1122,90 @@ func formatCIErrors(result *CIResult) string {
 	var builder strings.Builder
 	builder.WriteString("CI checks failed with the following errors:\n\n")
 	builder.WriteString(result.Output)
-	builder.WriteString("\n\nFailed jobs:\n")
-	for _, job := range result.FailedJobs {
-		builder.WriteString("- ")
-		builder.WriteString(job)
-		builder.WriteString("\n")
+
+	if len(result.FailedJobs) > 0 {
+		builder.WriteString("\n\nFailed jobs:\n")
+		for _, job := range result.FailedJobs {
+			builder.WriteString("- ")
+			builder.WriteString(job)
+			builder.WriteString("\n")
+		}
 	}
+
+	if len(result.CancelledJobs) > 0 {
+		if len(result.FailedJobs) > 0 {
+			builder.WriteString("\nCancelled jobs (infrastructure issue, not code failure):\n")
+		} else {
+			builder.WriteString("\n\nCancelled jobs (infrastructure issue, not code failure):\n")
+		}
+		for _, job := range result.CancelledJobs {
+			builder.WriteString("- ")
+			builder.WriteString(job)
+			builder.WriteString("\n")
+		}
+	}
+
 	return builder.String()
 }
 
 // displayCIFailure displays CI failures to the console
 func displayCIFailure(ciResult *CIResult) {
-	fmt.Printf("\n%s\n", Red("CI failures detected:"))
-	for _, job := range ciResult.FailedJobs {
-		fmt.Printf("  %s %s\n", Red("✗"), job)
+	if len(ciResult.FailedJobs) > 0 {
+		fmt.Printf("\n%s\n", Red("CI failures detected:"))
+		for _, job := range ciResult.FailedJobs {
+			fmt.Printf("  %s %s\n", Red("✗"), job)
+		}
+	}
+	if len(ciResult.CancelledJobs) > 0 {
+		fmt.Printf("\n%s\n", Yellow("CI jobs cancelled:"))
+		for _, job := range ciResult.CancelledJobs {
+			fmt.Printf("  %s %s\n", Yellow("⚠"), job)
+		}
 	}
 	fmt.Printf("\n%s\n", ciResult.Output)
+}
+
+// handleCancelledCI checks if only cancelled jobs exist and attempts to rerun them
+// Returns the new CI result after rerun, or the original result if no rerun needed
+func (o *Orchestrator) handleCancelledCI(ctx context.Context, prNumber int, workingDir string, ciResult *CIResult) (*CIResult, error) {
+	// Check if only cancelled jobs (no actual failures)
+	if len(ciResult.CancelledJobs) == 0 || len(ciResult.FailedJobs) > 0 {
+		return ciResult, nil // Not just cancelled, return as-is
+	}
+
+	fmt.Printf("\n%s CI jobs were cancelled (not failed). Attempting to rerun...\n", Yellow("⚠"))
+
+	// Get latest run ID
+	runID, err := o.ghRunner.GetLatestRunID(ctx, workingDir, prNumber)
+	if err != nil {
+		return ciResult, fmt.Errorf("failed to get run ID for rerun: %w", err)
+	}
+
+	// Rerun cancelled jobs
+	if err := o.ghRunner.RunRerun(ctx, workingDir, runID); err != nil {
+		return ciResult, fmt.Errorf("failed to rerun cancelled jobs: %w", err)
+	}
+
+	fmt.Printf("%s Cancelled jobs rerun triggered. Waiting for CI...\n", Green("✓"))
+
+	// Wait for CI again
+	ciSpinner := NewCISpinner("Waiting for CI to complete after rerun")
+	ciSpinner.Start()
+
+	ciChecker := o.getCIChecker(workingDir)
+	newResult, err := ciChecker.WaitForCIWithProgress(ctx, prNumber, o.config.CICheckTimeout, CheckCIOptions{}, ciSpinner.OnProgress)
+	if err != nil {
+		ciSpinner.Fail("CI check failed")
+		return ciResult, fmt.Errorf("failed to check CI after rerun: %w", err)
+	}
+
+	if newResult.Passed {
+		ciSpinner.Success("CI passed after rerun")
+	} else {
+		ciSpinner.Fail("CI failed after rerun")
+	}
+
+	return newResult, nil
 }
 
 // getCIChecker creates or retrieves a CIChecker for the given working directory

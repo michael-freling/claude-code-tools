@@ -21,14 +21,15 @@ type ciCheck struct {
 
 // CIProgressEvent represents a CI check progress update
 type CIProgressEvent struct {
-	Type         string // "waiting", "checking", "retry", "status"
-	Elapsed      time.Duration
-	Message      string
-	JobsPassed   int
-	JobsFailed   int
-	JobsPending  int
-	RetryAttempt int
-	NextCheckIn  time.Duration
+	Type          string // "waiting", "checking", "retry", "status"
+	Elapsed       time.Duration
+	Message       string
+	JobsPassed    int
+	JobsFailed    int
+	JobsPending   int
+	JobsCancelled int
+	RetryAttempt  int
+	NextCheckIn   time.Duration
 }
 
 // CIProgressCallback is called when CI check progress updates
@@ -48,10 +49,11 @@ type CIChecker interface {
 
 // CIResult represents the result of CI checks
 type CIResult struct {
-	Passed     bool
-	Status     string
-	FailedJobs []string
-	Output     string
+	Passed        bool
+	Status        string
+	FailedJobs    []string
+	CancelledJobs []string
+	Output        string
 }
 
 // ciChecker implements CIChecker interface
@@ -188,7 +190,7 @@ func (c *ciChecker) checkCIOnce(ctx context.Context, prNumber int) (*CIResult, e
 		return result, err
 	}
 
-	result.Status, result.FailedJobs = parseCIOutput(output)
+	result.Status, result.FailedJobs, result.CancelledJobs = parseCIOutput(output)
 	result.Passed = result.Status == "success"
 	return result, nil
 }
@@ -230,16 +232,17 @@ func (c *ciChecker) WaitForCIWithProgress(ctx context.Context, prNumber int, tim
 	}
 
 	if err == nil {
-		passed, failed, pending := countJobStatuses(result.Output)
+		passed, failed, pending, cancelled := countJobStatuses(result.Output)
 		if onProgress != nil {
 			onProgress(CIProgressEvent{
-				Type:        "status",
-				Elapsed:     time.Since(startTime),
-				Message:     fmt.Sprintf("CI status: %s", result.Status),
-				JobsPassed:  passed,
-				JobsFailed:  failed,
-				JobsPending: pending,
-				NextCheckIn: c.checkInterval,
+				Type:          "status",
+				Elapsed:       time.Since(startTime),
+				Message:       fmt.Sprintf("CI status: %s", result.Status),
+				JobsPassed:    passed,
+				JobsFailed:    failed,
+				JobsPending:   pending,
+				JobsCancelled: cancelled,
+				NextCheckIn:   c.checkInterval,
 			})
 		}
 
@@ -318,16 +321,17 @@ checkLoop:
 				return nil, err
 			}
 
-			passed, failed, pending := countJobStatuses(result.Output)
+			passed, failed, pending, cancelled := countJobStatuses(result.Output)
 			if onProgress != nil {
 				onProgress(CIProgressEvent{
-					Type:        "status",
-					Elapsed:     time.Since(startTime),
-					Message:     fmt.Sprintf("CI status: %s", result.Status),
-					JobsPassed:  passed,
-					JobsFailed:  failed,
-					JobsPending: pending,
-					NextCheckIn: c.checkInterval,
+					Type:          "status",
+					Elapsed:       time.Since(startTime),
+					Message:       fmt.Sprintf("CI status: %s", result.Status),
+					JobsPassed:    passed,
+					JobsFailed:    failed,
+					JobsPending:   pending,
+					JobsCancelled: cancelled,
+					NextCheckIn:   c.checkInterval,
 				})
 			}
 
@@ -341,21 +345,22 @@ checkLoop:
 	}
 }
 
-// parseCIOutput parses gh pr checks --json output to extract status and failed jobs
+// parseCIOutput parses gh pr checks --json output to extract status, failed jobs, and cancelled jobs
 // The output is expected to be JSON array: [{"name":"build","state":"SUCCESS"},...]
 // State values: SUCCESS, FAILURE, PENDING, QUEUED, IN_PROGRESS, SKIPPED, NEUTRAL, CANCELLED
-func parseCIOutput(output string) (string, []string) {
+func parseCIOutput(output string) (string, []string, []string) {
 	var checks []ciCheck
 	if err := json.Unmarshal([]byte(output), &checks); err != nil {
 		// If JSON parsing fails, return pending (safest default)
-		return "pending", []string{}
+		return "pending", []string{}, []string{}
 	}
 
 	if len(checks) == 0 {
-		return "pending", []string{}
+		return "pending", []string{}, []string{}
 	}
 
 	failedJobs := []string{}
+	cancelledJobs := []string{}
 	allPassed := true
 	hasPending := false
 
@@ -364,9 +369,12 @@ func parseCIOutput(output string) (string, []string) {
 		switch state {
 		case "SUCCESS", "SKIPPED", "NEUTRAL":
 			// These are considered passing states
-		case "FAILURE", "CANCELLED":
+		case "FAILURE":
 			allPassed = false
 			failedJobs = append(failedJobs, check.Name)
+		case "CANCELLED":
+			allPassed = false
+			cancelledJobs = append(cancelledJobs, check.Name)
 		case "PENDING", "QUEUED", "IN_PROGRESS", "":
 			hasPending = true
 		default:
@@ -376,21 +384,21 @@ func parseCIOutput(output string) (string, []string) {
 	}
 
 	if hasPending {
-		return "pending", failedJobs
+		return "pending", failedJobs, cancelledJobs
 	}
 
 	if allPassed {
-		return "success", failedJobs
+		return "success", failedJobs, cancelledJobs
 	}
 
-	return "failure", failedJobs
+	return "failure", failedJobs, cancelledJobs
 }
 
-// countJobStatuses counts passed, failed, and pending jobs from CI JSON output
-func countJobStatuses(output string) (passed, failed, pending int) {
+// countJobStatuses counts passed, failed, pending, and cancelled jobs from CI JSON output
+func countJobStatuses(output string) (passed, failed, pending, cancelled int) {
 	var checks []ciCheck
 	if err := json.Unmarshal([]byte(output), &checks); err != nil {
-		return 0, 0, 0
+		return 0, 0, 0, 0
 	}
 
 	for _, check := range checks {
@@ -398,8 +406,10 @@ func countJobStatuses(output string) (passed, failed, pending int) {
 		switch state {
 		case "SUCCESS", "SKIPPED", "NEUTRAL":
 			passed++
-		case "FAILURE", "CANCELLED":
+		case "FAILURE":
 			failed++
+		case "CANCELLED":
+			cancelled++
 		case "PENDING", "QUEUED", "IN_PROGRESS", "":
 			pending++
 		default:
@@ -408,10 +418,10 @@ func countJobStatuses(output string) (passed, failed, pending int) {
 		}
 	}
 
-	return passed, failed, pending
+	return passed, failed, pending, cancelled
 }
 
-// filterE2EFailures filters out e2e test failures from CI result
+// filterE2EFailures filters out e2e test failures and cancellations from CI result
 func filterE2EFailures(result *CIResult, e2ePattern string) *CIResult {
 	if result.Passed {
 		return result
@@ -422,18 +432,26 @@ func filterE2EFailures(result *CIResult, e2ePattern string) *CIResult {
 		return result
 	}
 
-	filteredJobs := []string{}
+	filteredFailedJobs := []string{}
 	for _, job := range result.FailedJobs {
 		if !e2eRegex.MatchString(job) {
-			filteredJobs = append(filteredJobs, job)
+			filteredFailedJobs = append(filteredFailedJobs, job)
+		}
+	}
+
+	filteredCancelledJobs := []string{}
+	for _, job := range result.CancelledJobs {
+		if !e2eRegex.MatchString(job) {
+			filteredCancelledJobs = append(filteredCancelledJobs, job)
 		}
 	}
 
 	filtered := &CIResult{
-		Status:     result.Status,
-		Output:     result.Output,
-		FailedJobs: filteredJobs,
-		Passed:     len(filteredJobs) == 0,
+		Status:        result.Status,
+		Output:        result.Output,
+		FailedJobs:    filteredFailedJobs,
+		CancelledJobs: filteredCancelledJobs,
+		Passed:        len(filteredFailedJobs) == 0 && len(filteredCancelledJobs) == 0,
 	}
 
 	return filtered

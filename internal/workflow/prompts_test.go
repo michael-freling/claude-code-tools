@@ -730,8 +730,8 @@ func TestPromptGenerator_GenerateFixCIPrompt_TemplateContent(t *testing.T) {
 			wantContain: []string{
 				"Instructions",
 				"Analyze the CI failure output",
-				"Fix all issues reported by the CI system",
-				"DO NOT skip or ignore any errors",
+				"For FAILED jobs: Fix all issues reported by the CI system",
+				"DO NOT skip or ignore actual errors",
 			},
 		},
 		{
@@ -763,7 +763,7 @@ func TestPromptGenerator_GenerateFixCIPrompt_TemplateContent(t *testing.T) {
 			failures: "error occurred",
 			wantContain: []string{
 				"IMPORTANT",
-				"Fix ALL CI failures",
+				"Fix ALL actual CI failures (failed jobs)",
 				"Ensure all tests pass locally",
 				"Do not skip or disable failing tests",
 				"Address root causes, not symptoms",

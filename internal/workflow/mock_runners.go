@@ -73,3 +73,13 @@ func (m *MockGhRunner) PRChecks(ctx context.Context, dir string, prNumber int, j
 	args := m.Called(ctx, dir, prNumber, jsonFields)
 	return args.String(0), args.Error(1)
 }
+
+func (m *MockGhRunner) RunRerun(ctx context.Context, dir string, runID int64) error {
+	args := m.Called(ctx, dir, runID)
+	return args.Error(0)
+}
+
+func (m *MockGhRunner) GetLatestRunID(ctx context.Context, dir string, prNumber int) (int64, error) {
+	args := m.Called(ctx, dir, prNumber)
+	return args.Get(0).(int64), args.Error(1)
+}
