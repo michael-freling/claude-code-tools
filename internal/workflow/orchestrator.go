@@ -1082,7 +1082,7 @@ func defaultConfirmFunc(plan *Plan) (bool, string, error) {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
-		fmt.Print(Bold("Approve this plan? [y/n/feedback]: "))
+		fmt.Print(Bold("Approve this plan? [y/n]: "))
 
 		if !scanner.Scan() {
 			return false, "", fmt.Errorf("failed to read input")
@@ -1091,7 +1091,7 @@ func defaultConfirmFunc(plan *Plan) (bool, string, error) {
 		response := strings.TrimSpace(strings.ToLower(scanner.Text()))
 
 		if response == "" {
-			fmt.Println(Yellow("Please enter 'y' to approve, 'n' to cancel, or type your feedback."))
+			fmt.Println(Yellow("Please enter 'y' to approve or 'n' to provide feedback."))
 			continue
 		}
 
@@ -1100,7 +1100,15 @@ func defaultConfirmFunc(plan *Plan) (bool, string, error) {
 		}
 
 		if response == "no" || response == "n" {
-			return false, "", ErrUserCancelled
+			fmt.Print("Please provide your feedback: ")
+
+			if !scanner.Scan() {
+				return false, "", fmt.Errorf("failed to read feedback input")
+			}
+
+			feedback := strings.TrimSpace(scanner.Text())
+			fmt.Println(Green("✓") + " Feedback received. Replanning with your suggestions...")
+			return false, feedback, nil
 		}
 
 		// Treat any other non-empty input as feedback
