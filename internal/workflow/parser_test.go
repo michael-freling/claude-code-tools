@@ -631,7 +631,7 @@ func TestTruncateOutput(t *testing.T) {
 			name:     "truncates output when over max length",
 			output:   "this is a very long output that should be truncated",
 			maxLen:   20,
-			expected: "this is a very long ...\n(truncated, showing first 500 chars)",
+			expected: "this is a very long ...\n(truncated, showing first 20 chars)",
 		},
 		{
 			name:     "returns exact length output unchanged",

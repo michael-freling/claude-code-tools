@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // GhRunner abstracts gh CLI command execution for testing
@@ -38,6 +39,13 @@ func NewGhRunner(runner CommandRunner) GhRunner {
 
 // PRCreate creates a new PR and returns the PR URL
 func (g *ghRunner) PRCreate(ctx context.Context, dir string, title, body, head, base string) (string, error) {
+	if title == "" {
+		return "", fmt.Errorf("title cannot be empty")
+	}
+	if head == "" {
+		return "", fmt.Errorf("head branch cannot be empty")
+	}
+
 	args := []string{"pr", "create", "--title", title, "--body", body, "--head", head}
 	if base != "" {
 		args = append(args, "--base", base)
@@ -48,11 +56,15 @@ func (g *ghRunner) PRCreate(ctx context.Context, dir string, title, body, head, 
 		return "", fmt.Errorf("failed to create PR: %w (stderr: %s)", err, stderr)
 	}
 
-	return stdout, nil
+	return strings.TrimSpace(stdout), nil
 }
 
 // PREdit updates the body of an existing PR
 func (g *ghRunner) PREdit(ctx context.Context, dir string, prNumber int, body string) error {
+	if prNumber <= 0 {
+		return fmt.Errorf("PR number must be positive, got %d", prNumber)
+	}
+
 	args := []string{"pr", "edit", fmt.Sprintf("%d", prNumber), "--body", body}
 
 	_, stderr, err := g.runner.RunInDir(ctx, dir, "gh", args...)
@@ -65,6 +77,10 @@ func (g *ghRunner) PREdit(ctx context.Context, dir string, prNumber int, body st
 
 // PRClose closes a PR
 func (g *ghRunner) PRClose(ctx context.Context, dir string, prNumber int) error {
+	if prNumber <= 0 {
+		return fmt.Errorf("PR number must be positive, got %d", prNumber)
+	}
+
 	args := []string{"pr", "close", fmt.Sprintf("%d", prNumber)}
 
 	_, stderr, err := g.runner.RunInDir(ctx, dir, "gh", args...)

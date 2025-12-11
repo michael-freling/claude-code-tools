@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -530,11 +529,6 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 
 		spinner.Success("Implementation complete")
 
-		workingDir := state.WorktreePath
-		if workingDir == "" {
-			workingDir = o.config.BaseDir
-		}
-
 		if err := o.stateManager.SaveState(state.Name, state); err != nil {
 			return fmt.Errorf("failed to save state: %w", err)
 		}
@@ -545,6 +539,7 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 		o.logger.Verbose("Starting CI check with %s interval, %s timeout",
 			FormatDuration(o.config.CICheckInterval),
 			FormatDuration(o.config.CICheckTimeout))
+		workingDir := o.getWorkingDir(state)
 		ciChecker := o.getCIChecker(workingDir)
 		ciResult, err := ciChecker.WaitForCIWithProgress(ctx, 0, o.config.CICheckTimeout, CheckCIOptions{}, ciSpinner.OnProgress)
 		if err != nil {
@@ -682,14 +677,10 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 
 		spinner.Success("Refactoring complete")
 
-		workingDir := state.WorktreePath
-		if workingDir == "" {
-			workingDir = o.config.BaseDir
-		}
-
 		ciSpinner := NewCISpinner("Waiting for CI to complete")
 		ciSpinner.Start()
 
+		workingDir := o.getWorkingDir(state)
 		ciChecker := o.getCIChecker(workingDir)
 		ciResult, err := ciChecker.WaitForCIWithProgress(ctx, 0, o.config.CICheckTimeout, CheckCIOptions{}, ciSpinner.OnProgress)
 		if err != nil {
@@ -774,12 +765,12 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 		return o.failWorkflow(state, fmt.Errorf("PR metrics not available"))
 	}
 
-	sourceBranch, err := o.getSourceBranch(ctx, state.WorktreePath)
+	sourceBranch, err := o.gitRunner.GetCurrentBranch(ctx, state.WorktreePath)
 	if err != nil {
 		return o.failWorkflow(state, fmt.Errorf("failed to get source branch: %w", err))
 	}
 
-	commits, err := o.getCommits(ctx, state.WorktreePath, "main")
+	commits, err := o.gitRunner.GetCommits(ctx, state.WorktreePath, "main")
 	if err != nil {
 		return o.failWorkflow(state, fmt.Errorf("failed to get commits: %w", err))
 	}
@@ -865,10 +856,7 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 			return o.failWorkflow(state, fmt.Errorf("failed to save PR split output: %w", err))
 		}
 
-		workingDir := state.WorktreePath
-		if workingDir == "" {
-			workingDir = o.config.BaseDir
-		}
+		workingDir := o.getWorkingDir(state)
 
 		allPassed := true
 		for i, childPR := range prResult.ChildPRs {
@@ -934,14 +922,12 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 	return o.transitionPhase(state, PhaseCompleted)
 }
 
-// getSourceBranch gets the current branch as the source branch
-func (o *Orchestrator) getSourceBranch(ctx context.Context, dir string) (string, error) {
-	return o.gitRunner.GetCurrentBranch(ctx, dir)
-}
-
-// getCommits gets commits from the base branch to HEAD
-func (o *Orchestrator) getCommits(ctx context.Context, dir string, base string) ([]Commit, error) {
-	return o.gitRunner.GetCommits(ctx, dir, base)
+// getWorkingDir returns the working directory for the workflow, defaulting to BaseDir if not set
+func (o *Orchestrator) getWorkingDir(state *WorkflowState) string {
+	if state.WorktreePath != "" {
+		return state.WorktreePath
+	}
+	return o.config.BaseDir
 }
 
 // transitionPhase transitions the workflow to the next phase
@@ -1015,16 +1001,12 @@ func (o *Orchestrator) failWorkflowWithType(state *WorkflowState, err error, fai
 
 // getPRMetrics collects PR metrics from git diff
 func (o *Orchestrator) getPRMetrics(ctx context.Context, workingDir string) (*PRMetrics, error) {
-	cmd := exec.CommandContext(ctx, "git", "diff", "--stat", "origin/main")
-	if workingDir != "" {
-		cmd.Dir = workingDir
-	}
-	output, err := cmd.Output()
+	output, err := o.gitRunner.GetDiffStat(ctx, workingDir, "origin/main")
 	if err != nil {
-		return nil, fmt.Errorf("failed to run git diff: %w", err)
+		return nil, fmt.Errorf("failed to get diff stat: %w", err)
 	}
 
-	return parseDiffStat(string(output))
+	return parseDiffStat(output)
 }
 
 // parseDiffStat parses git diff --stat output

@@ -84,7 +84,7 @@ func truncateOutput(output string, maxLen int) string {
 	if len(output) <= maxLen {
 		return output
 	}
-	return output[:maxLen] + "...\n(truncated, showing first 500 chars)"
+	return output[:maxLen] + fmt.Sprintf("...\n(truncated, showing first %d chars)", maxLen)
 }
 
 // ParsePlan parses a Plan from JSON string
@@ -174,7 +174,7 @@ func (p *outputParser) findJSONBlocks(output string) []string {
 // unmarshalJSON unmarshals JSON string into target
 func (p *outputParser) unmarshalJSON(jsonStr string, target interface{}) error {
 	if err := json.Unmarshal([]byte(jsonStr), target); err != nil {
-		return fmt.Errorf("invalid JSON: %w: %w", err, ErrParseJSON)
+		return fmt.Errorf("invalid JSON %w: %w", ErrParseJSON, err)
 	}
 	return nil
 }

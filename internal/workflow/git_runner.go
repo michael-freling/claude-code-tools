@@ -34,6 +34,8 @@ type GitRunner interface {
 	CheckoutFiles(ctx context.Context, dir string, sourceBranch string, files []string) error
 	// CommitAll stages all changes and creates a commit
 	CommitAll(ctx context.Context, dir string, message string) error
+	// GetDiffStat returns the diff stat output for the given base branch
+	GetDiffStat(ctx context.Context, dir string, base string) (string, error)
 }
 
 type gitRunner struct {
@@ -265,4 +267,18 @@ func (g *gitRunner) CommitAll(ctx context.Context, dir string, message string) e
 	}
 
 	return nil
+}
+
+// GetDiffStat returns the diff stat output for the given base branch
+func (g *gitRunner) GetDiffStat(ctx context.Context, dir string, base string) (string, error) {
+	if base == "" {
+		return "", fmt.Errorf("base branch cannot be empty")
+	}
+
+	stdout, stderr, err := g.runner.RunInDir(ctx, dir, "git", "diff", "--stat", base)
+	if err != nil {
+		return "", fmt.Errorf("failed to get diff stat from %s: %w (stderr: %s)", base, err, stderr)
+	}
+
+	return stdout, nil
 }

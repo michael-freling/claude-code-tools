@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-var prNumberRegex = regexp.MustCompile(`/pull/(\d+)`)
+var prNumberRegex = regexp.MustCompile(`/pull/(\d+)(?:[/?#]|$)`)
 
 // PRManager handles PR creation and management
 type PRManager interface {

@@ -287,6 +287,61 @@ func TestPRSplitManager_ExecuteSplit_Errors(t *testing.T) {
 		errContains  string
 	}{
 		{
+			name:         "fails when plan is nil",
+			dir:          "/test/repo",
+			plan:         nil,
+			sourceBranch: "feature-branch",
+			mainBranch:   "main",
+			setupMocks:   func(mockGit *MockGitRunner, mockGh *MockGhRunner) {},
+			wantErr:      true,
+			errContains:  "plan cannot be nil",
+		},
+		{
+			name: "fails when plan has no child PRs",
+			dir:  "/test/repo",
+			plan: &PRSplitPlan{
+				Strategy:    SplitByCommits,
+				ParentTitle: "Parent PR",
+				ParentDesc:  "Description",
+				ChildPRs:    []ChildPRPlan{},
+			},
+			sourceBranch: "feature-branch",
+			mainBranch:   "main",
+			setupMocks:   func(mockGit *MockGitRunner, mockGh *MockGhRunner) {},
+			wantErr:      true,
+			errContains:  "plan must have at least one child PR",
+		},
+		{
+			name: "fails when sourceBranch is empty",
+			dir:  "/test/repo",
+			plan: &PRSplitPlan{
+				Strategy:    SplitByCommits,
+				ParentTitle: "Parent PR",
+				ParentDesc:  "Description",
+				ChildPRs:    []ChildPRPlan{{Title: "Child 1", Commits: []string{"abc123"}}},
+			},
+			sourceBranch: "",
+			mainBranch:   "main",
+			setupMocks:   func(mockGit *MockGitRunner, mockGh *MockGhRunner) {},
+			wantErr:      true,
+			errContains:  "sourceBranch cannot be empty",
+		},
+		{
+			name: "fails when mainBranch is empty",
+			dir:  "/test/repo",
+			plan: &PRSplitPlan{
+				Strategy:    SplitByCommits,
+				ParentTitle: "Parent PR",
+				ParentDesc:  "Description",
+				ChildPRs:    []ChildPRPlan{{Title: "Child 1", Commits: []string{"abc123"}}},
+			},
+			sourceBranch: "feature-branch",
+			mainBranch:   "",
+			setupMocks:   func(mockGit *MockGitRunner, mockGh *MockGhRunner) {},
+			wantErr:      true,
+			errContains:  "mainBranch cannot be empty",
+		},
+		{
 			name:         "fails when parent branch creation fails",
 			dir:          "/test/repo",
 			sourceBranch: "feature-branch",
@@ -596,6 +651,21 @@ func TestExtractPRNumber(t *testing.T) {
 			name:  "extracts large PR number",
 			prURL: "https://github.com/owner/repo/pull/12345",
 			want:  12345,
+		},
+		{
+			name:  "extracts PR number with query parameters",
+			prURL: "https://github.com/owner/repo/pull/999?tab=checks",
+			want:  999,
+		},
+		{
+			name:  "extracts PR number with fragment",
+			prURL: "https://github.com/owner/repo/pull/888#discussion_r123",
+			want:  888,
+		},
+		{
+			name:  "extracts PR number with trailing slash",
+			prURL: "https://github.com/owner/repo/pull/777/",
+			want:  777,
 		},
 		{
 			name:        "fails with empty URL",

@@ -3,7 +3,6 @@ package workflow
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -33,12 +32,31 @@ func NewPRSplitManager(git GitRunner, gh GhRunner) PRSplitManager {
 
 // ExecuteSplit executes the complete PR split workflow
 func (p *prSplitManager) ExecuteSplit(ctx context.Context, dir string, plan *PRSplitPlan, sourceBranch string, mainBranch string) (*PRSplitResult, error) {
+	if plan == nil {
+		return nil, fmt.Errorf("plan cannot be nil")
+	}
+	if len(plan.ChildPRs) == 0 {
+		return nil, fmt.Errorf("plan must have at least one child PR")
+	}
+	if sourceBranch == "" {
+		return nil, fmt.Errorf("sourceBranch cannot be empty")
+	}
+	if mainBranch == "" {
+		return nil, fmt.Errorf("mainBranch cannot be empty")
+	}
+
 	result := &PRSplitResult{
-		BranchNames: make([]string, 0),
+		BranchNames: make([]string, 0, 1+len(plan.ChildPRs)),
 	}
 
 	parentBranch := generateParentBranchName(sourceBranch)
 	result.BranchNames = append(result.BranchNames, parentBranch)
+
+	childBranches := make([]string, len(plan.ChildPRs))
+	for i := range plan.ChildPRs {
+		childBranches[i] = generateChildBranchName(sourceBranch, i)
+		result.BranchNames = append(result.BranchNames, childBranches[i])
+	}
 
 	if err := p.git.CreateBranch(ctx, dir, parentBranch, mainBranch); err != nil {
 		return result, fmt.Errorf("failed to create parent branch: %w", err)
@@ -59,8 +77,7 @@ func (p *prSplitManager) ExecuteSplit(ctx context.Context, dir string, plan *PRS
 
 	baseBranch := parentBranch
 	for i, childPlan := range plan.ChildPRs {
-		childBranch := generateChildBranchName(sourceBranch, i)
-		result.BranchNames = append(result.BranchNames, childBranch)
+		childBranch := childBranches[i]
 
 		if err := p.git.CreateBranch(ctx, dir, childBranch, baseBranch); err != nil {
 			return result, fmt.Errorf("failed to create child branch %d: %w", i+1, err)
@@ -101,7 +118,7 @@ func (p *prSplitManager) ExecuteSplit(ctx context.Context, dir string, plan *PRS
 	baseBranch = parentBranch
 	childPRLinks := make([]string, 0, len(plan.ChildPRs))
 	for i, childPlan := range plan.ChildPRs {
-		childBranch := generateChildBranchName(sourceBranch, i)
+		childBranch := childBranches[i]
 
 		childPRURL, err := p.gh.PRCreate(ctx, dir, childPlan.Title, childPlan.Description, childBranch, baseBranch)
 		if err != nil {
@@ -208,8 +225,7 @@ func extractPRNumber(prURL string) (int, error) {
 		return 0, fmt.Errorf("PR URL is empty")
 	}
 
-	re := regexp.MustCompile(`/pull/(\d+)`)
-	matches := re.FindStringSubmatch(prURL)
+	matches := prNumberRegex.FindStringSubmatch(prURL)
 	if len(matches) < 2 {
 		return 0, fmt.Errorf("invalid PR URL format: %s", prURL)
 	}

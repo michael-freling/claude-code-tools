@@ -1221,3 +1221,110 @@ func TestGitRunner_CommitAll(t *testing.T) {
 		})
 	}
 }
+
+func TestGitRunner_GetDiffStat(t *testing.T) {
+	tests := []struct {
+		name        string
+		dir         string
+		base        string
+		setupMock   func(*MockCommandRunner)
+		want        string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "returns diff stat successfully",
+			dir:  "/test/repo",
+			base: "origin/main",
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "git", "diff", "--stat", "origin/main").
+					Return(" file1.go | 10 ++++++++++\n file2.go | 5 +++--\n 2 files changed, 13 insertions(+), 2 deletions(-)\n", "", nil)
+			},
+			want: " file1.go | 10 ++++++++++\n file2.go | 5 +++--\n 2 files changed, 13 insertions(+), 2 deletions(-)\n",
+		},
+		{
+			name: "returns empty diff stat when no changes",
+			dir:  "/test/repo",
+			base: "origin/main",
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "git", "diff", "--stat", "origin/main").
+					Return("", "", nil)
+			},
+			want: "",
+		},
+		{
+			name: "handles different base branch",
+			dir:  "/test/repo",
+			base: "main",
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "git", "diff", "--stat", "main").
+					Return(" file1.go | 10 ++++++++++\n 1 file changed, 10 insertions(+)\n", "", nil)
+			},
+			want: " file1.go | 10 ++++++++++\n 1 file changed, 10 insertions(+)\n",
+		},
+		{
+			name:        "fails when base branch is empty",
+			dir:         "/test/repo",
+			base:        "",
+			setupMock:   func(m *MockCommandRunner) {},
+			wantErr:     true,
+			errContains: "base branch cannot be empty",
+		},
+		{
+			name: "returns error when git command fails",
+			dir:  "/test/repo",
+			base: "origin/main",
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "git", "diff", "--stat", "origin/main").
+					Return("", "fatal: bad revision", fmt.Errorf("exit status 128"))
+			},
+			wantErr:     true,
+			errContains: "failed to get diff stat from origin/main",
+		},
+		{
+			name: "includes stderr in error message",
+			dir:  "/test/repo",
+			base: "origin/main",
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "git", "diff", "--stat", "origin/main").
+					Return("", "fatal: not a git repository", fmt.Errorf("exit status 128"))
+			},
+			wantErr:     true,
+			errContains: "stderr: fatal: not a git repository",
+		},
+		{
+			name: "handles empty directory path",
+			dir:  "",
+			base: "origin/main",
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "", "git", "diff", "--stat", "origin/main").
+					Return(" file1.go | 10 ++++++++++\n 1 file changed, 10 insertions(+)\n", "", nil)
+			},
+			want: " file1.go | 10 ++++++++++\n 1 file changed, 10 insertions(+)\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRunner := new(MockCommandRunner)
+			tt.setupMock(mockRunner)
+
+			gitRunner := NewGitRunner(mockRunner)
+			ctx := context.Background()
+
+			got, err := gitRunner.GetDiffStat(ctx, tt.dir, tt.base)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				assert.Empty(t, got)
+				mockRunner.AssertExpectations(t)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			mockRunner.AssertExpectations(t)
+		})
+	}
+}

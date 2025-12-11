@@ -102,6 +102,11 @@ func (m *MockGitRunner) CommitAll(ctx context.Context, dir string, message strin
 	return args.Error(0)
 }
 
+func (m *MockGitRunner) GetDiffStat(ctx context.Context, dir string, base string) (string, error) {
+	args := m.Called(ctx, dir, base)
+	return args.String(0), args.Error(1)
+}
+
 // MockGhRunner is a mock implementation of GhRunner
 type MockGhRunner struct {
 	mock.Mock
