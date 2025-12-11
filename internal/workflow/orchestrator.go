@@ -771,13 +771,24 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 	var prResult *PRSplitResult
 	var lastError string
 
+	var commits []Commit
+	if phaseState.Attempts == 0 {
+		cmdRunner := NewCommandRunner()
+		gitRunner := NewGitRunner(cmdRunner)
+		var err error
+		commits, err = gitRunner.GetCommits(ctx, state.WorktreePath, "main")
+		if err != nil {
+			return o.failWorkflow(state, fmt.Errorf("failed to get commits: %w", err))
+		}
+	}
+
 	for attempt := 1; attempt <= o.config.MaxFixAttempts; attempt++ {
 		phaseState.Attempts = attempt
 
 		var prompt string
 		var err error
 		if attempt == 1 {
-			prompt, err = o.promptGenerator.GeneratePRSplitPrompt(phaseState.Metrics)
+			prompt, err = o.promptGenerator.GeneratePRSplitPrompt(phaseState.Metrics, commits)
 			if err != nil {
 				return o.failWorkflow(state, fmt.Errorf("failed to generate PR split prompt: %w", err))
 			}

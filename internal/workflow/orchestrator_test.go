@@ -140,8 +140,8 @@ func (m *MockPromptGenerator) GenerateRefactoringPrompt(plan *Plan) (string, err
 	return args.String(0), args.Error(1)
 }
 
-func (m *MockPromptGenerator) GeneratePRSplitPrompt(metrics *PRMetrics) (string, error) {
-	args := m.Called(metrics)
+func (m *MockPromptGenerator) GeneratePRSplitPrompt(metrics *PRMetrics, commits []Commit) (string, error) {
+	args := m.Called(metrics, commits)
 	return args.String(0), args.Error(1)
 }
 
@@ -219,6 +219,14 @@ func (m *MockOutputParser) ParseRefactoringSummary(jsonStr string) (*Refactoring
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*RefactoringSummary), args.Error(1)
+}
+
+func (m *MockOutputParser) ParsePRSplitPlan(jsonStr string) (*PRSplitPlan, error) {
+	args := m.Called(jsonStr)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*PRSplitPlan), args.Error(1)
 }
 
 func (m *MockOutputParser) ParsePRSplitResult(jsonStr string) (*PRSplitResult, error) {
@@ -1349,7 +1357,7 @@ func TestOrchestrator_executePhase(t *testing.T) {
 			phase: PhasePRSplit,
 			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wm *MockWorktreeManager) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
-				pg.On("GeneratePRSplitPrompt", mock.Anything).Return("pr split prompt", nil)
+				pg.On("GeneratePRSplitPrompt", mock.Anything, mock.Anything).Return("pr split prompt", nil)
 				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
 					Output:   "```json\n{\"parent_pr\":{\"number\":1}}\n```",
 					ExitCode: 0,
@@ -2758,7 +2766,7 @@ func TestOrchestrator_executePRSplit(t *testing.T) {
 			name: "successfully splits PR",
 			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser) {
 				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
-				pg.On("GeneratePRSplitPrompt", mock.Anything).Return("pr-split prompt", nil)
+				pg.On("GeneratePRSplitPrompt", mock.Anything, mock.Anything).Return("pr-split prompt", nil)
 				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
 					Output:   "```json\n{\"summary\": \"split complete\"}\n```",
 					ExitCode: 0,
@@ -2848,7 +2856,7 @@ func TestOrchestrator_executePRSplit_CIFailureRetry(t *testing.T) {
 	mockSM.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 
 	// First attempt: GeneratePRSplitPrompt
-	mockPG.On("GeneratePRSplitPrompt", mock.Anything).Return("pr-split prompt", nil).Once()
+	mockPG.On("GeneratePRSplitPrompt", mock.Anything, mock.Anything).Return("pr-split prompt", nil).Once()
 
 	// First execution returns PRs
 	mockExec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
