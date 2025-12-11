@@ -147,11 +147,39 @@ type RefactoringSummary struct {
 	Summary          string   `json:"summary"`
 }
 
+// SplitStrategy represents the strategy for creating child branches
+type SplitStrategy string
+
+const (
+	// SplitByCommits cherry-picks specific commits to each child branch
+	SplitByCommits SplitStrategy = "commits"
+	// SplitByFiles checks out specific files from the original branch
+	SplitByFiles SplitStrategy = "files"
+)
+
+// ChildPRPlan represents the plan for a single child PR
+type ChildPRPlan struct {
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Commits     []string `json:"commits,omitempty"`
+	Files       []string `json:"files,omitempty"`
+}
+
+// PRSplitPlan represents the overall split plan output from Claude
+type PRSplitPlan struct {
+	Strategy    SplitStrategy `json:"strategy"`
+	ParentTitle string        `json:"parentTitle"`
+	ParentDesc  string        `json:"parentDescription"`
+	ChildPRs    []ChildPRPlan `json:"childPRs"`
+	Summary     string        `json:"summary"`
+}
+
 // PRSplitResult represents output from PR split phase
 type PRSplitResult struct {
-	ParentPR PRInfo   `json:"parentPR"`
-	ChildPRs []PRInfo `json:"childPRs"`
-	Summary  string   `json:"summary"`
+	ParentPR    PRInfo   `json:"parentPR"`
+	ChildPRs    []PRInfo `json:"childPRs"`
+	Summary     string   `json:"summary"`
+	BranchNames []string `json:"branchNames,omitempty"`
 }
 
 // PRInfo contains information about a pull request
@@ -176,6 +204,12 @@ type WorkflowInfo struct {
 type CheckCIOptions struct {
 	SkipE2E        bool
 	E2ETestPattern string
+}
+
+// Commit represents a git commit
+type Commit struct {
+	Hash    string `json:"hash"`
+	Subject string `json:"subject"`
 }
 
 // Error variables for common error conditions

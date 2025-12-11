@@ -9,7 +9,11 @@ import (
 // GhRunner abstracts gh CLI command execution for testing
 type GhRunner interface {
 	// PRCreate creates a new PR and returns the PR URL
-	PRCreate(ctx context.Context, dir string, title, body, head string) (prURL string, err error)
+	PRCreate(ctx context.Context, dir string, title, body, head, base string) (prURL string, err error)
+	// PREdit updates the body of an existing PR
+	PREdit(ctx context.Context, dir string, prNumber int, body string) error
+	// PRClose closes a PR
+	PRClose(ctx context.Context, dir string, prNumber int) error
 	// PRView returns PR info as JSON
 	PRView(ctx context.Context, dir string, jsonFields string, jqQuery string) (output string, err error)
 	// PRChecks returns CI check status as JSON
@@ -33,8 +37,11 @@ func NewGhRunner(runner CommandRunner) GhRunner {
 }
 
 // PRCreate creates a new PR and returns the PR URL
-func (g *ghRunner) PRCreate(ctx context.Context, dir string, title, body, head string) (string, error) {
+func (g *ghRunner) PRCreate(ctx context.Context, dir string, title, body, head, base string) (string, error) {
 	args := []string{"pr", "create", "--title", title, "--body", body, "--head", head}
+	if base != "" {
+		args = append(args, "--base", base)
+	}
 
 	stdout, stderr, err := g.runner.RunInDir(ctx, dir, "gh", args...)
 	if err != nil {
@@ -42,6 +49,30 @@ func (g *ghRunner) PRCreate(ctx context.Context, dir string, title, body, head s
 	}
 
 	return stdout, nil
+}
+
+// PREdit updates the body of an existing PR
+func (g *ghRunner) PREdit(ctx context.Context, dir string, prNumber int, body string) error {
+	args := []string{"pr", "edit", fmt.Sprintf("%d", prNumber), "--body", body}
+
+	_, stderr, err := g.runner.RunInDir(ctx, dir, "gh", args...)
+	if err != nil {
+		return fmt.Errorf("failed to edit PR %d: %w (stderr: %s)", prNumber, err, stderr)
+	}
+
+	return nil
+}
+
+// PRClose closes a PR
+func (g *ghRunner) PRClose(ctx context.Context, dir string, prNumber int) error {
+	args := []string{"pr", "close", fmt.Sprintf("%d", prNumber)}
+
+	_, stderr, err := g.runner.RunInDir(ctx, dir, "gh", args...)
+	if err != nil {
+		return fmt.Errorf("failed to close PR %d: %w (stderr: %s)", prNumber, err, stderr)
+	}
+
+	return nil
 }
 
 // PRView returns PR info as JSON

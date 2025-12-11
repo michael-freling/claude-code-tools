@@ -13,6 +13,7 @@ type OutputParser interface {
 	ParsePlan(jsonStr string) (*Plan, error)
 	ParseImplementationSummary(jsonStr string) (*ImplementationSummary, error)
 	ParseRefactoringSummary(jsonStr string) (*RefactoringSummary, error)
+	ParsePRSplitPlan(jsonStr string) (*PRSplitPlan, error)
 	ParsePRSplitResult(jsonStr string) (*PRSplitResult, error)
 }
 
@@ -126,6 +127,20 @@ func (p *outputParser) ParseRefactoringSummary(jsonStr string) (*RefactoringSumm
 	}
 
 	return &summary, nil
+}
+
+// ParsePRSplitPlan parses a PRSplitPlan from JSON string
+func (p *outputParser) ParsePRSplitPlan(jsonStr string) (*PRSplitPlan, error) {
+	var plan PRSplitPlan
+	if err := p.unmarshalJSON(jsonStr, &plan); err != nil {
+		return nil, fmt.Errorf("failed to parse PR split plan: %w", err)
+	}
+
+	if plan.Summary == "" {
+		return nil, fmt.Errorf("PR split plan missing required field 'summary': %w", ErrParseJSON)
+	}
+
+	return &plan, nil
 }
 
 // ParsePRSplitResult parses a PRSplitResult from JSON string

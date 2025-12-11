@@ -40,6 +40,7 @@ func TestGhRunner_PRCreate(t *testing.T) {
 		title       string
 		body        string
 		head        string
+		base        string
 		setupMock   func(*MockCommandRunner)
 		want        string
 		wantErr     bool
@@ -119,6 +120,32 @@ func TestGhRunner_PRCreate(t *testing.T) {
 			},
 			want: "https://github.com/owner/repo/pull/999",
 		},
+		{
+			name:  "creates PR with base parameter",
+			dir:   "/test/repo",
+			title: "Add feature",
+			body:  "Feature description",
+			head:  "feature-branch",
+			base:  "develop",
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "create", "--title", "Add feature", "--body", "Feature description", "--head", "feature-branch", "--base", "develop").
+					Return("https://github.com/owner/repo/pull/100", "", nil)
+			},
+			want: "https://github.com/owner/repo/pull/100",
+		},
+		{
+			name:  "creates PR without base parameter when empty",
+			dir:   "/test/repo",
+			title: "Update code",
+			body:  "Code update",
+			head:  "update-branch",
+			base:  "",
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "create", "--title", "Update code", "--body", "Code update", "--head", "update-branch").
+					Return("https://github.com/owner/repo/pull/200", "", nil)
+			},
+			want: "https://github.com/owner/repo/pull/200",
+		},
 	}
 
 	for _, tt := range tests {
@@ -129,7 +156,7 @@ func TestGhRunner_PRCreate(t *testing.T) {
 			ghRunner := NewGhRunner(mockRunner)
 			ctx := context.Background()
 
-			got, err := ghRunner.PRCreate(ctx, tt.dir, tt.title, tt.body, tt.head)
+			got, err := ghRunner.PRCreate(ctx, tt.dir, tt.title, tt.body, tt.head, tt.base)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -539,6 +566,180 @@ func TestGhRunner_GetLatestRunID(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
+			mockRunner.AssertExpectations(t)
+		})
+	}
+}
+
+func TestGhRunner_PREdit(t *testing.T) {
+	tests := []struct {
+		name        string
+		dir         string
+		prNumber    int
+		body        string
+		setupMock   func(*MockCommandRunner)
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "edits PR successfully",
+			dir:      "/test/repo",
+			prNumber: 123,
+			body:     "Updated PR description",
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "edit", "123", "--body", "Updated PR description").
+					Return("", "", nil)
+			},
+		},
+		{
+			name:     "edits PR with multiline body",
+			dir:      "/test/repo",
+			prNumber: 456,
+			body:     "Updated description:\n- Point 1\n- Point 2",
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "edit", "456", "--body", "Updated description:\n- Point 1\n- Point 2").
+					Return("", "", nil)
+			},
+		},
+		{
+			name:     "edits PR with empty body",
+			dir:      "/test/repo",
+			prNumber: 789,
+			body:     "",
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "edit", "789", "--body", "").
+					Return("", "", nil)
+			},
+		},
+		{
+			name:     "returns error when edit fails",
+			dir:      "/test/repo",
+			prNumber: 999,
+			body:     "New body",
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "edit", "999", "--body", "New body").
+					Return("", "pull request not found", fmt.Errorf("exit status 1"))
+			},
+			wantErr:     true,
+			errContains: "failed to edit PR 999",
+		},
+		{
+			name:     "includes stderr in error message",
+			dir:      "/test/repo",
+			prNumber: 111,
+			body:     "Updated body",
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "edit", "111", "--body", "Updated body").
+					Return("", "GraphQL: Could not resolve to a PullRequest", fmt.Errorf("exit status 1"))
+			},
+			wantErr:     true,
+			errContains: "stderr: GraphQL: Could not resolve to a PullRequest",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRunner := new(MockCommandRunner)
+			tt.setupMock(mockRunner)
+
+			ghRunner := NewGhRunner(mockRunner)
+			ctx := context.Background()
+
+			err := ghRunner.PREdit(ctx, tt.dir, tt.prNumber, tt.body)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				mockRunner.AssertExpectations(t)
+				return
+			}
+
+			require.NoError(t, err)
+			mockRunner.AssertExpectations(t)
+		})
+	}
+}
+
+func TestGhRunner_PRClose(t *testing.T) {
+	tests := []struct {
+		name        string
+		dir         string
+		prNumber    int
+		setupMock   func(*MockCommandRunner)
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "closes PR successfully",
+			dir:      "/test/repo",
+			prNumber: 123,
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "close", "123").
+					Return("", "", nil)
+			},
+		},
+		{
+			name:     "closes different PR",
+			dir:      "/test/repo",
+			prNumber: 456,
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "close", "456").
+					Return("", "", nil)
+			},
+		},
+		{
+			name:     "returns error when close fails",
+			dir:      "/test/repo",
+			prNumber: 999,
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "close", "999").
+					Return("", "pull request not found", fmt.Errorf("exit status 1"))
+			},
+			wantErr:     true,
+			errContains: "failed to close PR 999",
+		},
+		{
+			name:     "includes stderr in error message",
+			dir:      "/test/repo",
+			prNumber: 111,
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "close", "111").
+					Return("", "GraphQL: Could not resolve to a PullRequest", fmt.Errorf("exit status 1"))
+			},
+			wantErr:     true,
+			errContains: "stderr: GraphQL: Could not resolve to a PullRequest",
+		},
+		{
+			name:     "handles already closed PR",
+			dir:      "/test/repo",
+			prNumber: 222,
+			setupMock: func(m *MockCommandRunner) {
+				m.On("RunInDir", mock.Anything, "/test/repo", "gh", "pr", "close", "222").
+					Return("", "pull request already closed", fmt.Errorf("exit status 1"))
+			},
+			wantErr:     true,
+			errContains: "stderr: pull request already closed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRunner := new(MockCommandRunner)
+			tt.setupMock(mockRunner)
+
+			ghRunner := NewGhRunner(mockRunner)
+			ctx := context.Background()
+
+			err := ghRunner.PRClose(ctx, tt.dir, tt.prNumber)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				mockRunner.AssertExpectations(t)
+				return
+			}
+
+			require.NoError(t, err)
 			mockRunner.AssertExpectations(t)
 		})
 	}

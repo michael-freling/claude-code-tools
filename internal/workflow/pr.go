@@ -55,7 +55,7 @@ func (p *prManager) CreatePR(ctx context.Context, title, body string) (int, erro
 		return 0, fmt.Errorf("failed to get current branch: %w", err)
 	}
 
-	prURL, err := p.ghRunner.PRCreate(ctx, p.workingDir, title, body, branchName)
+	prURL, err := p.ghRunner.PRCreate(ctx, p.workingDir, title, body, branchName, "")
 	if err != nil {
 		return 0, err
 	}

@@ -65,6 +65,7 @@ type Orchestrator struct {
 	worktreeManager WorktreeManager
 	logger          Logger
 	ghRunner        GhRunner
+	splitManager    PRSplitManager
 
 	// For testing - if nil, creates real checker
 	ciCheckerFactory func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) CIChecker
@@ -97,6 +98,8 @@ func NewOrchestratorWithConfig(config *Config) (*Orchestrator, error) {
 	worktreeManager := NewWorktreeManager(config.BaseDir)
 	cmdRunner := NewCommandRunner()
 	ghRunner := NewGhRunner(cmdRunner)
+	gitRunner := NewGitRunner(cmdRunner)
+	splitManager := NewPRSplitManager(gitRunner, ghRunner)
 
 	return &Orchestrator{
 		stateManager:    stateManager,
@@ -108,6 +111,7 @@ func NewOrchestratorWithConfig(config *Config) (*Orchestrator, error) {
 		worktreeManager: worktreeManager,
 		logger:          logger,
 		ghRunner:        ghRunner,
+		splitManager:    splitManager,
 	}, nil
 }
 
@@ -768,25 +772,23 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 		return o.failWorkflow(state, fmt.Errorf("PR metrics not available"))
 	}
 
+	sourceBranch, err := o.getSourceBranch(ctx, state.WorktreePath)
+	if err != nil {
+		return o.failWorkflow(state, fmt.Errorf("failed to get source branch: %w", err))
+	}
+
+	commits, err := o.getCommits(ctx, state.WorktreePath, "main")
+	if err != nil {
+		return o.failWorkflow(state, fmt.Errorf("failed to get commits: %w", err))
+	}
+
 	var prResult *PRSplitResult
 	var lastError string
-
-	var commits []Commit
-	if phaseState.Attempts == 0 {
-		cmdRunner := NewCommandRunner()
-		gitRunner := NewGitRunner(cmdRunner)
-		var err error
-		commits, err = gitRunner.GetCommits(ctx, state.WorktreePath, "main")
-		if err != nil {
-			return o.failWorkflow(state, fmt.Errorf("failed to get commits: %w", err))
-		}
-	}
 
 	for attempt := 1; attempt <= o.config.MaxFixAttempts; attempt++ {
 		phaseState.Attempts = attempt
 
 		var prompt string
-		var err error
 		if attempt == 1 {
 			prompt, err = o.promptGenerator.GeneratePRSplitPrompt(phaseState.Metrics, commits)
 			if err != nil {
@@ -806,7 +808,7 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 		result, err := o.executor.ExecuteStreaming(ctx, ExecuteConfig{
 			Prompt:                     prompt,
 			Timeout:                    o.config.Timeouts.PRSplit,
-			JSONSchema:                 PRSplitResultSchema,
+			JSONSchema:                 PRSplitPlanSchema,
 			DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
 			WorkingDirectory:           state.WorktreePath,
 		}, spinner.OnProgress)
@@ -819,7 +821,6 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 		jsonStr, err := o.parser.ExtractJSON(result.Output)
 		if err != nil {
 			spinner.Fail("Failed to parse PR split output")
-			// Save raw output for debugging
 			if saveErr := o.stateManager.SaveRawOutput(state.Name, PhasePRSplit, result.Output); saveErr != nil {
 				fmt.Printf("%s Failed to save raw output: %v\n", Yellow("⚠"), saveErr)
 			} else {
@@ -828,24 +829,39 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 			return o.failWorkflow(state, fmt.Errorf("failed to extract JSON from PR split output: %w", err))
 		}
 
-		prResult, err = o.parser.ParsePRSplitResult(jsonStr)
+		plan, err := o.parser.ParsePRSplitPlan(jsonStr)
 		if err != nil {
-			spinner.Fail("Failed to parse PR split result")
-			// Save raw output for debugging
+			spinner.Fail("Failed to parse PR split plan")
 			if saveErr := o.stateManager.SaveRawOutput(state.Name, PhasePRSplit, result.Output); saveErr != nil {
 				fmt.Printf("%s Failed to save raw output: %v\n", Yellow("⚠"), saveErr)
 			} else {
 				fmt.Printf("%s Raw output saved to: %s/phases/pr_split_raw.txt\n", Yellow("Debug:"), o.stateManager.WorkflowDir(state.Name))
 			}
-			return o.failWorkflow(state, fmt.Errorf("failed to parse PR split result: %w", err))
+			return o.failWorkflow(state, fmt.Errorf("failed to parse PR split plan: %w", err))
 		}
+
+		spinner.Success("PR split plan created")
+
+		executionSpinner := NewStreamingSpinnerWithLogger("Creating branches and PRs...", o.logger)
+		executionSpinner.Start()
+
+		prResult, err = o.splitManager.ExecuteSplit(ctx, state.WorktreePath, plan, sourceBranch, "main")
+		if err != nil {
+			executionSpinner.Fail("Failed to create PRs")
+			if prResult != nil {
+				rollbackErr := o.splitManager.Rollback(ctx, state.WorktreePath, prResult)
+				if rollbackErr != nil {
+					o.logger.Verbose("Rollback failed: %v", rollbackErr)
+				}
+			}
+			return o.failWorkflow(state, fmt.Errorf("failed to execute PR split: %w", err))
+		}
+
+		executionSpinner.Success("PRs created successfully")
 
 		if err := o.stateManager.SavePhaseOutput(state.Name, PhasePRSplit, prResult); err != nil {
-			spinner.Fail("Failed to save PR split output")
 			return o.failWorkflow(state, fmt.Errorf("failed to save PR split output: %w", err))
 		}
-
-		spinner.Success("PR split complete")
 
 		workingDir := state.WorktreePath
 		if workingDir == "" {
@@ -876,19 +892,15 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 			if !ciResult.Passed {
 				ciSpinner.Fail("CI failed")
 
-				// Check if only cancelled jobs - if so, auto-rerun once
 				if len(ciResult.CancelledJobs) > 0 && len(ciResult.FailedJobs) == 0 {
 					ciResult, err = o.handleCancelledCI(ctx, childPR.Number, workingDir, ciResult)
 					if err != nil {
 						fmt.Printf("%s Failed to rerun cancelled jobs for child PR #%d: %v\n", Yellow("⚠"), childPR.Number, err)
-						// Continue with original result
 					} else if ciResult.Passed {
-						// CI passed after rerun
 						ciSpinner.Success("CI passed")
 						fmt.Printf("  %s Child PR #%d passed all checks after rerun\n", Green("✓"), childPR.Number)
-						continue // Check next child PR
+						continue
 					}
-					// If still has failures after rerun, continue to handle failure
 				}
 
 				allPassed = false
@@ -918,6 +930,20 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 	}
 
 	return o.transitionPhase(state, PhaseCompleted)
+}
+
+// getSourceBranch gets the current branch as the source branch
+func (o *Orchestrator) getSourceBranch(ctx context.Context, dir string) (string, error) {
+	cmdRunner := NewCommandRunner()
+	gitRunner := NewGitRunner(cmdRunner)
+	return gitRunner.GetCurrentBranch(ctx, dir)
+}
+
+// getCommits gets commits from the base branch to HEAD
+func (o *Orchestrator) getCommits(ctx context.Context, dir string, base string) ([]Commit, error) {
+	cmdRunner := NewCommandRunner()
+	gitRunner := NewGitRunner(cmdRunner)
+	return gitRunner.GetCommits(ctx, dir, base)
 }
 
 // transitionPhase transitions the workflow to the next phase
