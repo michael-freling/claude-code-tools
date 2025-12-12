@@ -961,12 +961,13 @@ func TestPromptGenerator_LoadTemplates_ErrorHandling(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			assert.Len(t, pg.templates, 5)
+			assert.Len(t, pg.templates, 6)
 			assert.NotNil(t, pg.templates["planning.tmpl"])
 			assert.NotNil(t, pg.templates["implementation.tmpl"])
 			assert.NotNil(t, pg.templates["refactoring.tmpl"])
 			assert.NotNil(t, pg.templates["pr-split.tmpl"])
 			assert.NotNil(t, pg.templates["fix-ci.tmpl"])
+			assert.NotNil(t, pg.templates["create-pr.tmpl"])
 		})
 	}
 }
@@ -1092,6 +1093,181 @@ The command '/bin/sh -c go build -o /app/server' returned a non-zero code: 2`,
 
 			assert.Contains(t, got, "CI Failure Output")
 			assert.Contains(t, got, "Output Format")
+		})
+	}
+}
+
+func TestPromptGenerator_GenerateCreatePRPrompt(t *testing.T) {
+	tests := []struct {
+		name        string
+		ctx         *PRCreationContext
+		wantErr     bool
+		errContains string
+		wantContain []string
+	}{
+		{
+			name: "generates create PR prompt with valid context containing all fields",
+			ctx: &PRCreationContext{
+				WorkflowType: WorkflowTypeFeature,
+				Branch:       "feature/add-authentication",
+				BaseBranch:   "main",
+				Description:  "Add JWT authentication",
+			},
+			wantErr: false,
+			wantContain: []string{
+				"Workflow Type: feature",
+				"Branch: feature/add-authentication",
+				"Base Branch: main",
+				"Description: Add JWT authentication",
+				"Decision Tree",
+				"Step 1: Check for commits",
+				"git log origin/main..HEAD --oneline",
+				"Step 2: Check for existing PR",
+				"gh pr list --head",
+				"Step 3: Push branch to remote",
+				"git push -u origin HEAD",
+				"Step 4: Create the PR",
+				"gh pr create",
+				"Step 5: Verify PR creation",
+				"Output Format",
+				"prNumber",
+				"status",
+				"message",
+				"created|exists|skipped|failed",
+			},
+		},
+		{
+			name: "generates create PR prompt for fix workflow",
+			ctx: &PRCreationContext{
+				WorkflowType: WorkflowTypeFix,
+				Branch:       "fix/login-timeout",
+				BaseBranch:   "main",
+				Description:  "Fix login timeout issue",
+			},
+			wantErr: false,
+			wantContain: []string{
+				"Workflow Type: fix",
+				"Branch: fix/login-timeout",
+				"Base Branch: main",
+				"Description: Fix login timeout issue",
+				"For fix workflows: \"fix: <description>\"",
+			},
+		},
+		{
+			name: "generates create PR prompt with different base branch",
+			ctx: &PRCreationContext{
+				WorkflowType: WorkflowTypeFeature,
+				Branch:       "feature/new-api",
+				BaseBranch:   "develop",
+				Description:  "Add new API endpoint",
+			},
+			wantErr: false,
+			wantContain: []string{
+				"Base Branch: develop",
+				"git log origin/develop..HEAD --oneline",
+			},
+		},
+		{
+			name:        "returns error when context is nil",
+			ctx:         nil,
+			wantErr:     true,
+			errContains: "context cannot be nil",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pg, err := NewPromptGenerator()
+			require.NoError(t, err)
+
+			got, err := pg.GenerateCreatePRPrompt(tt.ctx)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotEmpty(t, got)
+
+			for _, want := range tt.wantContain {
+				assert.Contains(t, got, want)
+			}
+		})
+	}
+}
+
+func TestPromptGenerator_GenerateCreatePRPrompt_TemplateNotLoaded(t *testing.T) {
+	tests := []struct {
+		name        string
+		ctx         *PRCreationContext
+		errContains string
+	}{
+		{
+			name: "create-pr template not loaded returns error",
+			ctx: &PRCreationContext{
+				WorkflowType: WorkflowTypeFeature,
+				Branch:       "feature/test",
+				BaseBranch:   "main",
+				Description:  "test",
+			},
+			errContains: "create-pr template not loaded",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pg := &promptGenerator{
+				templates: make(map[string]*template.Template),
+			}
+
+			got, err := pg.GenerateCreatePRPrompt(tt.ctx)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errContains)
+			assert.Empty(t, got)
+		})
+	}
+}
+
+func TestPromptGenerator_GenerateCreatePRPrompt_TemplateExecutionError(t *testing.T) {
+	tests := []struct {
+		name         string
+		templateText string
+		ctx          *PRCreationContext
+		errContains  string
+	}{
+		{
+			name:         "template execution error with invalid field reference",
+			templateText: "{{.NonExistentField}}",
+			ctx: &PRCreationContext{
+				WorkflowType: WorkflowTypeFeature,
+				Branch:       "test",
+				BaseBranch:   "main",
+				Description:  "test",
+			},
+			errContains: "failed to execute create-pr template",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pg := &promptGenerator{
+				templates: make(map[string]*template.Template),
+			}
+
+			tmpl, err := template.New("create-pr.tmpl").Parse(tt.templateText)
+			require.NoError(t, err)
+			pg.templates["create-pr.tmpl"] = tmpl
+
+			got, err := pg.GenerateCreatePRPrompt(tt.ctx)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errContains)
+			assert.Empty(t, got)
 		})
 	}
 }

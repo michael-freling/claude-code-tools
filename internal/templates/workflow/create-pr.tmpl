@@ -1,0 +1,84 @@
+You need to create a Pull Request for the current branch. Follow this decision tree to handle the PR creation:
+
+## Context
+- Workflow Type: {{.WorkflowType}}
+- Branch: {{.Branch}}
+- Base Branch: {{.BaseBranch}}
+- Description: {{.Description}}
+
+## Decision Tree
+
+### Step 1: Check for commits
+First, verify there are commits to create a PR for:
+```bash
+git log origin/{{.BaseBranch}}..HEAD --oneline
+```
+
+If there are NO commits:
+- Output a "skipped" status with message "No commits found on branch - nothing to create PR for"
+- Do NOT create a PR
+
+### Step 2: Check for existing PR
+Check if a PR already exists for this branch:
+```bash
+gh pr list --head {{.Branch}} --json number,title,state
+```
+
+If a PR already exists:
+- If state is "OPEN": Output an "exists" status with the PR number
+- If state is "CLOSED" or "MERGED": Continue to create a new PR
+
+### Step 3: Push branch to remote
+Ensure the branch is pushed to the remote:
+```bash
+git push -u origin HEAD
+```
+
+If push fails due to pre-commit hooks:
+- Fix the issues reported by pre-commit
+- Stage and commit the fixes
+- Retry the push
+- If fixes fail after 3 attempts, output "failed" status
+
+### Step 4: Create the PR
+Create the PR using gh CLI:
+```bash
+gh pr create --title "<title based on branch/description>" --body "<description>"
+```
+
+PR title guidelines:
+- For feature workflows: "feat: <description>"
+- For fix workflows: "fix: <description>"
+- For refactor workflows: "refactor: <description>"
+
+PR body should include:
+- Brief summary of changes
+- Reference to the workflow type and description
+
+### Step 5: Verify PR creation
+After creating, verify the PR exists and get its number:
+```bash
+gh pr view --json number
+```
+
+## Output Format
+Output your result as JSON:
+```json
+{
+  "prNumber": <number or 0 if not created>,
+  "status": "<created|exists|skipped|failed>",
+  "message": "<explanation of what happened>"
+}
+```
+
+### Status values:
+- "created": Successfully created a new PR
+- "exists": PR already exists for this branch
+- "skipped": No commits to create PR for, or PR not needed
+- "failed": Failed to create PR after attempts
+
+## Important Notes
+- Always check for existing PRs before creating
+- Handle pre-commit hook failures gracefully
+- Do not force push or use destructive git commands
+- If in doubt about creating a PR, output "skipped" status
