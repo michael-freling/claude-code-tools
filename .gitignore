@@ -4,3 +4,9 @@
 # Binaries for programs and plugins
 generator
 claude-workflow
+
+# Coverage files
+coverage*.txt
+
+# Claude Code workflow state
+.claude/
