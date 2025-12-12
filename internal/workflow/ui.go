@@ -42,20 +42,41 @@ func Bold(s string) string {
 	return ansiBold + s + ansiReset
 }
 
+// SpinnerHooks provides callbacks for spinner lifecycle events (for testing)
+type SpinnerHooks interface {
+	OnStart()
+	OnStop()
+}
+
+// noopHooks is the default implementation that does nothing
+type noopHooks struct{}
+
+func (noopHooks) OnStart() {}
+func (noopHooks) OnStop()  {}
+
 // Spinner provides a simple spinner for long-running operations
 type Spinner struct {
 	message string
 	done    chan bool
 	running bool
 	mu      sync.Mutex
+	clock   Clock
+	hooks   SpinnerHooks
 }
 
 // NewSpinner creates a new spinner with the given message
 func NewSpinner(message string) *Spinner {
+	return NewSpinnerWithDeps(message, NewRealClock(), noopHooks{})
+}
+
+// NewSpinnerWithDeps creates a new spinner with explicit dependencies
+func NewSpinnerWithDeps(message string, clock Clock, hooks SpinnerHooks) *Spinner {
 	return &Spinner{
 		message: message,
 		done:    make(chan bool),
 		running: false,
+		clock:   clock,
+		hooks:   hooks,
 	}
 }
 
@@ -71,16 +92,21 @@ func (s *Spinner) Start() {
 	s.mu.Unlock()
 
 	go func() {
+		s.hooks.OnStart()
+		defer s.hooks.OnStop()
+
+		ticker := s.clock.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+
 		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 		i := 0
 		for {
 			select {
 			case <-s.done:
 				return
-			default:
+			case <-ticker.C():
 				fmt.Printf("\r%s %s", frames[i%len(frames)], s.message)
 				i++
-				time.Sleep(100 * time.Millisecond)
 			}
 		}
 	}()
@@ -282,26 +308,30 @@ type StreamingSpinner struct {
 	toolCount int
 	startTime time.Time
 	logger    Logger
+	clock     Clock
+	hooks     SpinnerHooks
 }
 
 // NewStreamingSpinner creates a new streaming spinner with the given message
 func NewStreamingSpinner(message string) *StreamingSpinner {
-	return &StreamingSpinner{
-		message:   message,
-		done:      make(chan bool),
-		running:   false,
-		startTime: time.Now(),
-	}
+	return NewStreamingSpinnerWithDeps(message, nil, NewRealClock(), noopHooks{})
 }
 
 // NewStreamingSpinnerWithLogger creates a new streaming spinner with a logger for verbose output
 func NewStreamingSpinnerWithLogger(message string, logger Logger) *StreamingSpinner {
+	return NewStreamingSpinnerWithDeps(message, logger, NewRealClock(), noopHooks{})
+}
+
+// NewStreamingSpinnerWithDeps creates a new streaming spinner with explicit dependencies
+func NewStreamingSpinnerWithDeps(message string, logger Logger, clock Clock, hooks SpinnerHooks) *StreamingSpinner {
 	return &StreamingSpinner{
 		message:   message,
 		done:      make(chan bool),
 		running:   false,
-		startTime: time.Now(),
+		startTime: clock.Now(),
 		logger:    logger,
+		clock:     clock,
+		hooks:     hooks,
 	}
 }
 
@@ -314,19 +344,25 @@ func (s *StreamingSpinner) Start() {
 	}
 	s.running = true
 	s.done = make(chan bool)
-	s.startTime = time.Now()
+	s.startTime = s.clock.Now()
 	s.mu.Unlock()
 
 	go func() {
+		s.hooks.OnStart()
+		defer s.hooks.OnStop()
+
+		ticker := s.clock.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+
 		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 		i := 0
 		for {
 			select {
 			case <-s.done:
 				return
-			default:
+			case <-ticker.C():
 				s.mu.Lock()
-				elapsed := time.Since(s.startTime).Round(time.Second)
+				elapsed := s.clock.Since(s.startTime).Round(time.Second)
 				displayMsg := s.message
 				if s.lastTool != "" {
 					displayMsg = fmt.Sprintf("%s [%s]", s.message, s.lastTool)
@@ -334,7 +370,6 @@ func (s *StreamingSpinner) Start() {
 				fmt.Printf("\r%s %s (%s)", frames[i%len(frames)], displayMsg, elapsed)
 				s.mu.Unlock()
 				i++
-				time.Sleep(100 * time.Millisecond)
 			}
 		}
 	}()
@@ -400,7 +435,7 @@ func (s *StreamingSpinner) Stop() {
 func (s *StreamingSpinner) Success(message string) {
 	s.mu.Lock()
 	toolCount := s.toolCount
-	elapsed := time.Since(s.startTime)
+	elapsed := s.clock.Since(s.startTime)
 	s.mu.Unlock()
 
 	s.Stop()
@@ -437,15 +472,24 @@ type CISpinner struct {
 	running   bool
 	mu        sync.Mutex
 	lastEvent CIProgressEvent
+	clock     Clock
+	hooks     SpinnerHooks
 }
 
 // NewCISpinner creates a new CI spinner with the given message
 func NewCISpinner(message string) *CISpinner {
+	return NewCISpinnerWithDeps(message, NewRealClock(), noopHooks{})
+}
+
+// NewCISpinnerWithDeps creates a new CI spinner with explicit dependencies
+func NewCISpinnerWithDeps(message string, clock Clock, hooks SpinnerHooks) *CISpinner {
 	return &CISpinner{
 		message:   message,
 		done:      make(chan bool),
 		running:   false,
-		startTime: time.Now(),
+		startTime: clock.Now(),
+		clock:     clock,
+		hooks:     hooks,
 	}
 }
 
@@ -458,23 +502,28 @@ func (s *CISpinner) Start() {
 	}
 	s.running = true
 	s.done = make(chan bool)
-	s.startTime = time.Now()
+	s.startTime = s.clock.Now()
 	s.mu.Unlock()
 
 	go func() {
+		s.hooks.OnStart()
+		defer s.hooks.OnStop()
+
+		ticker := s.clock.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+
 		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 		i := 0
 		for {
 			select {
 			case <-s.done:
 				return
-			default:
+			case <-ticker.C():
 				s.mu.Lock()
 				displayMsg := s.formatMessage()
 				s.mu.Unlock()
 				fmt.Printf("\r%s %s", frames[i%len(frames)], displayMsg)
 				i++
-				time.Sleep(100 * time.Millisecond)
 			}
 		}
 	}()

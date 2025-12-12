@@ -9,6 +9,51 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// syncHooks provides channel-based synchronization for spinner tests
+type syncHooks struct {
+	started chan struct{}
+	stopped chan struct{}
+}
+
+func newSyncHooks() *syncHooks {
+	return &syncHooks{
+		started: make(chan struct{}, 1),
+		stopped: make(chan struct{}, 1),
+	}
+}
+
+func (h *syncHooks) OnStart() {
+	select {
+	case h.started <- struct{}{}:
+	default:
+	}
+}
+
+func (h *syncHooks) OnStop() {
+	select {
+	case h.stopped <- struct{}{}:
+	default:
+	}
+}
+
+func (h *syncHooks) WaitForStart(t *testing.T) {
+	t.Helper()
+	select {
+	case <-h.started:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for spinner to start")
+	}
+}
+
+func (h *syncHooks) WaitForStop(t *testing.T) {
+	t.Helper()
+	select {
+	case <-h.stopped:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for spinner to stop")
+	}
+}
+
 func TestColorFunctions(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -115,14 +160,15 @@ func TestSpinner_Lifecycle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewSpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewSpinnerWithDeps("Testing", NewRealClock(), hooks)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 			assert.True(t, spinner.running)
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -139,18 +185,18 @@ func TestSpinner_DoubleStart(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewSpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewSpinnerWithDeps("Testing", NewRealClock(), hooks)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 			assert.True(t, spinner.running)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
 			assert.True(t, spinner.running)
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -167,17 +213,17 @@ func TestSpinner_DoubleStop(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewSpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewSpinnerWithDeps("Testing", NewRealClock(), hooks)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 			assert.False(t, spinner.running)
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -196,13 +242,14 @@ func TestSpinner_Success(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewSpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewSpinnerWithDeps("Testing", NewRealClock(), hooks)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 
 			spinner.Success(tt.message)
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -221,13 +268,14 @@ func TestSpinner_Fail(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewSpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewSpinnerWithDeps("Testing", NewRealClock(), hooks)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 
 			spinner.Fail(tt.message)
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -306,9 +354,10 @@ func TestStreamingSpinner_OnProgress(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewStreamingSpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewStreamingSpinnerWithDeps("Testing", nil, NewRealClock(), hooks)
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 
 			spinner.OnProgress(tt.event)
 
@@ -321,7 +370,7 @@ func TestStreamingSpinner_OnProgress(t *testing.T) {
 			}
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 		})
 	}
 }
@@ -337,14 +386,15 @@ func TestStreamingSpinner_Lifecycle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewStreamingSpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewStreamingSpinnerWithDeps("Testing", nil, NewRealClock(), hooks)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 			assert.True(t, spinner.running)
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -379,10 +429,11 @@ func TestStreamingSpinner_Success(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewStreamingSpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewStreamingSpinnerWithDeps("Testing", nil, NewRealClock(), hooks)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 
 			for i := 0; i < tt.toolCallCount; i++ {
 				spinner.OnProgress(ProgressEvent{
@@ -394,7 +445,7 @@ func TestStreamingSpinner_Success(t *testing.T) {
 			assert.Equal(t, tt.wantToolCount, spinner.toolCount)
 
 			spinner.Success(tt.message)
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -413,13 +464,14 @@ func TestStreamingSpinner_Fail(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewStreamingSpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewStreamingSpinnerWithDeps("Testing", nil, NewRealClock(), hooks)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 
 			spinner.Fail(tt.message)
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -1097,9 +1149,10 @@ func TestStreamingSpinner_OnProgress_ToolCount(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewStreamingSpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewStreamingSpinnerWithDeps("Testing", nil, NewRealClock(), hooks)
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 
 			for _, event := range tt.events {
 				spinner.OnProgress(event)
@@ -1108,7 +1161,7 @@ func TestStreamingSpinner_OnProgress_ToolCount(t *testing.T) {
 			assert.Equal(t, tt.wantToolCount, spinner.toolCount)
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 		})
 	}
 }
@@ -1144,9 +1197,10 @@ func TestStreamingSpinner_OnProgress_LongToolInput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewStreamingSpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewStreamingSpinnerWithDeps("Testing", nil, NewRealClock(), hooks)
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 
 			spinner.OnProgress(tt.event)
 
@@ -1156,7 +1210,7 @@ func TestStreamingSpinner_OnProgress_LongToolInput(t *testing.T) {
 			}
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 		})
 	}
 }
@@ -1172,18 +1226,18 @@ func TestStreamingSpinner_DoubleStart(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewStreamingSpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewStreamingSpinnerWithDeps("Testing", nil, NewRealClock(), hooks)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 			assert.True(t, spinner.running)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
 			assert.True(t, spinner.running)
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -1200,17 +1254,17 @@ func TestStreamingSpinner_DoubleStop(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewStreamingSpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewStreamingSpinnerWithDeps("Testing", nil, NewRealClock(), hooks)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 			assert.False(t, spinner.running)
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -1738,7 +1792,6 @@ func TestSpinner_StopWithoutStart(t *testing.T) {
 			assert.False(t, spinner.running)
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -1759,7 +1812,6 @@ func TestStreamingSpinner_StopWithoutStart(t *testing.T) {
 			assert.False(t, spinner.running)
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -1907,14 +1959,15 @@ func TestCISpinner_Lifecycle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewCISpinner("Testing CI")
+			hooks := newSyncHooks()
+			spinner := NewCISpinnerWithDeps("Testing CI", NewRealClock(), hooks)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 			assert.True(t, spinner.running)
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -1931,18 +1984,18 @@ func TestCISpinner_DoubleStart(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewCISpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewCISpinnerWithDeps("Testing", NewRealClock(), hooks)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 			assert.True(t, spinner.running)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
 			assert.True(t, spinner.running)
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -1987,13 +2040,14 @@ func TestCISpinner_Success(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewCISpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewCISpinnerWithDeps("Testing", NewRealClock(), hooks)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 
 			spinner.Success(tt.message)
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -2012,13 +2066,14 @@ func TestCISpinner_Fail(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewCISpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewCISpinnerWithDeps("Testing", NewRealClock(), hooks)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 
 			spinner.Fail(tt.message)
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -2035,17 +2090,17 @@ func TestCISpinner_DoubleStop(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spinner := NewCISpinner("Testing")
+			hooks := newSyncHooks()
+			spinner := NewCISpinnerWithDeps("Testing", NewRealClock(), hooks)
 
 			spinner.Start()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStart(t)
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
+			hooks.WaitForStop(t)
 			assert.False(t, spinner.running)
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
 			assert.False(t, spinner.running)
 		})
 	}
@@ -2066,7 +2121,6 @@ func TestCISpinner_StopWithoutStart(t *testing.T) {
 			assert.False(t, spinner.running)
 
 			spinner.Stop()
-			time.Sleep(10 * time.Millisecond)
 			assert.False(t, spinner.running)
 		})
 	}

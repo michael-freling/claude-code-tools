@@ -571,7 +571,7 @@ func TestClaudeExecutor_Execute_Timeout_Real(t *testing.T) {
 
 	scriptPath := filepath.Join(tmpDir, "claude-slow")
 	script := `#!/bin/bash
-sleep 10
+sleep 0.5
 echo "done"
 exit 0`
 	err := os.WriteFile(scriptPath, []byte(script), 0755)
@@ -597,7 +597,7 @@ func TestClaudeExecutor_Execute_ContextCancellation(t *testing.T) {
 
 	scriptPath := filepath.Join(tmpDir, "claude-sleep")
 	script := `#!/bin/bash
-sleep 10
+sleep 0.5
 echo "done"
 exit 0`
 	err := os.WriteFile(scriptPath, []byte(script), 0755)
@@ -819,7 +819,7 @@ func TestClaudeExecutor_ExecuteStreaming_Timeout(t *testing.T) {
 	// Use a script that will be killed by SIGTERM/SIGKILL
 	script := `#!/bin/bash
 trap 'exit 1' TERM INT
-while true; do sleep 0.1; done`
+while true; do sleep 0.01; done`
 	err := os.WriteFile(scriptPath, []byte(script), 0755)
 	require.NoError(t, err)
 
@@ -828,7 +828,7 @@ while true; do sleep 0.1; done`
 
 	config := ExecuteConfig{
 		Prompt:  "test prompt",
-		Timeout: 200 * time.Millisecond,
+		Timeout: 100 * time.Millisecond,
 	}
 
 	got, err := executor.ExecuteStreaming(ctx, config, nil)
@@ -1182,7 +1182,7 @@ func TestClaudeExecutor_ExecuteStreaming_ContextCancellation(t *testing.T) {
 			script: `#!/bin/bash
 trap 'exit 1' TERM INT
 echo '{"type":"system","subtype":"init"}'
-sleep 10
+sleep 0.5
 echo '{"type":"result","result":"should not reach here","is_error":false}'
 exit 0`,
 			cancelDelay: 50 * time.Millisecond,
@@ -1238,7 +1238,7 @@ func TestClaudeExecutor_Execute_WithTimeout(t *testing.T) {
 		{
 			name: "respects timeout setting in Execute",
 			script: `#!/bin/bash
-sleep 5
+sleep 0.2
 echo "completed"
 exit 0`,
 			timeout:     100 * time.Millisecond,

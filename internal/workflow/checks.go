@@ -65,6 +65,7 @@ type ciChecker struct {
 	commandTimeout time.Duration
 	initialDelay   time.Duration
 	ghRunner       command.GhRunner
+	clock          Clock
 }
 
 // NewCIChecker creates a new CI checker
@@ -82,6 +83,7 @@ func NewCIChecker(workingDir string, checkInterval time.Duration, commandTimeout
 		commandTimeout: commandTimeout,
 		initialDelay:   1 * time.Minute,
 		ghRunner:       command.NewGhRunner(cmdRunner),
+		clock:          NewRealClock(),
 	}
 }
 
@@ -103,6 +105,7 @@ func NewCICheckerWithOptions(workingDir string, checkInterval, commandTimeout, i
 		commandTimeout: commandTimeout,
 		initialDelay:   initialDelay,
 		ghRunner:       command.NewGhRunner(cmdRunner),
+		clock:          NewRealClock(),
 	}
 }
 
@@ -123,6 +126,28 @@ func NewCICheckerWithRunner(workingDir string, checkInterval, commandTimeout, in
 		commandTimeout: commandTimeout,
 		initialDelay:   initialDelay,
 		ghRunner:       ghRunner,
+		clock:          NewRealClock(),
+	}
+}
+
+// NewCICheckerWithClock creates a new CI checker with injected GhRunner and Clock (for testing)
+func NewCICheckerWithClock(workingDir string, checkInterval, commandTimeout, initialDelay time.Duration, ghRunner command.GhRunner, clock Clock) CIChecker {
+	if checkInterval == 0 {
+		checkInterval = 30 * time.Second
+	}
+	if commandTimeout == 0 {
+		commandTimeout = 2 * time.Minute
+	}
+	if initialDelay == 0 {
+		initialDelay = 1 * time.Minute
+	}
+	return &ciChecker{
+		workingDir:     workingDir,
+		checkInterval:  checkInterval,
+		commandTimeout: commandTimeout,
+		initialDelay:   initialDelay,
+		ghRunner:       ghRunner,
+		clock:          clock,
 	}
 }
 
@@ -135,7 +160,7 @@ func (c *ciChecker) CheckCI(ctx context.Context, prNumber int) (*CIResult, error
 		if attempt > 0 {
 			backoff := time.Duration(attempt) * 5 * time.Second
 			select {
-			case <-time.After(backoff):
+			case <-c.clock.After(backoff):
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
@@ -217,13 +242,13 @@ func (c *ciChecker) WaitForCIWithProgress(ctx context.Context, prNumber int, tim
 		opts.E2ETestPattern = "e2e|E2E|integration|Integration"
 	}
 
-	startTime := time.Now()
+	startTime := c.clock.Now()
 
 	// Check CI status immediately first - if already complete, return right away
 	if onProgress != nil {
 		onProgress(CIProgressEvent{
 			Type:    "checking",
-			Elapsed: time.Since(startTime),
+			Elapsed: c.clock.Since(startTime),
 			Message: "Checking CI status",
 		})
 	}
@@ -238,7 +263,7 @@ func (c *ciChecker) WaitForCIWithProgress(ctx context.Context, prNumber int, tim
 		if onProgress != nil {
 			onProgress(CIProgressEvent{
 				Type:          "status",
-				Elapsed:       time.Since(startTime),
+				Elapsed:       c.clock.Since(startTime),
 				Message:       fmt.Sprintf("CI status: %s", result.Status),
 				JobsPassed:    passed,
 				JobsFailed:    failed,
@@ -258,28 +283,28 @@ func (c *ciChecker) WaitForCIWithProgress(ctx context.Context, prNumber int, tim
 	}
 
 	// CI is pending or had a timeout error - wait before polling
-	ticker := time.NewTicker(c.checkInterval)
+	ticker := c.clock.NewTicker(c.checkInterval)
 	defer ticker.Stop()
 
-	initialDelayTimer := time.NewTimer(c.initialDelay)
+	initialDelayTimer := c.clock.NewTimer(c.initialDelay)
 	defer initialDelayTimer.Stop()
 
-	progressTicker := time.NewTicker(5 * time.Second)
+	progressTicker := c.clock.NewTicker(5 * time.Second)
 	defer progressTicker.Stop()
 
-	waitStartTime := time.Now()
+	waitStartTime := c.clock.Now()
 
 	// Wait for initial delay before starting polling loop
 	for {
 		select {
-		case <-initialDelayTimer.C:
+		case <-initialDelayTimer.C():
 			goto checkLoop
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-progressTicker.C:
+		case <-progressTicker.C():
 			if onProgress != nil {
-				elapsed := time.Since(startTime)
-				waitElapsed := time.Since(waitStartTime)
+				elapsed := c.clock.Since(startTime)
+				waitElapsed := c.clock.Since(waitStartTime)
 				remaining := c.initialDelay - waitElapsed
 				if remaining < 0 {
 					remaining = 0
@@ -299,11 +324,11 @@ checkLoop:
 		select {
 		case <-ctx.Done():
 			return nil, fmt.Errorf("CI check timeout after %s", timeout)
-		case <-ticker.C:
+		case <-ticker.C():
 			if onProgress != nil {
 				onProgress(CIProgressEvent{
 					Type:    "checking",
-					Elapsed: time.Since(startTime),
+					Elapsed: c.clock.Since(startTime),
 					Message: "Checking CI status",
 				})
 			}
@@ -314,7 +339,7 @@ checkLoop:
 					if onProgress != nil {
 						onProgress(CIProgressEvent{
 							Type:    "retry",
-							Elapsed: time.Since(startTime),
+							Elapsed: c.clock.Since(startTime),
 							Message: "Command timeout, retrying",
 						})
 					}
@@ -327,7 +352,7 @@ checkLoop:
 			if onProgress != nil {
 				onProgress(CIProgressEvent{
 					Type:          "status",
-					Elapsed:       time.Since(startTime),
+					Elapsed:       c.clock.Since(startTime),
 					Message:       fmt.Sprintf("CI status: %s", result.Status),
 					JobsPassed:    passed,
 					JobsFailed:    failed,

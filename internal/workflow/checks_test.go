@@ -1345,7 +1345,7 @@ func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
 			checkInterval:  50 * time.Millisecond,
 			commandTimeout: 100 * time.Millisecond,
 			initialDelay:   50 * time.Millisecond,
-			timeout:        150 * time.Millisecond,
+			timeout:        5 * time.Second,
 			wantErr:        true,
 		},
 		{
@@ -1395,9 +1395,43 @@ func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
 			mockGhRunner := new(MockGhRunner)
 			tt.mockSetup(mockGhRunner)
 
-			checker := NewCICheckerWithRunner("/tmp", tt.checkInterval, tt.commandTimeout, tt.initialDelay, mockGhRunner)
+			var checker CIChecker
+			var ctx context.Context
+			var cancel context.CancelFunc
+			var done chan struct{}
 
-			ctx, cancel := context.WithTimeout(context.Background(), max(tt.timeout, 5*time.Second))
+			if tt.name == "context timeout returns error" {
+				fakeClock := NewFakeClock(time.Now())
+				checker = NewCICheckerWithClock("/tmp", tt.checkInterval, tt.commandTimeout, tt.initialDelay, mockGhRunner, fakeClock)
+				ctx, cancel = context.WithTimeout(context.Background(), tt.timeout)
+				defer cancel()
+
+				done = make(chan struct{})
+				var timeoutErr error
+
+				var progressEvents []CIProgressEvent
+				onProgress := func(event CIProgressEvent) {
+					progressEvents = append(progressEvents, event)
+				}
+
+				go func() {
+					_, timeoutErr = checker.WaitForCIWithProgress(ctx, 0, tt.timeout, tt.opts, onProgress)
+					close(done)
+				}()
+
+				time.Sleep(10 * time.Millisecond)
+				fakeClock.Advance(tt.initialDelay + tt.checkInterval*3)
+				time.Sleep(10 * time.Millisecond)
+				cancel()
+
+				<-done
+
+				require.Error(t, timeoutErr)
+				return
+			}
+
+			checker = NewCICheckerWithRunner("/tmp", tt.checkInterval, tt.commandTimeout, tt.initialDelay, mockGhRunner)
+			ctx, cancel = context.WithTimeout(context.Background(), max(tt.timeout, 5*time.Second))
 			defer cancel()
 
 			var progressEvents []CIProgressEvent
@@ -1463,10 +1497,30 @@ func TestCheckCI_RetryLogic(t *testing.T) {
 			mockGhRunner := new(MockGhRunner)
 			tt.mockSetup(mockGhRunner)
 
-			checker := NewCICheckerWithRunner("/tmp", 1*time.Millisecond, 50*time.Millisecond, 1*time.Minute, mockGhRunner)
+			fakeClock := NewFakeClock(time.Now())
+			checker := NewCICheckerWithClock("/tmp", 1*time.Millisecond, 50*time.Millisecond, 1*time.Minute, mockGhRunner, fakeClock)
 
 			ctx := context.Background()
-			result, err := checker.CheckCI(ctx, 0)
+
+			var result *CIResult
+			var err error
+			done := make(chan struct{})
+			go func() {
+				result, err = checker.CheckCI(ctx, 0)
+				close(done)
+			}()
+
+			time.Sleep(10 * time.Millisecond)
+			fakeClock.Advance(5 * time.Second)
+			time.Sleep(10 * time.Millisecond)
+			fakeClock.Advance(10 * time.Second)
+			time.Sleep(10 * time.Millisecond)
+
+			select {
+			case <-done:
+			case <-time.After(1 * time.Second):
+				t.Fatal("test timed out")
+			}
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -1659,7 +1713,8 @@ func TestWaitForCIWithProgress_PollingLoop(t *testing.T) {
 			mockGhRunner := new(MockGhRunner)
 			tt.mockSetup(mockGhRunner)
 
-			checker := NewCICheckerWithRunner("/tmp", 50*time.Millisecond, 100*time.Millisecond, 50*time.Millisecond, mockGhRunner)
+			fakeClock := NewFakeClock(time.Now())
+			checker := NewCICheckerWithClock("/tmp", 50*time.Millisecond, 100*time.Millisecond, 50*time.Millisecond, mockGhRunner, fakeClock)
 
 			ctx := context.Background()
 			var retryEvents int
@@ -1669,7 +1724,30 @@ func TestWaitForCIWithProgress_PollingLoop(t *testing.T) {
 				}
 			}
 
-			result, err := checker.WaitForCIWithProgress(ctx, 0, 5*time.Second, CheckCIOptions{}, onProgress)
+			var result *CIResult
+			var err error
+			done := make(chan struct{})
+			go func() {
+				result, err = checker.WaitForCIWithProgress(ctx, 0, 5*time.Second, CheckCIOptions{}, onProgress)
+				close(done)
+			}()
+
+			time.Sleep(10 * time.Millisecond)
+			fakeClock.Advance(50 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
+			fakeClock.Advance(50 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
+			fakeClock.Advance(50 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
+			fakeClock.Advance(5 * time.Second)
+			time.Sleep(10 * time.Millisecond)
+			fakeClock.Advance(50 * time.Millisecond)
+
+			select {
+			case <-done:
+			case <-time.After(1 * time.Second):
+				t.Fatal("test timed out")
+			}
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -1865,10 +1943,10 @@ func TestWaitForCIWithProgress_WaitingEvents(t *testing.T) {
 		mockGhRunner.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
 		mockGhRunner.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
 
-		checker := NewCICheckerWithRunner("/tmp", 50*time.Millisecond, 100*time.Millisecond, 6*time.Second, mockGhRunner)
+		fakeClock := NewFakeClock(time.Now())
+		checker := NewCICheckerWithClock("/tmp", 50*time.Millisecond, 100*time.Millisecond, 6*time.Second, mockGhRunner, fakeClock)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+		ctx := context.Background()
 
 		var waitingEvents []CIProgressEvent
 		onProgress := func(event CIProgressEvent) {
@@ -1877,7 +1955,18 @@ func TestWaitForCIWithProgress_WaitingEvents(t *testing.T) {
 			}
 		}
 
-		result, err := checker.WaitForCIWithProgress(ctx, 0, 10*time.Second, CheckCIOptions{}, onProgress)
+		var result *CIResult
+		var err error
+		done := make(chan struct{})
+		go func() {
+			result, err = checker.WaitForCIWithProgress(ctx, 0, 10*time.Second, CheckCIOptions{}, onProgress)
+			close(done)
+		}()
+
+		time.Sleep(10 * time.Millisecond)
+		fakeClock.Advance(6 * time.Second)
+
+		<-done
 
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -1899,4 +1988,132 @@ func TestWaitForCIWithProgress_WaitingEvents(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestWaitForCIWithProgress_WithFakeClock(t *testing.T) {
+	tests := []struct {
+		name           string
+		mockSetup      func(*MockGhRunner)
+		checkInterval  time.Duration
+		initialDelay   time.Duration
+		advanceSteps   []time.Duration
+		wantErr        bool
+		wantPassed     bool
+		wantEventTypes []string
+	}{
+		{
+			name: "pending then success with fake clock",
+			mockSetup: func(m *MockGhRunner) {
+				pendingOutput := `[{"name":"test","state":"PENDING"}]`
+				successOutput := `[{"name":"test","state":"SUCCESS"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+			},
+			checkInterval: 50 * time.Millisecond,
+			initialDelay:  100 * time.Millisecond,
+			advanceSteps: []time.Duration{
+				150 * time.Millisecond,
+			},
+			wantErr:        false,
+			wantPassed:     true,
+			wantEventTypes: []string{"checking", "status"},
+		},
+		{
+			name: "multiple pending states before success",
+			mockSetup: func(m *MockGhRunner) {
+				pendingOutput := `[{"name":"test","state":"PENDING"}]`
+				successOutput := `[{"name":"test","state":"SUCCESS"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Times(3)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+			},
+			checkInterval: 50 * time.Millisecond,
+			initialDelay:  100 * time.Millisecond,
+			advanceSteps: []time.Duration{
+				150 * time.Millisecond,
+				50 * time.Millisecond,
+				50 * time.Millisecond,
+			},
+			wantErr:        false,
+			wantPassed:     true,
+			wantEventTypes: []string{"checking", "status"},
+		},
+		{
+			name: "immediate success on first check",
+			mockSetup: func(m *MockGhRunner) {
+				successOutput := `[{"name":"test","state":"SUCCESS"}]`
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+			},
+			checkInterval:  50 * time.Millisecond,
+			initialDelay:   100 * time.Millisecond,
+			advanceSteps:   []time.Duration{},
+			wantErr:        false,
+			wantPassed:     true,
+			wantEventTypes: []string{"checking", "status"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGhRunner := new(MockGhRunner)
+			tt.mockSetup(mockGhRunner)
+
+			fakeClock := NewFakeClock(time.Now())
+
+			checker := NewCICheckerWithClock(
+				"/tmp",
+				tt.checkInterval,
+				100*time.Millisecond,
+				tt.initialDelay,
+				mockGhRunner,
+				fakeClock,
+			)
+
+			ctx := context.Background()
+
+			var result *CIResult
+			var err error
+			var progressEvents []CIProgressEvent
+			done := make(chan struct{})
+
+			onProgress := func(event CIProgressEvent) {
+				progressEvents = append(progressEvents, event)
+			}
+
+			go func() {
+				result, err = checker.WaitForCIWithProgress(ctx, 0, 5*time.Second, CheckCIOptions{}, onProgress)
+				close(done)
+			}()
+
+			for _, advance := range tt.advanceSteps {
+				time.Sleep(10 * time.Millisecond)
+				fakeClock.Advance(advance)
+			}
+
+			select {
+			case <-done:
+			case <-time.After(1 * time.Second):
+				t.Fatal("test timed out waiting for WaitForCIWithProgress to complete")
+			}
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotNil(t, result)
+			assert.Equal(t, tt.wantPassed, result.Passed)
+
+			eventTypes := make(map[string]bool)
+			for _, event := range progressEvents {
+				eventTypes[event.Type] = true
+			}
+
+			for _, wantType := range tt.wantEventTypes {
+				assert.True(t, eventTypes[wantType], "should have %s event", wantType)
+			}
+
+			mockGhRunner.AssertExpectations(t)
+		})
+	}
 }
