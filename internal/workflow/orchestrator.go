@@ -585,41 +585,9 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 			}
 
 			// NoPRError handling - need to create PR first
-			o.logger.Verbose("No PR found, initiating PR creation")
-			fmt.Printf("%s No PR found for current branch, creating PR...\n", Yellow("⚠"))
-
-			prNumber, prErr := o.executePRCreation(ctx, state)
-			if prErr != nil {
-				phaseState.Feedback = append(phaseState.Feedback, fmt.Sprintf("PR creation failed: %v", prErr))
-				if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
-					return fmt.Errorf("failed to save state: %w", saveErr)
-				}
-				return o.failWorkflow(state, fmt.Errorf("failed to create PR: %w", prErr))
-			}
-
-			if prNumber == 0 {
-				// PR creation was skipped (no commits, etc.)
-				phaseState.Feedback = append(phaseState.Feedback, "PR creation skipped - no commits on branch")
-				if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
-					return fmt.Errorf("failed to save state: %w", saveErr)
-				}
-				return o.failWorkflow(state, fmt.Errorf("no commits on branch to create PR"))
-			}
-
-			// PR created/found - retry CI check with the PR number
-			fmt.Printf("%s Retrying CI check with PR #%d\n", Green("✓"), prNumber)
-
-			ciSpinner = NewCISpinner("Waiting for CI to complete")
-			ciSpinner.Start()
-
-			ciResult, err = ciChecker.WaitForCIWithProgress(ctx, prNumber, o.config.CICheckTimeout, CheckCIOptions{}, ciSpinner.OnProgress)
+			ciResult, err = o.handleNoPRError(ctx, state, phaseState, ciChecker)
 			if err != nil {
-				ciSpinner.Fail("CI check failed")
-				phaseState.Feedback = append(phaseState.Feedback, fmt.Sprintf("CI check error: %v", err))
-				if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
-					return fmt.Errorf("failed to save state: %w", saveErr)
-				}
-				return o.failWorkflowCI(state, fmt.Errorf("failed to check CI: %w", err))
+				return o.failWorkflow(state, err)
 			}
 
 			// Continue with CI result processing below (don't return here)
@@ -769,41 +737,9 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 			}
 
 			// NoPRError handling - need to create PR first
-			o.logger.Verbose("No PR found, initiating PR creation")
-			fmt.Printf("%s No PR found for current branch, creating PR...\n", Yellow("⚠"))
-
-			prNumber, prErr := o.executePRCreation(ctx, state)
-			if prErr != nil {
-				phaseState.Feedback = append(phaseState.Feedback, fmt.Sprintf("PR creation failed: %v", prErr))
-				if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
-					return fmt.Errorf("failed to save state: %w", saveErr)
-				}
-				return o.failWorkflow(state, fmt.Errorf("failed to create PR: %w", prErr))
-			}
-
-			if prNumber == 0 {
-				// PR creation was skipped (no commits, etc.)
-				phaseState.Feedback = append(phaseState.Feedback, "PR creation skipped - no commits on branch")
-				if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
-					return fmt.Errorf("failed to save state: %w", saveErr)
-				}
-				return o.failWorkflow(state, fmt.Errorf("no commits on branch to create PR"))
-			}
-
-			// PR created/found - retry CI check with the PR number
-			fmt.Printf("%s Retrying CI check with PR #%d\n", Green("✓"), prNumber)
-
-			ciSpinner = NewCISpinner("Waiting for CI to complete")
-			ciSpinner.Start()
-
-			ciResult, err = ciChecker.WaitForCIWithProgress(ctx, prNumber, o.config.CICheckTimeout, CheckCIOptions{}, ciSpinner.OnProgress)
+			ciResult, err = o.handleNoPRError(ctx, state, phaseState, ciChecker)
 			if err != nil {
-				ciSpinner.Fail("CI check failed")
-				phaseState.Feedback = append(phaseState.Feedback, fmt.Sprintf("CI check error: %v", err))
-				if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
-					return fmt.Errorf("failed to save state: %w", saveErr)
-				}
-				return o.failWorkflowCI(state, fmt.Errorf("failed to check CI: %w", err))
+				return o.failWorkflow(state, err)
 			}
 
 			// Continue with CI result processing below (don't return here)
@@ -1143,6 +1079,55 @@ func (o *Orchestrator) executePRCreation(ctx context.Context, state *WorkflowSta
 	}
 
 	return 0, fmt.Errorf("failed to create PR after %d attempts", maxPRCreationAttempts)
+}
+
+// handleNoPRError handles the case when no PR exists during CI check.
+// It attempts to create a PR and retry the CI check. Returns the CI result
+// if successful, or an error if PR creation or CI check fails.
+func (o *Orchestrator) handleNoPRError(
+	ctx context.Context,
+	state *WorkflowState,
+	phaseState *PhaseState,
+	ciChecker CIChecker,
+) (*CIResult, error) {
+	o.logger.Verbose("No PR found, initiating PR creation")
+	fmt.Printf("%s No PR found for current branch, creating PR...\n", Yellow("⚠"))
+
+	prNumber, prErr := o.executePRCreation(ctx, state)
+	if prErr != nil {
+		phaseState.Feedback = append(phaseState.Feedback, fmt.Sprintf("PR creation failed: %v", prErr))
+		if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
+			return nil, fmt.Errorf("failed to save state: %w", saveErr)
+		}
+		return nil, fmt.Errorf("failed to create PR: %w", prErr)
+	}
+
+	if prNumber == 0 {
+		// PR creation was skipped (no commits, etc.)
+		phaseState.Feedback = append(phaseState.Feedback, "PR creation skipped - no commits on branch")
+		if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
+			return nil, fmt.Errorf("failed to save state: %w", saveErr)
+		}
+		return nil, fmt.Errorf("no commits on branch to create PR")
+	}
+
+	// PR created/found - retry CI check with the PR number
+	fmt.Printf("%s Retrying CI check with PR #%d\n", Green("✓"), prNumber)
+
+	ciSpinner := NewCISpinner("Waiting for CI to complete")
+	ciSpinner.Start()
+
+	ciResult, err := ciChecker.WaitForCIWithProgress(ctx, prNumber, o.config.CICheckTimeout, CheckCIOptions{}, ciSpinner.OnProgress)
+	if err != nil {
+		ciSpinner.Fail("CI check failed")
+		phaseState.Feedback = append(phaseState.Feedback, fmt.Sprintf("CI check error: %v", err))
+		if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
+			return nil, fmt.Errorf("failed to save state: %w", saveErr)
+		}
+		return nil, fmt.Errorf("failed to check CI: %w", err)
+	}
+
+	return ciResult, nil
 }
 
 // transitionPhase transitions the workflow to the next phase

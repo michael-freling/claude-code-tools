@@ -47,6 +47,9 @@ func (e *NoPRError) Error() string {
 	if e.Msg != "" {
 		return e.Msg
 	}
+	if e.Branch == "" {
+		return "no PR found for current branch"
+	}
 	return fmt.Sprintf("no PR found for branch %s", e.Branch)
 }
 

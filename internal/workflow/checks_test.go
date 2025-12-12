@@ -2147,7 +2147,7 @@ func TestNoPRError_Error(t *testing.T) {
 				Branch: "",
 				Msg:    "",
 			},
-			wantMsg: "no PR found for branch ",
+			wantMsg: "no PR found for current branch",
 		},
 		{
 			name: "message takes precedence over branch",

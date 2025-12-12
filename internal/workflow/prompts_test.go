@@ -1173,6 +1173,28 @@ func TestPromptGenerator_GenerateCreatePRPrompt(t *testing.T) {
 			wantErr:     true,
 			errContains: "context cannot be nil",
 		},
+		{
+			name: "returns error when branch is empty",
+			ctx: &PRCreationContext{
+				WorkflowType: WorkflowTypeFeature,
+				Branch:       "",
+				BaseBranch:   "main",
+				Description:  "test",
+			},
+			wantErr:     true,
+			errContains: "branch cannot be empty",
+		},
+		{
+			name: "returns error when base branch is empty",
+			ctx: &PRCreationContext{
+				WorkflowType: WorkflowTypeFeature,
+				Branch:       "feature/test",
+				BaseBranch:   "",
+				Description:  "test",
+			},
+			wantErr:     true,
+			errContains: "base branch cannot be empty",
+		},
 	}
 
 	for _, tt := range tests {
