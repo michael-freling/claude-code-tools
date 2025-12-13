@@ -483,3 +483,168 @@ func TestGhRunner_GetLatestRunID(t *testing.T) {
 		})
 	}
 }
+
+func TestGhRunner_PREdit(t *testing.T) {
+	tests := []struct {
+		name        string
+		dir         string
+		prNumber    int
+		body        string
+		setupMock   func(*MockRunner)
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "edits PR successfully",
+			dir:      "/test/repo",
+			prNumber: 123,
+			body:     "Updated PR body",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "edit", "123", "--body", "Updated PR body").
+					Return("", "", nil)
+			},
+			wantErr: false,
+		},
+		{
+			name:     "edits PR with empty body",
+			dir:      "/test/repo",
+			prNumber: 456,
+			body:     "",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "edit", "456", "--body", "").
+					Return("", "", nil)
+			},
+			wantErr: false,
+		},
+		{
+			name:        "fails when PR number is zero",
+			dir:         "/test/repo",
+			prNumber:    0,
+			body:        "Updated body",
+			setupMock:   func(m *MockRunner) {},
+			wantErr:     true,
+			errContains: "PR number must be positive",
+		},
+		{
+			name:        "fails when PR number is negative",
+			dir:         "/test/repo",
+			prNumber:    -1,
+			body:        "Updated body",
+			setupMock:   func(m *MockRunner) {},
+			wantErr:     true,
+			errContains: "PR number must be positive",
+		},
+		{
+			name:     "fails when gh command fails",
+			dir:      "/test/repo",
+			prNumber: 123,
+			body:     "Updated body",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "edit", "123", "--body", "Updated body").
+					Return("", "error: pull request not found", fmt.Errorf("exit status 1"))
+			},
+			wantErr:     true,
+			errContains: "failed to edit PR 123",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockRunner := NewMockRunner(ctrl)
+			tt.setupMock(mockRunner)
+
+			ghRunner := NewGhRunner(mockRunner)
+			ctx := context.Background()
+
+			err := ghRunner.PREdit(ctx, tt.dir, tt.prNumber, tt.body)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestGhRunner_PRClose(t *testing.T) {
+	tests := []struct {
+		name        string
+		dir         string
+		prNumber    int
+		setupMock   func(*MockRunner)
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "closes PR successfully",
+			dir:      "/test/repo",
+			prNumber: 123,
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "close", "123").
+					Return("", "", nil)
+			},
+			wantErr: false,
+		},
+		{
+			name:        "fails when PR number is zero",
+			dir:         "/test/repo",
+			prNumber:    0,
+			setupMock:   func(m *MockRunner) {},
+			wantErr:     true,
+			errContains: "PR number must be positive",
+		},
+		{
+			name:        "fails when PR number is negative",
+			dir:         "/test/repo",
+			prNumber:    -5,
+			setupMock:   func(m *MockRunner) {},
+			wantErr:     true,
+			errContains: "PR number must be positive",
+		},
+		{
+			name:     "fails when gh command fails",
+			dir:      "/test/repo",
+			prNumber: 123,
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "close", "123").
+					Return("", "error: pull request not found", fmt.Errorf("exit status 1"))
+			},
+			wantErr:     true,
+			errContains: "failed to close PR 123",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockRunner := NewMockRunner(ctrl)
+			tt.setupMock(mockRunner)
+
+			ghRunner := NewGhRunner(mockRunner)
+			ctx := context.Background()
+
+			err := ghRunner.PRClose(ctx, tt.dir, tt.prNumber)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
+}
