@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"text/template"
 
+	"github.com/michael-freling/claude-code-tools/internal/command"
 	"github.com/michael-freling/claude-code-tools/internal/templates"
 )
 
@@ -13,7 +14,7 @@ type PromptGenerator interface {
 	GeneratePlanningPrompt(wfType WorkflowType, description string, feedback []string) (string, error)
 	GenerateImplementationPrompt(plan *Plan) (string, error)
 	GenerateRefactoringPrompt(plan *Plan) (string, error)
-	GeneratePRSplitPrompt(metrics *PRMetrics) (string, error)
+	GeneratePRSplitPrompt(metrics *PRMetrics, commits []command.Commit) (string, error)
 	GenerateFixCIPrompt(failures string) (string, error)
 }
 
@@ -126,7 +127,7 @@ func (p *promptGenerator) GenerateRefactoringPrompt(plan *Plan) (string, error) 
 }
 
 // GeneratePRSplitPrompt generates a prompt for the PR split phase
-func (p *promptGenerator) GeneratePRSplitPrompt(metrics *PRMetrics) (string, error) {
+func (p *promptGenerator) GeneratePRSplitPrompt(metrics *PRMetrics, commits []command.Commit) (string, error) {
 	if metrics == nil {
 		return "", fmt.Errorf("metrics cannot be nil")
 	}
@@ -136,8 +137,16 @@ func (p *promptGenerator) GeneratePRSplitPrompt(metrics *PRMetrics) (string, err
 		return "", fmt.Errorf("pr-split template not loaded")
 	}
 
+	data := struct {
+		Metrics *PRMetrics
+		Commits []command.Commit
+	}{
+		Metrics: metrics,
+		Commits: commits,
+	}
+
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, metrics); err != nil {
+	if err := tmpl.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("failed to execute pr-split template: %w", err)
 	}
 

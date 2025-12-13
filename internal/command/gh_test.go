@@ -27,21 +27,38 @@ func TestGhRunner_PRCreate(t *testing.T) {
 		title       string
 		body        string
 		head        string
+		base        string
 		setupMock   func(*MockRunner)
 		want        string
 		wantErr     bool
 		errContains string
 	}{
 		{
-			name:  "creates PR successfully",
+			name:  "creates PR successfully without base branch",
 			dir:   "/test/repo",
 			title: "Test PR",
 			body:  "Test body",
 			head:  "feature-branch",
+			base:  "",
 			setupMock: func(m *MockRunner) {
 				m.EXPECT().
 					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "create", "--title", "Test PR", "--body", "Test body", "--head", "feature-branch").
-					Return("https://github.com/owner/repo/pull/123", "", nil)
+					Return("https://github.com/owner/repo/pull/123\n", "", nil)
+			},
+			want:    "https://github.com/owner/repo/pull/123",
+			wantErr: false,
+		},
+		{
+			name:  "creates PR successfully with base branch",
+			dir:   "/test/repo",
+			title: "Test PR",
+			body:  "Test body",
+			head:  "feature-branch",
+			base:  "develop",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "create", "--title", "Test PR", "--body", "Test body", "--head", "feature-branch", "--base", "develop").
+					Return("https://github.com/owner/repo/pull/123\n", "", nil)
 			},
 			want:    "https://github.com/owner/repo/pull/123",
 			wantErr: false,
@@ -52,6 +69,7 @@ func TestGhRunner_PRCreate(t *testing.T) {
 			title: "Test PR",
 			body:  "Test body",
 			head:  "feature-branch",
+			base:  "",
 			setupMock: func(m *MockRunner) {
 				m.EXPECT().
 					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "create", "--title", "Test PR", "--body", "Test body", "--head", "feature-branch").
@@ -59,6 +77,28 @@ func TestGhRunner_PRCreate(t *testing.T) {
 			},
 			wantErr:     true,
 			errContains: "failed to create PR",
+		},
+		{
+			name:        "fails when title is empty",
+			dir:         "/test/repo",
+			title:       "",
+			body:        "Test body",
+			head:        "feature-branch",
+			base:        "",
+			setupMock:   func(_ *MockRunner) {},
+			wantErr:     true,
+			errContains: "title cannot be empty",
+		},
+		{
+			name:        "fails when head is empty",
+			dir:         "/test/repo",
+			title:       "Test PR",
+			body:        "Test body",
+			head:        "",
+			base:        "",
+			setupMock:   func(_ *MockRunner) {},
+			wantErr:     true,
+			errContains: "head branch cannot be empty",
 		},
 	}
 
@@ -73,7 +113,7 @@ func TestGhRunner_PRCreate(t *testing.T) {
 			ghRunner := NewGhRunner(mockRunner)
 			ctx := context.Background()
 
-			got, err := ghRunner.PRCreate(ctx, tt.dir, tt.title, tt.body, tt.head)
+			got, err := ghRunner.PRCreate(ctx, tt.dir, tt.title, tt.body, tt.head, tt.base)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -440,6 +480,171 @@ func TestGhRunner_GetLatestRunID(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestGhRunner_PREdit(t *testing.T) {
+	tests := []struct {
+		name        string
+		dir         string
+		prNumber    int
+		body        string
+		setupMock   func(*MockRunner)
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "edits PR successfully",
+			dir:      "/test/repo",
+			prNumber: 123,
+			body:     "Updated PR body",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "edit", "123", "--body", "Updated PR body").
+					Return("", "", nil)
+			},
+			wantErr: false,
+		},
+		{
+			name:     "edits PR with empty body",
+			dir:      "/test/repo",
+			prNumber: 456,
+			body:     "",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "edit", "456", "--body", "").
+					Return("", "", nil)
+			},
+			wantErr: false,
+		},
+		{
+			name:        "fails when PR number is zero",
+			dir:         "/test/repo",
+			prNumber:    0,
+			body:        "Updated body",
+			setupMock:   func(m *MockRunner) {},
+			wantErr:     true,
+			errContains: "PR number must be positive",
+		},
+		{
+			name:        "fails when PR number is negative",
+			dir:         "/test/repo",
+			prNumber:    -1,
+			body:        "Updated body",
+			setupMock:   func(m *MockRunner) {},
+			wantErr:     true,
+			errContains: "PR number must be positive",
+		},
+		{
+			name:     "fails when gh command fails",
+			dir:      "/test/repo",
+			prNumber: 123,
+			body:     "Updated body",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "edit", "123", "--body", "Updated body").
+					Return("", "error: pull request not found", fmt.Errorf("exit status 1"))
+			},
+			wantErr:     true,
+			errContains: "failed to edit PR 123",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockRunner := NewMockRunner(ctrl)
+			tt.setupMock(mockRunner)
+
+			ghRunner := NewGhRunner(mockRunner)
+			ctx := context.Background()
+
+			err := ghRunner.PREdit(ctx, tt.dir, tt.prNumber, tt.body)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestGhRunner_PRClose(t *testing.T) {
+	tests := []struct {
+		name        string
+		dir         string
+		prNumber    int
+		setupMock   func(*MockRunner)
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "closes PR successfully",
+			dir:      "/test/repo",
+			prNumber: 123,
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "close", "123").
+					Return("", "", nil)
+			},
+			wantErr: false,
+		},
+		{
+			name:        "fails when PR number is zero",
+			dir:         "/test/repo",
+			prNumber:    0,
+			setupMock:   func(m *MockRunner) {},
+			wantErr:     true,
+			errContains: "PR number must be positive",
+		},
+		{
+			name:        "fails when PR number is negative",
+			dir:         "/test/repo",
+			prNumber:    -5,
+			setupMock:   func(m *MockRunner) {},
+			wantErr:     true,
+			errContains: "PR number must be positive",
+		},
+		{
+			name:     "fails when gh command fails",
+			dir:      "/test/repo",
+			prNumber: 123,
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "close", "123").
+					Return("", "error: pull request not found", fmt.Errorf("exit status 1"))
+			},
+			wantErr:     true,
+			errContains: "failed to close PR 123",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockRunner := NewMockRunner(ctrl)
+			tt.setupMock(mockRunner)
+
+			ghRunner := NewGhRunner(mockRunner)
+			ctx := context.Background()
+
+			err := ghRunner.PRClose(ctx, tt.dir, tt.prNumber)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
 		})
 	}
 }

@@ -61,6 +61,59 @@ func (m *MockGitRunner) WorktreeRemove(ctx context.Context, dir string, path str
 	return args.Error(0)
 }
 
+func (m *MockGitRunner) GetCommits(ctx context.Context, dir string, base string) ([]command.Commit, error) {
+	args := m.Called(ctx, dir, base)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]command.Commit), args.Error(1)
+}
+
+func (m *MockGitRunner) CherryPick(ctx context.Context, dir string, commitHash string) error {
+	args := m.Called(ctx, dir, commitHash)
+	return args.Error(0)
+}
+
+func (m *MockGitRunner) CreateBranch(ctx context.Context, dir string, branchName string, baseBranch string) error {
+	args := m.Called(ctx, dir, branchName, baseBranch)
+	return args.Error(0)
+}
+
+func (m *MockGitRunner) CheckoutBranch(ctx context.Context, dir string, branchName string) error {
+	args := m.Called(ctx, dir, branchName)
+	return args.Error(0)
+}
+
+func (m *MockGitRunner) DeleteBranch(ctx context.Context, dir string, branchName string, force bool) error {
+	args := m.Called(ctx, dir, branchName, force)
+	return args.Error(0)
+}
+
+func (m *MockGitRunner) DeleteRemoteBranch(ctx context.Context, dir string, branchName string) error {
+	args := m.Called(ctx, dir, branchName)
+	return args.Error(0)
+}
+
+func (m *MockGitRunner) CommitEmpty(ctx context.Context, dir string, message string) error {
+	args := m.Called(ctx, dir, message)
+	return args.Error(0)
+}
+
+func (m *MockGitRunner) CheckoutFiles(ctx context.Context, dir string, sourceBranch string, files []string) error {
+	args := m.Called(ctx, dir, sourceBranch, files)
+	return args.Error(0)
+}
+
+func (m *MockGitRunner) CommitAll(ctx context.Context, dir string, message string) error {
+	args := m.Called(ctx, dir, message)
+	return args.Error(0)
+}
+
+func (m *MockGitRunner) GetDiffStat(ctx context.Context, dir string, base string) (string, error) {
+	args := m.Called(ctx, dir, base)
+	return args.String(0), args.Error(1)
+}
+
 // MockGhRunner is a mock implementation of command.GhRunner
 type MockGhRunner struct {
 	mock.Mock
@@ -69,9 +122,19 @@ type MockGhRunner struct {
 // Ensure MockGhRunner implements command.GhRunner
 var _ command.GhRunner = (*MockGhRunner)(nil)
 
-func (m *MockGhRunner) PRCreate(ctx context.Context, dir string, title, body, head string) (string, error) {
-	args := m.Called(ctx, dir, title, body, head)
+func (m *MockGhRunner) PRCreate(ctx context.Context, dir string, title, body, head, base string) (string, error) {
+	args := m.Called(ctx, dir, title, body, head, base)
 	return args.String(0), args.Error(1)
+}
+
+func (m *MockGhRunner) PREdit(ctx context.Context, dir string, prNumber int, body string) error {
+	args := m.Called(ctx, dir, prNumber, body)
+	return args.Error(0)
+}
+
+func (m *MockGhRunner) PRClose(ctx context.Context, dir string, prNumber int) error {
+	args := m.Called(ctx, dir, prNumber)
+	return args.Error(0)
 }
 
 func (m *MockGhRunner) PRView(ctx context.Context, dir string, jsonFields string, jqQuery string) (string, error) {

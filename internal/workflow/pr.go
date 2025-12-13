@@ -10,7 +10,7 @@ import (
 	"github.com/michael-freling/claude-code-tools/internal/command"
 )
 
-var prNumberRegex = regexp.MustCompile(`/pull/(\d+)`)
+var prNumberRegex = regexp.MustCompile(`/pull/(\d+)(?:[/?#]|$)`)
 
 // PRManager handles PR creation and management
 type PRManager interface {
@@ -57,7 +57,7 @@ func (p *prManager) CreatePR(ctx context.Context, title, body string) (int, erro
 		return 0, fmt.Errorf("failed to get current branch: %w", err)
 	}
 
-	prURL, err := p.ghRunner.PRCreate(ctx, p.workingDir, title, body, branchName)
+	prURL, err := p.ghRunner.PRCreate(ctx, p.workingDir, title, body, branchName, "")
 	if err != nil {
 		return 0, err
 	}

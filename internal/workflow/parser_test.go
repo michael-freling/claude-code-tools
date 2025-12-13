@@ -373,6 +373,108 @@ func TestOutputParser_ParseRefactoringSummary(t *testing.T) {
 	}
 }
 
+func TestOutputParser_ParsePRSplitPlan(t *testing.T) {
+	tests := []struct {
+		name         string
+		jsonStr      string
+		wantErr      bool
+		errContains  string
+		wantStrategy SplitStrategy
+		wantSummary  string
+	}{
+		{
+			name: "parses valid PR split plan with commits strategy",
+			jsonStr: `{
+				"strategy": "commits",
+				"parentTitle": "Parent PR Title",
+				"parentDescription": "Parent PR Description",
+				"childPRs": [
+					{
+						"title": "Child PR 1",
+						"description": "First child PR",
+						"commits": ["abc123", "def456"]
+					},
+					{
+						"title": "Child PR 2",
+						"description": "Second child PR",
+						"commits": ["ghi789"]
+					}
+				],
+				"summary": "Split into 2 PRs by commits"
+			}`,
+			wantErr:      false,
+			wantStrategy: SplitByCommits,
+			wantSummary:  "Split into 2 PRs by commits",
+		},
+		{
+			name: "parses valid PR split plan with files strategy",
+			jsonStr: `{
+				"strategy": "files",
+				"parentTitle": "Parent PR Title",
+				"parentDescription": "Parent PR Description",
+				"childPRs": [
+					{
+						"title": "Child PR 1",
+						"description": "First child PR",
+						"files": ["file1.go", "file2.go"]
+					},
+					{
+						"title": "Child PR 2",
+						"description": "Second child PR",
+						"files": ["file3.go"]
+					}
+				],
+				"summary": "Split into 2 PRs by files"
+			}`,
+			wantErr:      false,
+			wantStrategy: SplitByFiles,
+			wantSummary:  "Split into 2 PRs by files",
+		},
+		{
+			name: "returns error for missing summary",
+			jsonStr: `{
+				"strategy": "commits",
+				"parentTitle": "Parent",
+				"parentDescription": "Description",
+				"childPRs": []
+			}`,
+			wantErr:     true,
+			errContains: "missing required field",
+		},
+		{
+			name:        "returns error for empty object",
+			jsonStr:     "{}",
+			wantErr:     true,
+			errContains: "missing required field",
+		},
+		{
+			name:        "returns error for invalid JSON syntax",
+			jsonStr:     "{invalid",
+			wantErr:     true,
+			errContains: "invalid JSON",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewOutputParser()
+			got, err := parser.ParsePRSplitPlan(tt.jsonStr)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				assert.Nil(t, got)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Equal(t, tt.wantStrategy, got.Strategy)
+			assert.Equal(t, tt.wantSummary, got.Summary)
+		})
+	}
+}
+
 func TestOutputParser_ParsePRSplitResult(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -529,7 +631,7 @@ func TestTruncateOutput(t *testing.T) {
 			name:     "truncates output when over max length",
 			output:   "this is a very long output that should be truncated",
 			maxLen:   20,
-			expected: "this is a very long ...\n(truncated, showing first 500 chars)",
+			expected: "this is a very long ...\n(truncated, showing first 20 chars)",
 		},
 		{
 			name:     "returns exact length output unchanged",

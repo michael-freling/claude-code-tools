@@ -186,7 +186,7 @@ func TestPRManager_CreatePR(t *testing.T) {
 					Return("feature-branch", nil)
 			},
 			setupGhMock: func(m *MockGhRunner) {
-				m.On("PRCreate", mock.Anything, "/test/repo", "Add new feature", "This PR adds a new feature", "feature-branch").
+				m.On("PRCreate", mock.Anything, "/test/repo", "Add new feature", "This PR adds a new feature", "feature-branch", "").
 					Return("https://github.com/owner/repo/pull/123", nil)
 			},
 			want: 123,
@@ -200,7 +200,7 @@ func TestPRManager_CreatePR(t *testing.T) {
 					Return("bugfix-branch", nil)
 			},
 			setupGhMock: func(m *MockGhRunner) {
-				m.On("PRCreate", mock.Anything, "/test/repo", "Fix bug", "Bug fix description", "bugfix-branch").
+				m.On("PRCreate", mock.Anything, "/test/repo", "Fix bug", "Bug fix description", "bugfix-branch", "").
 					Return("https://github.com/owner/repo/pull/456", nil)
 			},
 			want: 456,
@@ -226,7 +226,7 @@ func TestPRManager_CreatePR(t *testing.T) {
 					Return("test-branch", nil)
 			},
 			setupGhMock: func(m *MockGhRunner) {
-				m.On("PRCreate", mock.Anything, "/test/repo", "Test PR", "Test body", "test-branch").
+				m.On("PRCreate", mock.Anything, "/test/repo", "Test PR", "Test body", "test-branch", "").
 					Return("", fmt.Errorf("failed to create PR"))
 			},
 			wantErr:     true,
@@ -241,7 +241,7 @@ func TestPRManager_CreatePR(t *testing.T) {
 					Return("test-branch", nil)
 			},
 			setupGhMock: func(m *MockGhRunner) {
-				m.On("PRCreate", mock.Anything, "/test/repo", "Test PR", "Test body", "test-branch").
+				m.On("PRCreate", mock.Anything, "/test/repo", "Test PR", "Test body", "test-branch", "").
 					Return("https://github.com/owner/repo/issues/123", nil)
 			},
 			wantErr:     true,
@@ -388,7 +388,7 @@ func TestPRManager_EnsurePR(t *testing.T) {
 			setupGhMock: func(m *MockGhRunner) {
 				m.On("PRView", mock.Anything, "/test/repo", "number", ".number").
 					Return("", fmt.Errorf("no pull requests found"))
-				m.On("PRCreate", mock.Anything, "/test/repo", "New PR", "PR body", "feature-branch").
+				m.On("PRCreate", mock.Anything, "/test/repo", "New PR", "PR body", "feature-branch", "").
 					Return("https://github.com/owner/repo/pull/456", nil)
 			},
 			want: 456,

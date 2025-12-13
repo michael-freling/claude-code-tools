@@ -40,6 +40,133 @@ func (m *MockGitRunner) EXPECT() *MockGitRunnerMockRecorder {
 	return m.recorder
 }
 
+// CheckoutBranch mocks base method.
+func (m *MockGitRunner) CheckoutBranch(ctx context.Context, dir, branchName string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CheckoutBranch", ctx, dir, branchName)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CheckoutBranch indicates an expected call of CheckoutBranch.
+func (mr *MockGitRunnerMockRecorder) CheckoutBranch(ctx, dir, branchName any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckoutBranch", reflect.TypeOf((*MockGitRunner)(nil).CheckoutBranch), ctx, dir, branchName)
+}
+
+// CheckoutFiles mocks base method.
+func (m *MockGitRunner) CheckoutFiles(ctx context.Context, dir, sourceBranch string, files []string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CheckoutFiles", ctx, dir, sourceBranch, files)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CheckoutFiles indicates an expected call of CheckoutFiles.
+func (mr *MockGitRunnerMockRecorder) CheckoutFiles(ctx, dir, sourceBranch, files any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckoutFiles", reflect.TypeOf((*MockGitRunner)(nil).CheckoutFiles), ctx, dir, sourceBranch, files)
+}
+
+// CherryPick mocks base method.
+func (m *MockGitRunner) CherryPick(ctx context.Context, dir, commitHash string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CherryPick", ctx, dir, commitHash)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CherryPick indicates an expected call of CherryPick.
+func (mr *MockGitRunnerMockRecorder) CherryPick(ctx, dir, commitHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CherryPick", reflect.TypeOf((*MockGitRunner)(nil).CherryPick), ctx, dir, commitHash)
+}
+
+// CommitAll mocks base method.
+func (m *MockGitRunner) CommitAll(ctx context.Context, dir, message string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CommitAll", ctx, dir, message)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CommitAll indicates an expected call of CommitAll.
+func (mr *MockGitRunnerMockRecorder) CommitAll(ctx, dir, message any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CommitAll", reflect.TypeOf((*MockGitRunner)(nil).CommitAll), ctx, dir, message)
+}
+
+// CommitEmpty mocks base method.
+func (m *MockGitRunner) CommitEmpty(ctx context.Context, dir, message string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CommitEmpty", ctx, dir, message)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CommitEmpty indicates an expected call of CommitEmpty.
+func (mr *MockGitRunnerMockRecorder) CommitEmpty(ctx, dir, message any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CommitEmpty", reflect.TypeOf((*MockGitRunner)(nil).CommitEmpty), ctx, dir, message)
+}
+
+// CreateBranch mocks base method.
+func (m *MockGitRunner) CreateBranch(ctx context.Context, dir, branchName, baseBranch string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateBranch", ctx, dir, branchName, baseBranch)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CreateBranch indicates an expected call of CreateBranch.
+func (mr *MockGitRunnerMockRecorder) CreateBranch(ctx, dir, branchName, baseBranch any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateBranch", reflect.TypeOf((*MockGitRunner)(nil).CreateBranch), ctx, dir, branchName, baseBranch)
+}
+
+// DeleteBranch mocks base method.
+func (m *MockGitRunner) DeleteBranch(ctx context.Context, dir, branchName string, force bool) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteBranch", ctx, dir, branchName, force)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeleteBranch indicates an expected call of DeleteBranch.
+func (mr *MockGitRunnerMockRecorder) DeleteBranch(ctx, dir, branchName, force any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteBranch", reflect.TypeOf((*MockGitRunner)(nil).DeleteBranch), ctx, dir, branchName, force)
+}
+
+// DeleteRemoteBranch mocks base method.
+func (m *MockGitRunner) DeleteRemoteBranch(ctx context.Context, dir, branchName string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteRemoteBranch", ctx, dir, branchName)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeleteRemoteBranch indicates an expected call of DeleteRemoteBranch.
+func (mr *MockGitRunnerMockRecorder) DeleteRemoteBranch(ctx, dir, branchName any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteRemoteBranch", reflect.TypeOf((*MockGitRunner)(nil).DeleteRemoteBranch), ctx, dir, branchName)
+}
+
+// GetCommits mocks base method.
+func (m *MockGitRunner) GetCommits(ctx context.Context, dir, base string) ([]Commit, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCommits", ctx, dir, base)
+	ret0, _ := ret[0].([]Commit)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetCommits indicates an expected call of GetCommits.
+func (mr *MockGitRunnerMockRecorder) GetCommits(ctx, dir, base any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCommits", reflect.TypeOf((*MockGitRunner)(nil).GetCommits), ctx, dir, base)
+}
+
 // GetCurrentBranch mocks base method.
 func (m *MockGitRunner) GetCurrentBranch(ctx context.Context, dir string) (string, error) {
 	m.ctrl.T.Helper()
@@ -53,6 +180,21 @@ func (m *MockGitRunner) GetCurrentBranch(ctx context.Context, dir string) (strin
 func (mr *MockGitRunnerMockRecorder) GetCurrentBranch(ctx, dir any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCurrentBranch", reflect.TypeOf((*MockGitRunner)(nil).GetCurrentBranch), ctx, dir)
+}
+
+// GetDiffStat mocks base method.
+func (m *MockGitRunner) GetDiffStat(ctx context.Context, dir, base string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetDiffStat", ctx, dir, base)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetDiffStat indicates an expected call of GetDiffStat.
+func (mr *MockGitRunnerMockRecorder) GetDiffStat(ctx, dir, base any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDiffStat", reflect.TypeOf((*MockGitRunner)(nil).GetDiffStat), ctx, dir, base)
 }
 
 // Push mocks base method.

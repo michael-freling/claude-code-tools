@@ -1,26 +1,48 @@
 You need to split the current changes into multiple pull requests for easier review.
 
 ## Change Metrics
-- Lines Changed: {{.LinesChanged}}
-- Files Changed: {{.FilesChanged}}
+- Lines Changed: {{.Metrics.LinesChanged}}
+- Files Changed: {{.Metrics.FilesChanged}}
 
-{{if .FilesAdded}}
+{{if .Metrics.FilesAdded}}
 ### Files Added
-{{range .FilesAdded}}- {{.}}
+{{range .Metrics.FilesAdded}}- {{.}}
 {{end}}
 {{end}}
 
-{{if .FilesModified}}
+{{if .Metrics.FilesModified}}
 ### Files Modified
-{{range .FilesModified}}- {{.}}
+{{range .Metrics.FilesModified}}- {{.}}
 {{end}}
 {{end}}
 
-{{if .FilesDeleted}}
+{{if .Metrics.FilesDeleted}}
 ### Files Deleted
-{{range .FilesDeleted}}- {{.}}
+{{range .Metrics.FilesDeleted}}- {{.}}
 {{end}}
 {{end}}
+
+## Commits to Split
+
+The following commits need to be distributed across child PRs:
+
+{{range .Commits}}
+- `{{.Hash}}` - {{.Subject}}
+{{end}}
+
+## Split Strategy
+
+Choose one of the following strategies:
+
+### Strategy: "commits" (Recommended)
+Use when commits are logically separable. Each child PR will cherry-pick specific commits.
+- Best for: Clean commit history where each commit belongs to one logical change
+- Each commit should only appear in ONE child PR
+
+### Strategy: "files"
+Use when commits touch multiple concerns. Each child PR will include specific files.
+- Best for: Mixed commits that touch multiple features
+- A file should only appear in ONE child PR
 
 ## Instructions
 1. Analyze the changes and identify logical groups
@@ -31,7 +53,11 @@ You need to split the current changes into multiple pull requests for easier rev
    - Can be merged sequentially
    - Each address a specific aspect of the change
 
-## Guidelines
+## Guidelines for Splitting
+- Each child PR should be independently reviewable
+- Child PRs are chained: Child 2 is based on Child 1, Child 3 on Child 2, etc.
+- All commits/files must be accounted for (no duplicates, no missing)
+- Order child PRs by dependency: foundational changes first
 - Group changes by logical boundaries such as:
   - By subproject or module (if monorepo)
   - By change type (refactoring vs feature additions vs bug fixes)
@@ -39,9 +65,6 @@ You need to split the current changes into multiple pull requests for easier rev
   - By dependency order (foundational changes before dependent ones)
 - Keep related changes together even if they span multiple files
 - Prioritize reviewability and logical cohesion over arbitrary size limits
-- Child PRs should have dependencies in the right order
-- Parent PR should reference all child PRs
-- Each PR should have a clear, descriptive title and description
 
 ## Verification Process
 After you create the PRs:
@@ -60,23 +83,32 @@ Ensure each child PR:
 - The LAST child PR must pass e2e tests
 
 ## Output Format
-Output the PR split plan as JSON with the following structure:
+
+You MUST output valid JSON matching this schema:
+
 {
-  "parentPR": {
-    "number": 0,
-    "url": "",
-    "title": "Parent PR title describing the overall feature",
-    "description": "Parent PR description with links to child PRs"
-  },
+  "strategy": "commits" | "files",
+  "parentTitle": "Parent PR: [overall description]",
+  "parentDescription": "This PR is split into child PRs for easier review:\n- Child 1: ...\n- Child 2: ...",
   "childPRs": [
     {
-      "number": 0,
-      "url": "",
-      "title": "Child PR 1 title",
-      "description": "Child PR 1 description"
+      "title": "[Part 1/N] Descriptive title",
+      "description": "## Summary\n...\n\n## Changes\n...",
+      "commits": ["abc123", "def456"],  // For commits strategy
+      "files": []                        // Leave empty for commits strategy
+    },
+    {
+      "title": "[Part 2/N] Another title",
+      "description": "...",
+      "commits": ["ghi789"],
+      "files": []
     }
   ],
-  "summary": "Brief summary of the split strategy"
+  "summary": "Brief explanation of why this split makes sense"
 }
 
-After creating the PRs, fill in the actual PR numbers and URLs in the JSON output.
+For "files" strategy, use files array instead:
+{
+  "commits": [],
+  "files": ["path/to/file1.go", "path/to/file2.go"]
+}

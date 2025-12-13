@@ -166,6 +166,62 @@ const RefactoringSummarySchema = `{
   "required": ["filesChanged", "improvementsMade", "summary"]
 }`
 
+const PRSplitPlanSchema = `{
+  "type": "object",
+  "properties": {
+    "strategy": {
+      "type": "string",
+      "enum": ["commits", "files"],
+      "description": "Strategy for creating child branches"
+    },
+    "parentTitle": {
+      "type": "string",
+      "description": "Title for the parent PR"
+    },
+    "parentDescription": {
+      "type": "string",
+      "description": "Description for the parent PR"
+    },
+    "childPRs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Title for the child PR"
+          },
+          "description": {
+            "type": "string",
+            "description": "Description for the child PR"
+          },
+          "commits": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Commit hashes to include in this child PR (for commits strategy)"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "File paths to include in this child PR (for files strategy)"
+          }
+        },
+        "required": ["title", "description"]
+      },
+      "description": "List of child PRs to create"
+    },
+    "summary": {
+      "type": "string",
+      "description": "Summary of the split rationale"
+    }
+  },
+  "required": ["strategy", "parentTitle", "parentDescription", "childPRs", "summary"]
+}`
+
 const PRSplitResultSchema = `{
   "type": "object",
   "properties": {

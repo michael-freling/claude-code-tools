@@ -5,6 +5,7 @@ import (
 	"testing"
 	"text/template"
 
+	"github.com/michael-freling/claude-code-tools/internal/command"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -299,18 +300,23 @@ func TestPromptGenerator_GeneratePRSplitPrompt(t *testing.T) {
 	tests := []struct {
 		name        string
 		metrics     *PRMetrics
+		commits     []command.Commit
 		wantErr     bool
 		errContains string
 		wantContain []string
 	}{
 		{
-			name: "generates PR split prompt with complete metrics",
+			name: "generates PR split prompt with complete metrics and commits",
 			metrics: &PRMetrics{
 				LinesChanged:  423,
 				FilesChanged:  12,
 				FilesAdded:    []string{"auth.go", "middleware.go"},
 				FilesModified: []string{"main.go", "routes.go"},
 				FilesDeleted:  []string{"old_auth.go"},
+			},
+			commits: []command.Commit{
+				{Hash: "abc123", Subject: "Add authentication"},
+				{Hash: "def456", Subject: "Add middleware"},
 			},
 			wantErr: false,
 			wantContain: []string{
@@ -321,21 +327,27 @@ func TestPromptGenerator_GeneratePRSplitPrompt(t *testing.T) {
 				"main.go",
 				"routes.go",
 				"old_auth.go",
+				"abc123",
+				"Add authentication",
+				"def456",
+				"Add middleware",
 				"Output Format",
 			},
 		},
 		{
 			name:        "returns error when metrics is nil",
 			metrics:     nil,
+			commits:     []command.Commit{},
 			wantErr:     true,
 			errContains: "metrics cannot be nil",
 		},
 		{
-			name: "generates prompt with minimal metrics",
+			name: "generates prompt with minimal metrics and no commits",
 			metrics: &PRMetrics{
 				LinesChanged: 50,
 				FilesChanged: 3,
 			},
+			commits: []command.Commit{},
 			wantErr: false,
 			wantContain: []string{
 				"Lines Changed: 50",
@@ -343,11 +355,14 @@ func TestPromptGenerator_GeneratePRSplitPrompt(t *testing.T) {
 			},
 		},
 		{
-			name: "generates prompt with only added files",
+			name: "generates prompt with only added files and commits",
 			metrics: &PRMetrics{
 				LinesChanged: 100,
 				FilesChanged: 5,
 				FilesAdded:   []string{"file1.go", "file2.go"},
+			},
+			commits: []command.Commit{
+				{Hash: "ghi789", Subject: "Add new files"},
 			},
 			wantErr: false,
 			wantContain: []string{
@@ -356,6 +371,8 @@ func TestPromptGenerator_GeneratePRSplitPrompt(t *testing.T) {
 				"Files Added",
 				"file1.go",
 				"file2.go",
+				"ghi789",
+				"Add new files",
 			},
 		},
 	}
@@ -365,7 +382,7 @@ func TestPromptGenerator_GeneratePRSplitPrompt(t *testing.T) {
 			pg, err := NewPromptGenerator()
 			require.NoError(t, err)
 
-			got, err := pg.GeneratePRSplitPrompt(tt.metrics)
+			got, err := pg.GeneratePRSplitPrompt(tt.metrics, tt.commits)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -476,7 +493,7 @@ func TestPromptGenerator_AllMethodsReturnValidPrompts(t *testing.T) {
 		{
 			name: "PR split prompt",
 			genFunc: func() (string, error) {
-				return pg.GeneratePRSplitPrompt(testMetrics)
+				return pg.GeneratePRSplitPrompt(testMetrics, []command.Commit{})
 			},
 		},
 	}
@@ -615,7 +632,7 @@ func TestPromptGenerator_TemplateNotLoadedError(t *testing.T) {
 		{
 			name: "pr-split template not loaded returns error",
 			genFunc: func(pg *promptGenerator) (string, error) {
-				return pg.GeneratePRSplitPrompt(&PRMetrics{LinesChanged: 100, FilesChanged: 5})
+				return pg.GeneratePRSplitPrompt(&PRMetrics{LinesChanged: 100, FilesChanged: 5}, []command.Commit{})
 			},
 			errContains: "pr-split template not loaded",
 		},
@@ -676,7 +693,7 @@ func TestPromptGenerator_TemplateExecutionError(t *testing.T) {
 			templateName: "pr-split.tmpl",
 			templateText: "{{.WrongField}}",
 			genFunc: func(pg *promptGenerator) (string, error) {
-				return pg.GeneratePRSplitPrompt(&PRMetrics{LinesChanged: 100, FilesChanged: 5})
+				return pg.GeneratePRSplitPrompt(&PRMetrics{LinesChanged: 100, FilesChanged: 5}, []command.Commit{})
 			},
 			errContains: "failed to execute pr-split template",
 		},

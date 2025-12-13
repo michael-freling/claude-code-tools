@@ -85,19 +85,47 @@ func (mr *MockGhRunnerMockRecorder) PRChecks(ctx, dir, prNumber, jsonFields any)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PRChecks", reflect.TypeOf((*MockGhRunner)(nil).PRChecks), ctx, dir, prNumber, jsonFields)
 }
 
-// PRCreate mocks base method.
-func (m *MockGhRunner) PRCreate(ctx context.Context, dir, title, body, head string) (string, error) {
+// PRClose mocks base method.
+func (m *MockGhRunner) PRClose(ctx context.Context, dir string, prNumber int) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PRCreate", ctx, dir, title, body, head)
+	ret := m.ctrl.Call(m, "PRClose", ctx, dir, prNumber)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// PRClose indicates an expected call of PRClose.
+func (mr *MockGhRunnerMockRecorder) PRClose(ctx, dir, prNumber any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PRClose", reflect.TypeOf((*MockGhRunner)(nil).PRClose), ctx, dir, prNumber)
+}
+
+// PRCreate mocks base method.
+func (m *MockGhRunner) PRCreate(ctx context.Context, dir, title, body, head, base string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PRCreate", ctx, dir, title, body, head, base)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // PRCreate indicates an expected call of PRCreate.
-func (mr *MockGhRunnerMockRecorder) PRCreate(ctx, dir, title, body, head any) *gomock.Call {
+func (mr *MockGhRunnerMockRecorder) PRCreate(ctx, dir, title, body, head, base any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PRCreate", reflect.TypeOf((*MockGhRunner)(nil).PRCreate), ctx, dir, title, body, head)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PRCreate", reflect.TypeOf((*MockGhRunner)(nil).PRCreate), ctx, dir, title, body, head, base)
+}
+
+// PREdit mocks base method.
+func (m *MockGhRunner) PREdit(ctx context.Context, dir string, prNumber int, body string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PREdit", ctx, dir, prNumber, body)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// PREdit indicates an expected call of PREdit.
+func (mr *MockGhRunnerMockRecorder) PREdit(ctx, dir, prNumber, body any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PREdit", reflect.TypeOf((*MockGhRunner)(nil).PREdit), ctx, dir, prNumber, body)
 }
 
 // PRView mocks base method.
