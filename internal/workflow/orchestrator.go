@@ -19,10 +19,6 @@ const (
 )
 
 // PRCreationResult represents the result of a PR creation attempt.
-// It contains the PR number (if created or found), the status of the operation,
-// and a message explaining the result. The status can be "created" (new PR),
-// "exists" (PR already exists), "skipped" (no commits to create PR for), or
-// "failed" (PR creation failed).
 type PRCreationResult struct {
 	PRNumber int    `json:"prNumber"`
 	Status   string `json:"status"` // "created", "exists", "skipped", "failed"
@@ -610,15 +606,9 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 			if err != nil {
 				o.logger.Info("Error handling CI: %v", err)
 			}
-			if ciResult.Passed {
-				// CI passed after auto-retry
+			if ciResult.Passed || !shouldContinueFixLoop {
 				return o.transitionPhase(state, PhaseRefactoring)
 			}
-			if !shouldContinueFixLoop {
-				// Shouldn't happen if !Passed, but handle gracefully
-				return o.transitionPhase(state, PhaseRefactoring)
-			}
-			// Continue to fix loop below
 		}
 
 		// Classify the result for formatting
@@ -769,15 +759,9 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 			if err != nil {
 				o.logger.Info("Error handling CI: %v", err)
 			}
-			if ciResult.Passed {
-				// CI passed after auto-retry
+			if ciResult.Passed || !shouldContinueFixLoop {
 				break
 			}
-			if !shouldContinueFixLoop {
-				// Shouldn't happen if !Passed, but handle gracefully
-				break
-			}
-			// Continue to fix loop below
 		}
 
 		// Classify the result for formatting
@@ -999,7 +983,6 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 	return o.transitionPhase(state, PhaseCompleted)
 }
 
-// getWorkingDir returns the working directory for the workflow, defaulting to BaseDir if not set
 func (o *Orchestrator) getWorkingDir(state *WorkflowState) string {
 	if state.WorktreePath != "" {
 		return state.WorktreePath
@@ -1007,11 +990,7 @@ func (o *Orchestrator) getWorkingDir(state *WorkflowState) string {
 	return o.config.BaseDir
 }
 
-// executePRCreation executes the PR creation sub-routine using Claude.
-// It attempts to create a PR for the current branch, or finds an existing PR.
-// Returns the PR number if created or found, or 0 if PR creation was skipped
-// (e.g., no commits on branch). Returns an error if PR creation fails after
-// all retry attempts.
+// executePRCreation creates or finds a PR using Claude, retrying up to maxPRCreationAttempts times.
 func (o *Orchestrator) executePRCreation(ctx context.Context, state *WorkflowState) (int, error) {
 	o.logger.Verbose("Starting PR creation sub-routine")
 
@@ -1106,9 +1085,7 @@ func (o *Orchestrator) executePRCreation(ctx context.Context, state *WorkflowSta
 	return 0, fmt.Errorf("failed to create PR after %d attempts", maxPRCreationAttempts)
 }
 
-// handleNoPRError handles the case when no PR exists during CI check.
-// It attempts to create a PR and retry the CI check. Returns the CI result
-// if successful, or an error if PR creation or CI check fails.
+// handleNoPRError creates a PR when none exists and retries the CI check.
 func (o *Orchestrator) handleNoPRError(
 	ctx context.Context,
 	state *WorkflowState,
@@ -1155,7 +1132,6 @@ func (o *Orchestrator) handleNoPRError(
 	return ciResult, nil
 }
 
-// transitionPhase transitions the workflow to the next phase
 func (o *Orchestrator) transitionPhase(state *WorkflowState, nextPhase Phase) error {
 	currentPhaseState := state.Phases[state.CurrentPhase]
 	now := time.Now()
@@ -1192,17 +1168,14 @@ func (o *Orchestrator) transitionPhase(state *WorkflowState, nextPhase Phase) er
 	return nil
 }
 
-// failWorkflow transitions the workflow to failed state with execution failure type
 func (o *Orchestrator) failWorkflow(state *WorkflowState, err error) error {
 	return o.failWorkflowWithType(state, err, FailureTypeExecution)
 }
 
-// failWorkflowCI transitions the workflow to failed state with CI failure type
 func (o *Orchestrator) failWorkflowCI(state *WorkflowState, err error) error {
 	return o.failWorkflowWithType(state, err, FailureTypeCI)
 }
 
-// failWorkflowWithType transitions the workflow to failed state with a specific failure type
 func (o *Orchestrator) failWorkflowWithType(state *WorkflowState, err error, failureType FailureType) error {
 	state.Error = &WorkflowError{
 		Message:     err.Error(),
@@ -1224,7 +1197,6 @@ func (o *Orchestrator) failWorkflowWithType(state *WorkflowState, err error, fai
 	return err
 }
 
-// getPRMetrics collects PR metrics from git diff
 func (o *Orchestrator) getPRMetrics(ctx context.Context, workingDir string) (*PRMetrics, error) {
 	output, err := o.gitRunner.GetDiffStat(ctx, workingDir, "origin/main")
 	if err != nil {
@@ -1234,7 +1206,6 @@ func (o *Orchestrator) getPRMetrics(ctx context.Context, workingDir string) (*PR
 	return parseDiffStat(output)
 }
 
-// parseDiffStat parses git diff --stat output
 func parseDiffStat(output string) (*PRMetrics, error) {
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	if len(lines) == 0 {
@@ -1349,7 +1320,6 @@ func defaultConfirmFunc(plan *Plan) (bool, string, error) {
 	}
 }
 
-// formatCIErrors formats CI errors for the fix prompt
 func formatCIErrors(result *CIResult, classified *ClassifiedCIResult) string {
 	var builder strings.Builder
 	builder.WriteString("CI checks failed with the following errors:\n\n")
@@ -1397,7 +1367,6 @@ func formatCIErrors(result *CIResult, classified *ClassifiedCIResult) string {
 	return builder.String()
 }
 
-// displayCIFailure displays CI failures to the console
 func displayCIFailure(ciResult *CIResult) {
 	if len(ciResult.FailedJobs) > 0 {
 		fmt.Printf("\n%s\n", Red("CI failures detected:"))
@@ -1459,16 +1428,19 @@ func (o *Orchestrator) handleCancelledCI(
 
 		runID, err := o.ghRunner.GetLatestRunID(ctx, workingDir, prNumber)
 		if err != nil {
-			return ciResult, true, nil // Let Claude handle it
+			o.logger.Info("Failed to get latest run ID for auto-retry: %v", err)
+			return ciResult, true, nil
 		}
 
 		if err := o.ghRunner.RunRerun(ctx, workingDir, runID); err != nil {
-			return ciResult, true, nil // Let Claude handle it
+			o.logger.Info("Failed to rerun CI for auto-retry: %v", err)
+			return ciResult, true, nil
 		}
 
 		ciChecker := o.getCIChecker(workingDir)
 		newResult, err := ciChecker.WaitForCIWithProgress(ctx, prNumber, o.config.CICheckTimeout, CheckCIOptions{}, nil)
 		if err != nil {
+			o.logger.Info("CI check failed during auto-retry: %v", err)
 			return ciResult, true, nil
 		}
 
@@ -1489,7 +1461,6 @@ func (o *Orchestrator) handleCancelledCI(
 	}
 }
 
-// getCIChecker creates or retrieves a CIChecker for the given working directory
 func (o *Orchestrator) getCIChecker(workingDir string) CIChecker {
 	if o.ciCheckerFactory != nil {
 		return o.ciCheckerFactory(workingDir, o.config.CICheckInterval, o.config.GHCommandTimeout)
