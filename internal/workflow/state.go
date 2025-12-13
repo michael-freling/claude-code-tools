@@ -22,7 +22,7 @@ const (
 	promptsDir = "prompts"
 )
 
-// TimeProvider provides the current time (allows mocking in tests)
+// TimeProvider provides the current time
 type TimeProvider func() time.Time
 
 // StateManager interface for state persistence operations
@@ -194,8 +194,8 @@ func (s *fileStateManager) SaveState(name string, state *WorkflowState) error {
 	if err != nil {
 		return err
 	}
-	defer s.unlock(name)
 	defer fileLock.Close()
+	defer s.unlock(name)
 
 	state.UpdatedAt = s.timeProvider()
 
@@ -242,7 +242,6 @@ func (s *fileStateManager) InitState(name, description string, wfType WorkflowTy
 		Phases:       make(map[Phase]*PhaseState),
 	}
 
-	// Initialize all phases
 	phases := []Phase{
 		PhasePlanning,
 		PhaseConfirmation,
@@ -253,12 +252,10 @@ func (s *fileStateManager) InitState(name, description string, wfType WorkflowTy
 
 	for _, phase := range phases {
 		state.Phases[phase] = &PhaseState{
-			Status:   StatusPending,
-			Attempts: 0,
+			Status: StatusPending,
 		}
 	}
 
-	// Set planning phase to in_progress
 	state.Phases[PhasePlanning].Status = StatusInProgress
 
 	if err := s.SaveState(name, state); err != nil {
