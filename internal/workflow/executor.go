@@ -60,14 +60,17 @@ type ExecuteConfig struct {
 	Env                        map[string]string
 	JSONSchema                 string
 	DangerouslySkipPermissions bool
+	SessionID                  string // Session ID to resume (empty for new session)
+	ForceNewSession            bool   // Force creating a new session even if SessionID is set
 }
 
 // ExecuteResult holds the result of Claude CLI execution
 type ExecuteResult struct {
-	Output   string
-	ExitCode int
-	Duration time.Duration
-	Error    error
+	Output    string // Parsed output (final result or structured output)
+	RawOutput string // Raw streaming output for session ID parsing
+	ExitCode  int
+	Duration  time.Duration
+	Error     error
 }
 
 // claudeExecutor implements ClaudeExecutor interface
@@ -222,6 +225,13 @@ func (e *claudeExecutor) ExecuteStreaming(ctx context.Context, config ExecuteCon
 	if config.JSONSchema != "" {
 		args = append(args, "--json-schema", config.JSONSchema)
 	}
+	// Add session resume args if session ID is provided and not forcing new session
+	if !config.ForceNewSession && config.SessionID != "" {
+		args = append(args, "--resume", config.SessionID)
+		if e.logger != nil {
+			e.logger.Verbose("Resuming Claude session: %s", config.SessionID)
+		}
+	}
 	args = append(args, config.Prompt)
 	cmd := exec.CommandContext(ctx, claudePath, args...)
 
@@ -270,12 +280,17 @@ func (e *claudeExecutor) ExecuteStreaming(ctx context.Context, config ExecuteCon
 
 	var finalChunk *StreamChunk
 	toolCallCount := 0
+	var allOutput strings.Builder
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
 		}
+
+		// Collect all output for session ID parsing
+		allOutput.Write(line)
+		allOutput.WriteByte('\n')
 
 		var chunk StreamChunk
 		if err := json.Unmarshal(line, &chunk); err != nil {
@@ -352,6 +367,7 @@ func (e *claudeExecutor) ExecuteStreaming(ctx context.Context, config ExecuteCon
 
 	result.Duration = time.Since(start)
 	result.ExitCode = 0
+	result.RawOutput = allOutput.String()
 
 	// Extract output from final chunk
 	if finalChunk != nil {

@@ -39,17 +39,20 @@ const (
 
 // WorkflowState represents the persisted state of a workflow
 type WorkflowState struct {
-	Version      string                `json:"version"`
-	Name         string                `json:"name"`
-	Type         WorkflowType          `json:"type"`
-	Description  string                `json:"description"`
-	CurrentPhase Phase                 `json:"currentPhase"`
-	CreatedAt    time.Time             `json:"createdAt"`
-	UpdatedAt    time.Time             `json:"updatedAt"`
-	Phases       map[Phase]*PhaseState `json:"phases"`
-	Error        *WorkflowError        `json:"error,omitempty"`
-	WorktreePath string                `json:"worktreePath,omitempty"`
-	SplitPR      bool                  `json:"splitPR,omitempty"`
+	Version           string                `json:"version"`
+	Name              string                `json:"name"`
+	Type              WorkflowType          `json:"type"`
+	Description       string                `json:"description"`
+	CurrentPhase      Phase                 `json:"currentPhase"`
+	CreatedAt         time.Time             `json:"createdAt"`
+	UpdatedAt         time.Time             `json:"updatedAt"`
+	Phases            map[Phase]*PhaseState `json:"phases"`
+	Error             *WorkflowError        `json:"error,omitempty"`
+	WorktreePath      string                `json:"worktreePath,omitempty"`
+	SplitPR           bool                  `json:"splitPR,omitempty"`
+	SessionID         *string               `json:"sessionID,omitempty"`
+	SessionCreatedAt  *time.Time            `json:"sessionCreatedAt,omitempty"`
+	SessionReuseCount int                   `json:"sessionReuseCount,omitempty"`
 }
 
 // PhaseState represents the state of a single phase

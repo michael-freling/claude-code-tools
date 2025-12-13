@@ -20,6 +20,7 @@ var (
 	timeoutRefactoring         time.Duration
 	timeoutPRSplit             time.Duration
 	verbose                    bool
+	newSession                 bool
 )
 
 func main() {
@@ -44,6 +45,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.PersistentFlags().DurationVar(&timeoutRefactoring, "timeout-refactoring", 6*time.Hour, "refactoring phase timeout")
 	rootCmd.PersistentFlags().DurationVar(&timeoutPRSplit, "timeout-pr-split", 1*time.Hour, "PR split phase timeout")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose output showing internal operations")
+	rootCmd.PersistentFlags().BoolVar(&newSession, "new-session", false, "force starting a new Claude session instead of resuming existing session")
 
 	rootCmd.AddCommand(newStartCmd())
 	rootCmd.AddCommand(newListCmd())
@@ -60,6 +62,7 @@ func createOrchestrator() (*workflow.Orchestrator, error) {
 	config.SplitPR = splitPR
 	config.ClaudePath = claudePath
 	config.DangerouslySkipPermissions = dangerouslySkipPermissions
+	config.ForceNewSession = newSession
 	config.Timeouts = workflow.PhaseTimeouts{
 		Planning:       timeoutPlanning,
 		Implementation: timeoutImplement,
