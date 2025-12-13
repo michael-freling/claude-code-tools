@@ -3,6 +3,7 @@ package workflow
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -11,6 +12,33 @@ import (
 
 	"github.com/michael-freling/claude-code-tools/internal/command"
 )
+
+const (
+	maxPRCreationAttempts = 3
+	prCreationRetryDelay  = 5 * time.Second
+)
+
+// PRCreationResult represents the result of a PR creation attempt.
+// It contains the PR number (if created or found), the status of the operation,
+// and a message explaining the result. The status can be "created" (new PR),
+// "exists" (PR already exists), "skipped" (no commits to create PR for), or
+// "failed" (PR creation failed).
+type PRCreationResult struct {
+	PRNumber int    `json:"prNumber"`
+	Status   string `json:"status"` // "created", "exists", "skipped", "failed"
+	Message  string `json:"message"`
+}
+
+// PRCreationResultSchema is the JSON schema for Claude's PR creation output
+var PRCreationResultSchema = `{
+    "type": "object",
+    "properties": {
+        "prNumber": {"type": "integer", "description": "The PR number if created or found"},
+        "status": {"type": "string", "enum": ["created", "exists", "skipped", "failed"], "description": "The result status"},
+        "message": {"type": "string", "description": "A message explaining the result"}
+    },
+    "required": ["status", "message"]
+}`
 
 // Config holds configuration for the orchestrator
 type Config struct {
@@ -546,12 +574,23 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 		ciResult, err := ciChecker.WaitForCIWithProgress(ctx, 0, o.config.CICheckTimeout, CheckCIOptions{}, ciSpinner.OnProgress)
 		if err != nil {
 			ciSpinner.Fail("CI check failed")
-			// Store the error message in feedback so resume can use it for CI fix prompt
-			phaseState.Feedback = append(phaseState.Feedback, fmt.Sprintf("CI check error: %v", err))
-			if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
-				return fmt.Errorf("failed to save state: %w", saveErr)
+
+			// Handle non-NoPRError case and return early
+			if !IsNoPRError(err) {
+				phaseState.Feedback = append(phaseState.Feedback, fmt.Sprintf("CI check error: %v", err))
+				if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
+					return fmt.Errorf("failed to save state: %w", saveErr)
+				}
+				return o.failWorkflowCI(state, fmt.Errorf("failed to check CI: %w", err))
 			}
-			return o.failWorkflowCI(state, fmt.Errorf("failed to check CI: %w", err))
+
+			// NoPRError handling - need to create PR first
+			ciResult, err = o.handleNoPRError(ctx, state, phaseState, ciChecker)
+			if err != nil {
+				return o.failWorkflow(state, err)
+			}
+
+			// Continue with CI result processing below (don't return here)
 		}
 
 		if ciResult.Passed {
@@ -687,12 +726,23 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 		ciResult, err := ciChecker.WaitForCIWithProgress(ctx, 0, o.config.CICheckTimeout, CheckCIOptions{}, ciSpinner.OnProgress)
 		if err != nil {
 			ciSpinner.Fail("CI check failed")
-			// Store the error message in feedback so resume can use it for CI fix prompt
-			phaseState.Feedback = append(phaseState.Feedback, fmt.Sprintf("CI check error: %v", err))
-			if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
-				return fmt.Errorf("failed to save state: %w", saveErr)
+
+			// Handle non-NoPRError case and return early
+			if !IsNoPRError(err) {
+				phaseState.Feedback = append(phaseState.Feedback, fmt.Sprintf("CI check error: %v", err))
+				if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
+					return fmt.Errorf("failed to save state: %w", saveErr)
+				}
+				return o.failWorkflowCI(state, fmt.Errorf("failed to check CI: %w", err))
 			}
-			return o.failWorkflowCI(state, fmt.Errorf("failed to check CI: %w", err))
+
+			// NoPRError handling - need to create PR first
+			ciResult, err = o.handleNoPRError(ctx, state, phaseState, ciChecker)
+			if err != nil {
+				return o.failWorkflow(state, err)
+			}
+
+			// Continue with CI result processing below (don't return here)
 		}
 
 		if ciResult.Passed {
@@ -930,6 +980,154 @@ func (o *Orchestrator) getWorkingDir(state *WorkflowState) string {
 		return state.WorktreePath
 	}
 	return o.config.BaseDir
+}
+
+// executePRCreation executes the PR creation sub-routine using Claude.
+// It attempts to create a PR for the current branch, or finds an existing PR.
+// Returns the PR number if created or found, or 0 if PR creation was skipped
+// (e.g., no commits on branch). Returns an error if PR creation fails after
+// all retry attempts.
+func (o *Orchestrator) executePRCreation(ctx context.Context, state *WorkflowState) (int, error) {
+	o.logger.Verbose("Starting PR creation sub-routine")
+
+	// Get current branch name
+	workingDir := o.getWorkingDir(state)
+
+	branch, err := o.gitRunner.GetCurrentBranch(ctx, workingDir)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get current branch: %w", err)
+	}
+
+	// Generate PR creation prompt
+	prCtx := &PRCreationContext{
+		WorkflowType: state.Type,
+		Branch:       branch,
+		BaseBranch:   "main", // TODO: make this configurable
+		Description:  state.Description,
+	}
+
+	prompt, err := o.promptGenerator.GenerateCreatePRPrompt(prCtx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to generate PR creation prompt: %w", err)
+	}
+
+	for attempt := 1; attempt <= maxPRCreationAttempts; attempt++ {
+		if attempt > 1 {
+			fmt.Printf("%s Retry %d/%d for PR creation\n", Yellow("⚠"), attempt, maxPRCreationAttempts)
+			time.Sleep(prCreationRetryDelay)
+		}
+
+		spinner := NewStreamingSpinnerWithLogger("Creating PR...", o.logger)
+		spinner.Start()
+
+		result, err := o.executor.ExecuteStreaming(ctx, ExecuteConfig{
+			Prompt:                     prompt,
+			Timeout:                    10 * time.Minute, // PR creation should be quick
+			JSONSchema:                 PRCreationResultSchema,
+			DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
+			WorkingDirectory:           workingDir,
+		}, spinner.OnProgress)
+
+		if err != nil {
+			spinner.Fail("PR creation failed")
+			o.logger.Verbose("PR creation attempt %d failed: %v", attempt, err)
+			continue
+		}
+
+		// Parse the result
+		jsonStr, err := o.parser.ExtractJSON(result.Output)
+		if err != nil {
+			spinner.Fail("Failed to parse PR creation output")
+			o.logger.Verbose("Failed to extract JSON from PR creation output: %v", err)
+			continue
+		}
+
+		var prResult PRCreationResult
+		if err := json.Unmarshal([]byte(jsonStr), &prResult); err != nil {
+			spinner.Fail("Failed to parse PR creation result")
+			o.logger.Verbose("Failed to unmarshal PR creation result: %v", err)
+			continue
+		}
+
+		switch prResult.Status {
+		case "created":
+			spinner.Success(fmt.Sprintf("PR #%d created", prResult.PRNumber))
+			o.logger.Verbose("PR creation successful: #%d - %s", prResult.PRNumber, prResult.Message)
+			return prResult.PRNumber, nil
+
+		case "exists":
+			spinner.Success(fmt.Sprintf("PR #%d already exists", prResult.PRNumber))
+			o.logger.Verbose("PR already exists: #%d - %s", prResult.PRNumber, prResult.Message)
+			return prResult.PRNumber, nil
+
+		case "skipped":
+			spinner.Success("PR creation skipped")
+			o.logger.Verbose("PR creation skipped: %s", prResult.Message)
+			fmt.Printf("%s %s\n", Yellow("⚠"), prResult.Message)
+			return 0, nil
+
+		case "failed":
+			spinner.Fail("PR creation failed")
+			o.logger.Verbose("PR creation failed: %s", prResult.Message)
+			// Continue to retry
+
+		default:
+			spinner.Fail("Unknown PR creation status")
+			o.logger.Verbose("Unknown PR creation status: %s", prResult.Status)
+			// Continue to retry
+		}
+	}
+
+	return 0, fmt.Errorf("failed to create PR after %d attempts", maxPRCreationAttempts)
+}
+
+// handleNoPRError handles the case when no PR exists during CI check.
+// It attempts to create a PR and retry the CI check. Returns the CI result
+// if successful, or an error if PR creation or CI check fails.
+func (o *Orchestrator) handleNoPRError(
+	ctx context.Context,
+	state *WorkflowState,
+	phaseState *PhaseState,
+	ciChecker CIChecker,
+) (*CIResult, error) {
+	o.logger.Verbose("No PR found, initiating PR creation")
+	fmt.Printf("%s No PR found for current branch, creating PR...\n", Yellow("⚠"))
+
+	prNumber, prErr := o.executePRCreation(ctx, state)
+	if prErr != nil {
+		phaseState.Feedback = append(phaseState.Feedback, fmt.Sprintf("PR creation failed: %v", prErr))
+		if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
+			return nil, fmt.Errorf("failed to save state: %w", saveErr)
+		}
+		return nil, fmt.Errorf("failed to create PR: %w", prErr)
+	}
+
+	if prNumber == 0 {
+		// PR creation was skipped (no commits, etc.)
+		phaseState.Feedback = append(phaseState.Feedback, "PR creation skipped - no commits on branch")
+		if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
+			return nil, fmt.Errorf("failed to save state: %w", saveErr)
+		}
+		return nil, fmt.Errorf("no commits on branch to create PR")
+	}
+
+	// PR created/found - retry CI check with the PR number
+	fmt.Printf("%s Retrying CI check with PR #%d\n", Green("✓"), prNumber)
+
+	ciSpinner := NewCISpinner("Waiting for CI to complete")
+	ciSpinner.Start()
+
+	ciResult, err := ciChecker.WaitForCIWithProgress(ctx, prNumber, o.config.CICheckTimeout, CheckCIOptions{}, ciSpinner.OnProgress)
+	if err != nil {
+		ciSpinner.Fail("CI check failed")
+		phaseState.Feedback = append(phaseState.Feedback, fmt.Sprintf("CI check error: %v", err))
+		if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
+			return nil, fmt.Errorf("failed to save state: %w", saveErr)
+		}
+		return nil, fmt.Errorf("failed to check CI: %w", err)
+	}
+
+	return ciResult, nil
 }
 
 // transitionPhase transitions the workflow to the next phase

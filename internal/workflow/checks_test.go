@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"testing"
@@ -2123,6 +2124,161 @@ func TestWaitForCIWithProgress_WithFakeClock(t *testing.T) {
 			}
 
 			mockGhRunner.AssertExpectations(t)
+		})
+	}
+}
+
+func TestNoPRError_Error(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     *NoPRError
+		wantMsg string
+	}{
+		{
+			name: "with custom message",
+			err: &NoPRError{
+				Branch: "feature/test",
+				Msg:    "custom error message",
+			},
+			wantMsg: "custom error message",
+		},
+		{
+			name: "with branch name only",
+			err: &NoPRError{
+				Branch: "feature/test",
+				Msg:    "",
+			},
+			wantMsg: "no PR found for branch feature/test",
+		},
+		{
+			name: "with empty branch and no message",
+			err: &NoPRError{
+				Branch: "",
+				Msg:    "",
+			},
+			wantMsg: "no PR found for current branch",
+		},
+		{
+			name: "message takes precedence over branch",
+			err: &NoPRError{
+				Branch: "main",
+				Msg:    "no PR found for the current branch: ensure a PR exists before checking CI status",
+			},
+			wantMsg: "no PR found for the current branch: ensure a PR exists before checking CI status",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.err.Error()
+			assert.Equal(t, tt.wantMsg, got)
+		})
+	}
+}
+
+func TestIsNoPRError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "direct NoPRError",
+			err: &NoPRError{
+				Branch: "feature/test",
+				Msg:    "no PR found",
+			},
+			want: true,
+		},
+		{
+			name: "wrapped NoPRError with fmt.Errorf",
+			err: fmt.Errorf("wrapper: %w", &NoPRError{
+				Branch: "main",
+				Msg:    "no PR found",
+			}),
+			want: true,
+		},
+		{
+			name: "double wrapped NoPRError",
+			err: fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", &NoPRError{
+				Branch: "develop",
+				Msg:    "no PR found",
+			})),
+			want: true,
+		},
+		{
+			name: "different error type",
+			err:  fmt.Errorf("some other error"),
+			want: false,
+		},
+		{
+			name: "standard error",
+			err:  errors.New("standard error"),
+			want: false,
+		},
+		{
+			name: "wrapped standard error",
+			err:  fmt.Errorf("wrapper: %w", errors.New("standard error")),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsNoPRError(tt.err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestNoPRError_Unwrap(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantUnwrap  bool
+		wantBranch  string
+		wantMessage string
+	}{
+		{
+			name: "unwrap single level",
+			err: fmt.Errorf("wrapper: %w", &NoPRError{
+				Branch: "feature/test",
+				Msg:    "no PR found",
+			}),
+			wantUnwrap:  true,
+			wantBranch:  "feature/test",
+			wantMessage: "no PR found",
+		},
+		{
+			name: "unwrap multiple levels",
+			err: fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", &NoPRError{
+				Branch: "main",
+				Msg:    "custom message",
+			})),
+			wantUnwrap:  true,
+			wantBranch:  "main",
+			wantMessage: "custom message",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var noPRErr *NoPRError
+			got := errors.As(tt.err, &noPRErr)
+
+			if tt.wantUnwrap {
+				require.True(t, got, "expected to unwrap NoPRError")
+				require.NotNil(t, noPRErr)
+				assert.Equal(t, tt.wantBranch, noPRErr.Branch)
+				assert.Equal(t, tt.wantMessage, noPRErr.Msg)
+			} else {
+				assert.False(t, got, "expected not to unwrap NoPRError")
+			}
 		})
 	}
 }

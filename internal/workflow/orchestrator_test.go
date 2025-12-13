@@ -2,8 +2,10 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -152,6 +154,11 @@ func (m *MockPromptGenerator) GeneratePRSplitPrompt(metrics *PRMetrics, commits 
 
 func (m *MockPromptGenerator) GenerateFixCIPrompt(failures string) (string, error) {
 	args := m.Called(failures)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockPromptGenerator) GenerateCreatePRPrompt(ctx *PRCreationContext) (string, error) {
+	args := m.Called(ctx)
 	return args.String(0), args.Error(1)
 }
 
@@ -3957,6 +3964,835 @@ func TestDisplayCIFailure(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			displayCIFailure(tt.ciResult)
+		})
+	}
+}
+
+func TestPRCreationResult_UnmarshalJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    PRCreationResult
+		wantErr bool
+	}{
+		{
+			name:  "created status with PR number",
+			input: `{"prNumber": 123, "status": "created", "message": "PR created successfully"}`,
+			want: PRCreationResult{
+				PRNumber: 123,
+				Status:   "created",
+				Message:  "PR created successfully",
+			},
+			wantErr: false,
+		},
+		{
+			name:  "exists status with PR number",
+			input: `{"prNumber": 456, "status": "exists", "message": "PR already exists"}`,
+			want: PRCreationResult{
+				PRNumber: 456,
+				Status:   "exists",
+				Message:  "PR already exists",
+			},
+			wantErr: false,
+		},
+		{
+			name:  "skipped status without PR number",
+			input: `{"prNumber": 0, "status": "skipped", "message": "No commits to create PR"}`,
+			want: PRCreationResult{
+				PRNumber: 0,
+				Status:   "skipped",
+				Message:  "No commits to create PR",
+			},
+			wantErr: false,
+		},
+		{
+			name:  "failed status",
+			input: `{"prNumber": 0, "status": "failed", "message": "Pre-commit hooks failed"}`,
+			want: PRCreationResult{
+				PRNumber: 0,
+				Status:   "failed",
+				Message:  "Pre-commit hooks failed",
+			},
+			wantErr: false,
+		},
+		{
+			name:    "invalid JSON",
+			input:   `{invalid json}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got PRCreationResult
+			err := json.Unmarshal([]byte(tt.input), &got)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestOrchestrator_ExecutePRCreation(t *testing.T) {
+	tests := []struct {
+		name         string
+		setupMocks   func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockOutputParser)
+		state        *WorkflowState
+		wantPRNumber int
+		wantErr      bool
+		errContains  string
+	}{
+		{
+			name: "successful PR creation",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser) {
+				pg.On("GenerateCreatePRPrompt", mock.MatchedBy(func(ctx *PRCreationContext) bool {
+					return ctx.Branch == "feature/test" && ctx.WorkflowType == WorkflowTypeFeature && ctx.BaseBranch != ""
+				})).Return("create pr prompt", nil)
+
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.Prompt == "create pr prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"prNumber": 123, "status": "created", "message": "PR created successfully"}`,
+					ExitCode: 0,
+				}, nil)
+
+				op.On("ExtractJSON", mock.Anything).Return(`{"prNumber": 123, "status": "created", "message": "PR created successfully"}`, nil)
+			},
+			state: &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test feature",
+				WorktreePath: "/tmp/worktree",
+			},
+			wantPRNumber: 123,
+			wantErr:      false,
+		},
+		{
+			name: "PR already exists",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser) {
+				pg.On("GenerateCreatePRPrompt", mock.MatchedBy(func(ctx *PRCreationContext) bool {
+					return ctx.Branch != "" && ctx.BaseBranch != ""
+				})).Return("create pr prompt", nil)
+
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
+					Output:   `{"prNumber": 456, "status": "exists", "message": "PR already exists"}`,
+					ExitCode: 0,
+				}, nil)
+
+				op.On("ExtractJSON", mock.Anything).Return(`{"prNumber": 456, "status": "exists", "message": "PR already exists"}`, nil)
+			},
+			state: &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test feature",
+				WorktreePath: "/tmp/worktree",
+			},
+			wantPRNumber: 456,
+			wantErr:      false,
+		},
+		{
+			name: "PR creation skipped (no commits)",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser) {
+				pg.On("GenerateCreatePRPrompt", mock.MatchedBy(func(ctx *PRCreationContext) bool {
+					return ctx.Branch != "" && ctx.BaseBranch != ""
+				})).Return("create pr prompt", nil)
+
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
+					Output:   `{"prNumber": 0, "status": "skipped", "message": "No commits on branch"}`,
+					ExitCode: 0,
+				}, nil)
+
+				op.On("ExtractJSON", mock.Anything).Return(`{"prNumber": 0, "status": "skipped", "message": "No commits on branch"}`, nil)
+			},
+			state: &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test feature",
+				WorktreePath: "/tmp/worktree",
+			},
+			wantPRNumber: 0,
+			wantErr:      false,
+		},
+		{
+			name: "PR creation failed after max retries",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser) {
+				pg.On("GenerateCreatePRPrompt", mock.MatchedBy(func(ctx *PRCreationContext) bool {
+					return ctx.Branch != "" && ctx.BaseBranch != ""
+				})).Return("create pr prompt", nil)
+
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
+					Output:   `{"prNumber": 0, "status": "failed", "message": "Pre-commit hooks failed"}`,
+					ExitCode: 0,
+				}, nil).Times(3)
+
+				op.On("ExtractJSON", mock.Anything).Return(`{"prNumber": 0, "status": "failed", "message": "Pre-commit hooks failed"}`, nil).Times(3)
+			},
+			state: &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test feature",
+				WorktreePath: "/tmp/worktree",
+			},
+			wantPRNumber: 0,
+			wantErr:      true,
+			errContains:  "failed to create PR after 3 attempts",
+		},
+		{
+			name: "executor fails",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser) {
+				pg.On("GenerateCreatePRPrompt", mock.MatchedBy(func(ctx *PRCreationContext) bool {
+					return ctx.Branch != "" && ctx.BaseBranch != ""
+				})).Return("create pr prompt", nil)
+
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return((*ExecuteResult)(nil), errors.New("execution error")).Times(3)
+			},
+			state: &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test feature",
+				WorktreePath: "/tmp/worktree",
+			},
+			wantPRNumber: 0,
+			wantErr:      true,
+			errContains:  "failed to create PR after 3 attempts",
+		},
+		{
+			name: "JSON extraction fails",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser) {
+				pg.On("GenerateCreatePRPrompt", mock.MatchedBy(func(ctx *PRCreationContext) bool {
+					return ctx.Branch != "" && ctx.BaseBranch != ""
+				})).Return("create pr prompt", nil)
+
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
+					Output:   "no json here",
+					ExitCode: 0,
+				}, nil).Times(3)
+
+				op.On("ExtractJSON", mock.Anything).Return("", errors.New("no JSON found")).Times(3)
+			},
+			state: &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test feature",
+				WorktreePath: "/tmp/worktree",
+			},
+			wantPRNumber: 0,
+			wantErr:      true,
+			errContains:  "failed to create PR after 3 attempts",
+		},
+		{
+			name: "uses baseDir when worktreePath is empty",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser) {
+				pg.On("GenerateCreatePRPrompt", mock.MatchedBy(func(ctx *PRCreationContext) bool {
+					return ctx.Branch != "" && ctx.BaseBranch != ""
+				})).Return("create pr prompt", nil)
+
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.WorkingDirectory != "" && config.Prompt == "create pr prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"prNumber": 789, "status": "created", "message": "PR created"}`,
+					ExitCode: 0,
+				}, nil)
+
+				op.On("ExtractJSON", mock.Anything).Return(`{"prNumber": 789, "status": "created", "message": "PR created"}`, nil)
+			},
+			state: &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test feature",
+				WorktreePath: "",
+			},
+			wantPRNumber: 789,
+			wantErr:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSM := new(MockStateManager)
+			mockExec := new(MockClaudeExecutor)
+			mockPG := new(MockPromptGenerator)
+			mockOP := new(MockOutputParser)
+
+			tt.setupMocks(mockSM, mockExec, mockPG, mockOP)
+
+			cmdRunner := command.NewRunner()
+			o := &Orchestrator{
+				stateManager:    mockSM,
+				executor:        mockExec,
+				promptGenerator: mockPG,
+				parser:          mockOP,
+				config:          DefaultConfig("/tmp/base"),
+				logger:          NewLogger(LogLevelNormal),
+				gitRunner:       command.NewGitRunner(cmdRunner),
+			}
+
+			// Create a temporary directory for git command to work
+			tmpDir := t.TempDir()
+			cmd := exec.Command("git", "init")
+			cmd.Dir = tmpDir
+			require.NoError(t, cmd.Run())
+
+			cmd = exec.Command("git", "config", "user.name", "Test User")
+			cmd.Dir = tmpDir
+			require.NoError(t, cmd.Run())
+
+			cmd = exec.Command("git", "config", "user.email", "test@example.com")
+			cmd.Dir = tmpDir
+			require.NoError(t, cmd.Run())
+
+			// Create initial commit to allow branch checkout
+			cmd = exec.Command("git", "commit", "--allow-empty", "-m", "initial commit")
+			cmd.Dir = tmpDir
+			require.NoError(t, cmd.Run())
+
+			cmd = exec.Command("git", "checkout", "-b", "feature/test")
+			cmd.Dir = tmpDir
+			require.NoError(t, cmd.Run())
+
+			// Update state to use temp dir
+			if tt.state.WorktreePath != "" {
+				tt.state.WorktreePath = tmpDir
+			} else {
+				o.config.BaseDir = tmpDir
+			}
+
+			prNumber, err := o.executePRCreation(context.Background(), tt.state)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, tt.wantPRNumber, prNumber)
+
+			mockSM.AssertExpectations(t)
+			mockExec.AssertExpectations(t)
+			mockPG.AssertExpectations(t)
+			mockOP.AssertExpectations(t)
+		})
+	}
+}
+
+func TestOrchestrator_ExecuteImplementation_NoPRError(t *testing.T) {
+	tests := []struct {
+		name       string
+		setupMocks func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockOutputParser, *MockCIChecker, *MockWorktreeManager)
+		wantErr    bool
+		wantPhase  Phase
+	}{
+		{
+			name: "NoPRError triggers PR creation and CI passes",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wt *MockWorktreeManager) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				sm.On("LoadPlan", "test-workflow").Return(&Plan{
+					Summary: "test plan",
+				}, nil)
+
+				pg.On("GenerateImplementationPrompt", mock.Anything).Return("implementation prompt", nil)
+
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.Prompt == "implementation prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"summary": "implemented", "filesChanged": [], "linesAdded": 100, "linesRemoved": 50, "testsAdded": 3}`,
+					ExitCode: 0,
+				}, nil)
+
+				op.On("ExtractJSON", mock.Anything).Return(`{"summary": "implemented", "filesChanged": [], "linesAdded": 100, "linesRemoved": 50, "testsAdded": 3}`, nil).Once()
+				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{
+					Summary:      "implemented",
+					LinesAdded:   100,
+					LinesRemoved: 50,
+					TestsAdded:   3,
+				}, nil)
+
+				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
+
+				// First CI check returns NoPRError
+				ci.On("WaitForCIWithProgress", mock.Anything, 0, mock.Anything, mock.Anything, mock.Anything).Return((*CIResult)(nil), &NoPRError{
+					Branch: "feature/test",
+					Msg:    "no PR found",
+				}).Once()
+
+				// PR creation prompt and execution
+				pg.On("GenerateCreatePRPrompt", mock.MatchedBy(func(ctx *PRCreationContext) bool {
+					return ctx.Branch != "" && ctx.BaseBranch != ""
+				})).Return("create pr prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.Prompt == "create pr prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"prNumber": 123, "status": "created", "message": "PR created"}`,
+					ExitCode: 0,
+				}, nil)
+				op.On("ExtractJSON", mock.Anything).Return(`{"prNumber": 123, "status": "created", "message": "PR created"}`, nil).Once()
+
+				// Second CI check passes after PR creation
+				ci.On("WaitForCIWithProgress", mock.Anything, 123, mock.Anything, mock.Anything, mock.Anything).Return(&CIResult{
+					Passed: true,
+					Status: "success",
+				}, nil)
+			},
+			wantErr:   false,
+			wantPhase: PhaseRefactoring,
+		},
+		{
+			name: "NoPRError with PR creation failure",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wt *MockWorktreeManager) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				sm.On("LoadPlan", "test-workflow").Return(&Plan{
+					Summary: "test plan",
+				}, nil)
+
+				pg.On("GenerateImplementationPrompt", mock.Anything).Return("implementation prompt", nil)
+
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.Prompt == "implementation prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"summary": "implemented", "filesChanged": [], "linesAdded": 100, "linesRemoved": 50, "testsAdded": 3}`,
+					ExitCode: 0,
+				}, nil)
+
+				op.On("ExtractJSON", mock.Anything).Return(`{"summary": "implemented", "filesChanged": [], "linesAdded": 100, "linesRemoved": 50, "testsAdded": 3}`, nil).Once()
+				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{
+					Summary:      "implemented",
+					LinesAdded:   100,
+					LinesRemoved: 50,
+					TestsAdded:   3,
+				}, nil)
+
+				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
+
+				// CI check returns NoPRError
+				ci.On("WaitForCIWithProgress", mock.Anything, 0, mock.Anything, mock.Anything, mock.Anything).Return((*CIResult)(nil), &NoPRError{
+					Branch: "feature/test",
+					Msg:    "no PR found",
+				}).Once()
+
+				// PR creation fails after retries
+				pg.On("GenerateCreatePRPrompt", mock.MatchedBy(func(ctx *PRCreationContext) bool {
+					return ctx.Branch != "" && ctx.BaseBranch != ""
+				})).Return("create pr prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.Prompt == "create pr prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"prNumber": 0, "status": "failed", "message": "hooks failed"}`,
+					ExitCode: 0,
+				}, nil).Times(3)
+				op.On("ExtractJSON", mock.Anything).Return(`{"prNumber": 0, "status": "failed", "message": "hooks failed"}`, nil).Times(3)
+			},
+			wantErr:   true,
+			wantPhase: PhaseFailed,
+		},
+		{
+			name: "NoPRError with PR skipped (no commits)",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wt *MockWorktreeManager) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				sm.On("LoadPlan", "test-workflow").Return(&Plan{
+					Summary: "test plan",
+				}, nil)
+
+				pg.On("GenerateImplementationPrompt", mock.Anything).Return("implementation prompt", nil)
+
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.Prompt == "implementation prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"summary": "implemented", "filesChanged": [], "linesAdded": 100, "linesRemoved": 50, "testsAdded": 3}`,
+					ExitCode: 0,
+				}, nil)
+
+				op.On("ExtractJSON", mock.Anything).Return(`{"summary": "implemented", "filesChanged": [], "linesAdded": 100, "linesRemoved": 50, "testsAdded": 3}`, nil).Once()
+				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{
+					Summary:      "implemented",
+					LinesAdded:   100,
+					LinesRemoved: 50,
+					TestsAdded:   3,
+				}, nil)
+
+				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
+
+				// CI check returns NoPRError
+				ci.On("WaitForCIWithProgress", mock.Anything, 0, mock.Anything, mock.Anything, mock.Anything).Return((*CIResult)(nil), &NoPRError{
+					Branch: "feature/test",
+					Msg:    "no PR found",
+				}).Once()
+
+				// PR creation returns skipped
+				pg.On("GenerateCreatePRPrompt", mock.MatchedBy(func(ctx *PRCreationContext) bool {
+					return ctx.Branch != "" && ctx.BaseBranch != ""
+				})).Return("create pr prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.Prompt == "create pr prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"prNumber": 0, "status": "skipped", "message": "no commits"}`,
+					ExitCode: 0,
+				}, nil)
+				op.On("ExtractJSON", mock.Anything).Return(`{"prNumber": 0, "status": "skipped", "message": "no commits"}`, nil).Once()
+			},
+			wantErr:   true,
+			wantPhase: PhaseFailed,
+		},
+		{
+			name: "regular CI error (not NoPRError)",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker, wt *MockWorktreeManager) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				sm.On("LoadPlan", "test-workflow").Return(&Plan{
+					Summary: "test plan",
+				}, nil)
+
+				pg.On("GenerateImplementationPrompt", mock.Anything).Return("implementation prompt", nil)
+
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.Prompt == "implementation prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"summary": "implemented", "filesChanged": [], "linesAdded": 100, "linesRemoved": 50, "testsAdded": 3}`,
+					ExitCode: 0,
+				}, nil)
+
+				op.On("ExtractJSON", mock.Anything).Return(`{"summary": "implemented", "filesChanged": [], "linesAdded": 100, "linesRemoved": 50, "testsAdded": 3}`, nil)
+				op.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{
+					Summary:      "implemented",
+					LinesAdded:   100,
+					LinesRemoved: 50,
+					TestsAdded:   3,
+				}, nil)
+
+				sm.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
+
+				// Regular CI error (not NoPRError)
+				ci.On("WaitForCIWithProgress", mock.Anything, 0, mock.Anything, mock.Anything, mock.Anything).Return((*CIResult)(nil), errors.New("gh not installed"))
+			},
+			wantErr:   true,
+			wantPhase: PhaseFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSM := new(MockStateManager)
+			mockExec := new(MockClaudeExecutor)
+			mockPG := new(MockPromptGenerator)
+			mockOP := new(MockOutputParser)
+			mockCI := new(MockCIChecker)
+			mockWT := new(MockWorktreeManager)
+
+			tt.setupMocks(mockSM, mockExec, mockPG, mockOP, mockCI, mockWT)
+
+			// Create a temporary directory for git operations
+			tmpDir := t.TempDir()
+			cmd := exec.Command("git", "init")
+			cmd.Dir = tmpDir
+			require.NoError(t, cmd.Run())
+
+			cmd = exec.Command("git", "config", "user.name", "Test User")
+			cmd.Dir = tmpDir
+			require.NoError(t, cmd.Run())
+
+			cmd = exec.Command("git", "config", "user.email", "test@example.com")
+			cmd.Dir = tmpDir
+			require.NoError(t, cmd.Run())
+
+			// Create initial commit to allow branch checkout
+			cmd = exec.Command("git", "commit", "--allow-empty", "-m", "initial commit")
+			cmd.Dir = tmpDir
+			require.NoError(t, cmd.Run())
+
+			cmd = exec.Command("git", "checkout", "-b", "feature/test")
+			cmd.Dir = tmpDir
+			require.NoError(t, cmd.Run())
+
+			cmdRunner := command.NewRunner()
+			o := &Orchestrator{
+				stateManager:    mockSM,
+				executor:        mockExec,
+				promptGenerator: mockPG,
+				parser:          mockOP,
+				worktreeManager: mockWT,
+				config:          DefaultConfig("/tmp/workflows"),
+				logger:          NewLogger(LogLevelNormal),
+				gitRunner:       command.NewGitRunner(cmdRunner),
+				ciCheckerFactory: func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) CIChecker {
+					return mockCI
+				},
+			}
+
+			state := &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test feature",
+				CurrentPhase: PhaseImplementation,
+				WorktreePath: tmpDir,
+				Phases: map[Phase]*PhaseState{
+					PhasePlanning:       {Status: StatusCompleted},
+					PhaseConfirmation:   {Status: StatusCompleted},
+					PhaseImplementation: {Status: StatusInProgress},
+					PhaseRefactoring:    {Status: StatusPending},
+					PhasePRSplit:        {Status: StatusPending},
+				},
+			}
+
+			err := o.executeImplementation(context.Background(), state)
+
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, tt.wantPhase, state.CurrentPhase)
+
+			mockSM.AssertExpectations(t)
+			mockExec.AssertExpectations(t)
+			mockPG.AssertExpectations(t)
+			mockOP.AssertExpectations(t)
+			mockCI.AssertExpectations(t)
+		})
+	}
+}
+
+func TestOrchestrator_ExecuteRefactoring_NoPRError(t *testing.T) {
+	tests := []struct {
+		name       string
+		setupMocks func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockOutputParser, *MockCIChecker)
+		wantErr    bool
+		wantPhase  Phase
+	}{
+		{
+			name: "NoPRError triggers PR creation and CI passes",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				sm.On("LoadPlan", "test-workflow").Return(&Plan{
+					Summary: "test plan",
+				}, nil)
+
+				pg.On("GenerateRefactoringPrompt", mock.Anything).Return("refactoring prompt", nil)
+
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.Prompt == "refactoring prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"summary": "refactored", "filesChanged": [], "improvementsMade": ["improvement 1"]}`,
+					ExitCode: 0,
+				}, nil)
+
+				op.On("ExtractJSON", mock.Anything).Return(`{"summary": "refactored", "filesChanged": [], "improvementsMade": ["improvement 1"]}`, nil).Once()
+				op.On("ParseRefactoringSummary", mock.Anything).Return(&RefactoringSummary{
+					Summary:          "refactored",
+					FilesChanged:     []string{},
+					ImprovementsMade: []string{"improvement 1"},
+				}, nil)
+
+				sm.On("SavePhaseOutput", "test-workflow", PhaseRefactoring, mock.Anything).Return(nil)
+
+				// First CI check returns NoPRError
+				ci.On("WaitForCIWithProgress", mock.Anything, 0, mock.Anything, mock.Anything, mock.Anything).Return((*CIResult)(nil), &NoPRError{
+					Branch: "feature/test",
+					Msg:    "no PR found",
+				}).Once()
+
+				// PR creation prompt and execution
+				pg.On("GenerateCreatePRPrompt", mock.MatchedBy(func(ctx *PRCreationContext) bool {
+					return ctx.Branch != "" && ctx.BaseBranch != ""
+				})).Return("create pr prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.Prompt == "create pr prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"prNumber": 456, "status": "created", "message": "PR created"}`,
+					ExitCode: 0,
+				}, nil)
+				op.On("ExtractJSON", mock.Anything).Return(`{"prNumber": 456, "status": "created", "message": "PR created"}`, nil).Once()
+
+				// Second CI check passes after PR creation
+				ci.On("WaitForCIWithProgress", mock.Anything, 456, mock.Anything, mock.Anything, mock.Anything).Return(&CIResult{
+					Passed: true,
+					Status: "success",
+				}, nil)
+			},
+			wantErr:   false,
+			wantPhase: PhaseCompleted,
+		},
+		{
+			name: "NoPRError with PR creation returning existing PR",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				sm.On("LoadPlan", "test-workflow").Return(&Plan{
+					Summary: "test plan",
+				}, nil)
+
+				pg.On("GenerateRefactoringPrompt", mock.Anything).Return("refactoring prompt", nil)
+
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.Prompt == "refactoring prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"summary": "refactored", "filesChanged": [], "improvementsMade": ["improvement 1"]}`,
+					ExitCode: 0,
+				}, nil)
+
+				op.On("ExtractJSON", mock.Anything).Return(`{"summary": "refactored", "filesChanged": [], "improvementsMade": ["improvement 1"]}`, nil).Once()
+				op.On("ParseRefactoringSummary", mock.Anything).Return(&RefactoringSummary{
+					Summary:          "refactored",
+					FilesChanged:     []string{},
+					ImprovementsMade: []string{"improvement 1"},
+				}, nil)
+
+				sm.On("SavePhaseOutput", "test-workflow", PhaseRefactoring, mock.Anything).Return(nil)
+
+				// CI check returns NoPRError
+				ci.On("WaitForCIWithProgress", mock.Anything, 0, mock.Anything, mock.Anything, mock.Anything).Return((*CIResult)(nil), &NoPRError{
+					Branch: "feature/test",
+					Msg:    "no PR found",
+				}).Once()
+
+				// PR already exists
+				pg.On("GenerateCreatePRPrompt", mock.MatchedBy(func(ctx *PRCreationContext) bool {
+					return ctx.Branch != "" && ctx.BaseBranch != ""
+				})).Return("create pr prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.Prompt == "create pr prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"prNumber": 789, "status": "exists", "message": "PR already exists"}`,
+					ExitCode: 0,
+				}, nil)
+				op.On("ExtractJSON", mock.Anything).Return(`{"prNumber": 789, "status": "exists", "message": "PR already exists"}`, nil).Once()
+
+				// CI check passes with existing PR
+				ci.On("WaitForCIWithProgress", mock.Anything, 789, mock.Anything, mock.Anything, mock.Anything).Return(&CIResult{
+					Passed: true,
+					Status: "success",
+				}, nil)
+			},
+			wantErr:   false,
+			wantPhase: PhaseCompleted,
+		},
+		{
+			name: "NoPRError but PR creation fails",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, ci *MockCIChecker) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				sm.On("LoadPlan", "test-workflow").Return(&Plan{
+					Summary: "test plan",
+				}, nil)
+
+				pg.On("GenerateRefactoringPrompt", mock.Anything).Return("refactoring prompt", nil)
+
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.Prompt == "refactoring prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"summary": "refactored", "filesChanged": [], "improvementsMade": ["improvement 1"]}`,
+					ExitCode: 0,
+				}, nil)
+
+				op.On("ExtractJSON", mock.Anything).Return(`{"summary": "refactored", "filesChanged": [], "improvementsMade": ["improvement 1"]}`, nil)
+				op.On("ParseRefactoringSummary", mock.Anything).Return(&RefactoringSummary{
+					Summary:          "refactored",
+					FilesChanged:     []string{},
+					ImprovementsMade: []string{"improvement 1"},
+				}, nil)
+
+				sm.On("SavePhaseOutput", "test-workflow", PhaseRefactoring, mock.Anything).Return(nil)
+
+				// CI check returns NoPRError
+				ci.On("WaitForCIWithProgress", mock.Anything, 0, mock.Anything, mock.Anything, mock.Anything).Return((*CIResult)(nil), &NoPRError{
+					Branch: "feature/test",
+					Msg:    "no PR found",
+				})
+
+				// PR creation fails
+				pg.On("GenerateCreatePRPrompt", mock.MatchedBy(func(ctx *PRCreationContext) bool {
+					return ctx.Branch != "" && ctx.BaseBranch != ""
+				})).Return("create pr prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.Prompt == "create pr prompt"
+				}), mock.Anything).Return((*ExecuteResult)(nil), errors.New("execution failed")).Times(3)
+			},
+			wantErr:   true,
+			wantPhase: PhaseFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSM := new(MockStateManager)
+			mockExec := new(MockClaudeExecutor)
+			mockPG := new(MockPromptGenerator)
+			mockOP := new(MockOutputParser)
+			mockCI := new(MockCIChecker)
+
+			tt.setupMocks(mockSM, mockExec, mockPG, mockOP, mockCI)
+
+			// Create a temporary directory for git operations
+			tmpDir := t.TempDir()
+			cmd := exec.Command("git", "init")
+			cmd.Dir = tmpDir
+			require.NoError(t, cmd.Run())
+
+			cmd = exec.Command("git", "config", "user.name", "Test User")
+			cmd.Dir = tmpDir
+			require.NoError(t, cmd.Run())
+
+			cmd = exec.Command("git", "config", "user.email", "test@example.com")
+			cmd.Dir = tmpDir
+			require.NoError(t, cmd.Run())
+
+			// Create initial commit to allow branch checkout
+			cmd = exec.Command("git", "commit", "--allow-empty", "-m", "initial commit")
+			cmd.Dir = tmpDir
+			require.NoError(t, cmd.Run())
+
+			cmd = exec.Command("git", "checkout", "-b", "feature/test")
+			cmd.Dir = tmpDir
+			require.NoError(t, cmd.Run())
+
+			cmdRunner := command.NewRunner()
+			o := &Orchestrator{
+				stateManager:    mockSM,
+				executor:        mockExec,
+				promptGenerator: mockPG,
+				parser:          mockOP,
+				config:          DefaultConfig("/tmp/workflows"),
+				logger:          NewLogger(LogLevelNormal),
+				gitRunner:       command.NewGitRunner(cmdRunner),
+				ciCheckerFactory: func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) CIChecker {
+					return mockCI
+				},
+			}
+
+			state := &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test feature",
+				CurrentPhase: PhaseRefactoring,
+				WorktreePath: tmpDir,
+				Phases: map[Phase]*PhaseState{
+					PhasePlanning:       {Status: StatusCompleted},
+					PhaseConfirmation:   {Status: StatusCompleted},
+					PhaseImplementation: {Status: StatusCompleted},
+					PhaseRefactoring:    {Status: StatusInProgress},
+					PhasePRSplit:        {Status: StatusPending},
+				},
+			}
+
+			err := o.executeRefactoring(context.Background(), state)
+
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, tt.wantPhase, state.CurrentPhase)
+
+			mockSM.AssertExpectations(t)
+			mockExec.AssertExpectations(t)
+			mockPG.AssertExpectations(t)
+			mockOP.AssertExpectations(t)
+			mockCI.AssertExpectations(t)
 		})
 	}
 }

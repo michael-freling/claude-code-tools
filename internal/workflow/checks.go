@@ -37,6 +37,28 @@ type CIProgressEvent struct {
 // CIProgressCallback is called when CI check progress updates
 type CIProgressCallback func(event CIProgressEvent)
 
+// NoPRError represents the error when no PR is found for the current branch
+type NoPRError struct {
+	Branch string
+	Msg    string
+}
+
+func (e *NoPRError) Error() string {
+	if e.Msg != "" {
+		return e.Msg
+	}
+	if e.Branch == "" {
+		return "no PR found for current branch"
+	}
+	return fmt.Sprintf("no PR found for branch %s", e.Branch)
+}
+
+// IsNoPRError checks if an error is a NoPRError or wraps one
+func IsNoPRError(err error) bool {
+	var noPRErr *NoPRError
+	return errors.As(err, &noPRErr)
+}
+
 // CIChecker checks CI status on GitHub
 type CIChecker interface {
 	// CheckCI checks CI status. If prNumber is 0, checks the current branch's PR.
@@ -199,7 +221,8 @@ func (c *ciChecker) checkCIOnce(ctx context.Context, prNumber int) (*CIResult, e
 			return result, ErrCICheckTimeout
 		}
 
-		if exitErr, ok := errors.Unwrap(err).(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			if exitErr.String() == "signal: killed" {
 				return result, ErrCICheckTimeout
 			}
@@ -208,7 +231,10 @@ func (c *ciChecker) checkCIOnce(ctx context.Context, prNumber int) (*CIResult, e
 			case 127:
 				return result, fmt.Errorf("gh CLI not found: is it installed?")
 			case 8:
-				return result, fmt.Errorf("no PR found for the current branch: ensure a PR exists before checking CI status")
+				return result, &NoPRError{
+					Branch: "",
+					Msg:    "no PR found for the current branch: ensure a PR exists before checking CI status",
+				}
 			case 1:
 				return result, err
 			}

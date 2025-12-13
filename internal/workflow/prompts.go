@@ -9,6 +9,17 @@ import (
 	"github.com/michael-freling/claude-code-tools/internal/templates"
 )
 
+// PRCreationContext contains context for generating PR creation prompts.
+// It provides the necessary information for Claude to create a pull request,
+// including the workflow type (feature, fix, refactor), the current branch name,
+// the target base branch, and a description of the changes.
+type PRCreationContext struct {
+	WorkflowType WorkflowType
+	Branch       string
+	BaseBranch   string
+	Description  string
+}
+
 // PromptGenerator generates prompts for workflow phases
 type PromptGenerator interface {
 	GeneratePlanningPrompt(wfType WorkflowType, description string, feedback []string) (string, error)
@@ -16,6 +27,7 @@ type PromptGenerator interface {
 	GenerateRefactoringPrompt(plan *Plan) (string, error)
 	GeneratePRSplitPrompt(metrics *PRMetrics, commits []command.Commit) (string, error)
 	GenerateFixCIPrompt(failures string) (string, error)
+	GenerateCreatePRPrompt(ctx *PRCreationContext) (string, error)
 }
 
 type promptGenerator struct {
@@ -43,6 +55,7 @@ func (p *promptGenerator) loadTemplates() error {
 		"refactoring.tmpl",
 		"pr-split.tmpl",
 		"fix-ci.tmpl",
+		"create-pr.tmpl",
 	}
 
 	for _, name := range templateNames {
@@ -167,6 +180,32 @@ func (p *promptGenerator) GenerateFixCIPrompt(failures string) (string, error) {
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, failures); err != nil {
 		return "", fmt.Errorf("failed to execute fix-ci template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+// GenerateCreatePRPrompt generates a prompt for creating a PR
+func (p *promptGenerator) GenerateCreatePRPrompt(ctx *PRCreationContext) (string, error) {
+	if ctx == nil {
+		return "", fmt.Errorf("context cannot be nil")
+	}
+
+	if ctx.Branch == "" {
+		return "", fmt.Errorf("branch cannot be empty")
+	}
+	if ctx.BaseBranch == "" {
+		return "", fmt.Errorf("base branch cannot be empty")
+	}
+
+	tmpl, ok := p.templates["create-pr.tmpl"]
+	if !ok {
+		return "", fmt.Errorf("create-pr template not loaded")
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, ctx); err != nil {
+		return "", fmt.Errorf("failed to execute create-pr template: %w", err)
 	}
 
 	return buf.String(), nil
