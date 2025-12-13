@@ -268,32 +268,47 @@ func TestNewCIChecker(t *testing.T) {
 	tests := []struct {
 		name               string
 		workingDir         string
-		checkInterval      time.Duration
-		commandTimeout     time.Duration
+		opts               []CICheckerOption
 		wantInterval       time.Duration
 		wantCommandTimeout time.Duration
+		wantInitialDelay   time.Duration
 	}{
 		{
-			name:               "with custom interval",
-			workingDir:         "/tmp/test",
-			checkInterval:      10 * time.Second,
-			commandTimeout:     5 * time.Minute,
+			name:       "with custom interval and timeout",
+			workingDir: "/tmp/test",
+			opts: []CICheckerOption{
+				WithCheckInterval(10 * time.Second),
+				WithCommandTimeout(5 * time.Minute),
+			},
 			wantInterval:       10 * time.Second,
 			wantCommandTimeout: 5 * time.Minute,
+			wantInitialDelay:   1 * time.Minute,
 		},
 		{
-			name:               "with default interval",
+			name:               "with default values",
 			workingDir:         "/tmp/test",
-			checkInterval:      0,
-			commandTimeout:     0,
+			opts:               []CICheckerOption{},
 			wantInterval:       30 * time.Second,
 			wantCommandTimeout: 2 * time.Minute,
+			wantInitialDelay:   1 * time.Minute,
+		},
+		{
+			name:       "with all custom values",
+			workingDir: "/tmp/test",
+			opts: []CICheckerOption{
+				WithCheckInterval(15 * time.Second),
+				WithCommandTimeout(3 * time.Minute),
+				WithInitialDelay(2 * time.Minute),
+			},
+			wantInterval:       15 * time.Second,
+			wantCommandTimeout: 3 * time.Minute,
+			wantInitialDelay:   2 * time.Minute,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			checker := NewCIChecker(tt.workingDir, tt.checkInterval, tt.commandTimeout)
+			checker := NewCIChecker(tt.workingDir, tt.opts...)
 			require.NotNil(t, checker)
 
 			concreteChecker, ok := checker.(*ciChecker)
@@ -301,6 +316,7 @@ func TestNewCIChecker(t *testing.T) {
 			assert.Equal(t, tt.workingDir, concreteChecker.workingDir)
 			assert.Equal(t, tt.wantInterval, concreteChecker.checkInterval)
 			assert.Equal(t, tt.wantCommandTimeout, concreteChecker.commandTimeout)
+			assert.Equal(t, tt.wantInitialDelay, concreteChecker.initialDelay)
 		})
 	}
 }
@@ -364,13 +380,16 @@ func TestNewCICheckerWithOptions(t *testing.T) {
 }
 
 func TestCIChecker_CheckCI_NotInstalled(t *testing.T) {
-	checker := NewCIChecker("/nonexistent/path/that/should/not/exist", 1*time.Second, 10*time.Second)
+	checker := NewCIChecker(
+		"/nonexistent/path/that/should/not/exist",
+		WithCheckInterval(1*time.Second),
+		WithCommandTimeout(10*time.Second),
+	)
 	ctx := context.Background()
 
 	result, err := checker.CheckCI(ctx, 123)
 	require.Error(t, err)
-	require.NotNil(t, result)
-	assert.False(t, result.Passed)
+	require.Nil(t, result)
 }
 
 func TestCIChecker_CheckCI_NoPR(t *testing.T) {
@@ -384,8 +403,7 @@ func TestCIChecker_CheckCI_NoPR(t *testing.T) {
 
 	result, err := checker.CheckCI(ctx, 0)
 	require.Error(t, err)
-	require.NotNil(t, result)
-	assert.False(t, result.Passed)
+	require.Nil(t, result)
 	mockGhRunner.AssertExpectations(t)
 }
 
@@ -613,7 +631,11 @@ func TestCIChecker_WaitForCI_ImmediateCheckOnStart(t *testing.T) {
 	// Test that WaitForCI checks CI status immediately before starting the delay
 	// When the working directory doesn't exist, it should fail immediately with a directory error
 	// (not wait for the initial delay and then fail with timeout)
-	checker := NewCIChecker("/nonexistent/path/that/should/not/exist", 100*time.Millisecond, 10*time.Second)
+	checker := NewCIChecker(
+		"/nonexistent/path/that/should/not/exist",
+		WithCheckInterval(100*time.Millisecond),
+		WithCommandTimeout(10*time.Second),
+	)
 	ctx := context.Background()
 
 	start := time.Now()
@@ -630,7 +652,11 @@ func TestCIChecker_WaitForCI_ImmediateCheckOnStart(t *testing.T) {
 func TestCIChecker_WaitForCI_ContextCancellationDuringWait(t *testing.T) {
 	// This test verifies that context cancellation is respected
 	// Use immediate cancellation for deterministic behavior
-	checker := NewCIChecker("/tmp", 100*time.Millisecond, 10*time.Second)
+	checker := NewCIChecker(
+		"/tmp",
+		WithCheckInterval(100*time.Millisecond),
+		WithCommandTimeout(10*time.Second),
+	)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
@@ -934,15 +960,18 @@ func TestFilterE2EFailures(t *testing.T) {
 }
 
 func TestCheckCI_ContextCancellation(t *testing.T) {
-	checker := NewCIChecker("/tmp", 1*time.Second, 30*time.Second)
+	checker := NewCIChecker(
+		"/tmp",
+		WithCheckInterval(1*time.Second),
+		WithCommandTimeout(30*time.Second),
+	)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	result, err := checker.CheckCI(ctx, 0)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
-	assert.NotNil(t, result)
-	assert.False(t, result.Passed)
+	assert.Nil(t, result)
 }
 
 func TestCheckCI_IsolatedCommandContext(t *testing.T) {
@@ -955,8 +984,7 @@ func TestCheckCI_IsolatedCommandContext(t *testing.T) {
 	result, err := checker.CheckCI(ctx, 0)
 
 	require.Error(t, err)
-	assert.NotNil(t, result)
-	assert.False(t, result.Passed)
+	assert.Nil(t, result)
 	mockGhRunner.AssertExpectations(t)
 }
 
@@ -1296,7 +1324,7 @@ func TestCheckCIOnce_ErrorHandling(t *testing.T) {
 				if tt.errContains != "" {
 					assert.Contains(t, err.Error(), tt.errContains)
 				}
-				assert.NotNil(t, result)
+				assert.Nil(t, result)
 				return
 			}
 
