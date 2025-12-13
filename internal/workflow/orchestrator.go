@@ -1501,5 +1501,9 @@ func (o *Orchestrator) getCIChecker(workingDir string) CIChecker {
 	if o.ciCheckerFactory != nil {
 		return o.ciCheckerFactory(workingDir, o.config.CICheckInterval, o.config.GHCommandTimeout)
 	}
-	return NewCIChecker(workingDir, o.config.CICheckInterval, o.config.GHCommandTimeout)
+	return NewCIChecker(
+		workingDir,
+		WithCheckInterval(o.config.CICheckInterval),
+		WithCommandTimeout(o.config.GHCommandTimeout),
+	)
 }
