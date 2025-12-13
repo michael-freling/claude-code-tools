@@ -728,7 +728,7 @@ func TestFakeClock_WaitForTimers(t *testing.T) {
 		{
 			name:    "waits for goroutines to register timers",
 			n:       3,
-			timeout: 1 * time.Second,
+			timeout: 100 * time.Millisecond,
 			setup: func(c *FakeClock, wg *sync.WaitGroup) {
 				for i := 0; i < 3; i++ {
 					wg.Add(1)
@@ -736,7 +736,7 @@ func TestFakeClock_WaitForTimers(t *testing.T) {
 						defer wg.Done()
 						time.Sleep(delay)
 						c.NewTimer(5 * time.Second)
-					}(time.Duration(i*10) * time.Millisecond)
+					}(time.Duration(i*1) * time.Millisecond) // Reduced from 10ms to 1ms increments
 				}
 			},
 			wantErr: false,
@@ -744,7 +744,7 @@ func TestFakeClock_WaitForTimers(t *testing.T) {
 		{
 			name:    "returns error when timeout exceeded",
 			n:       5,
-			timeout: 50 * time.Millisecond,
+			timeout: 5 * time.Millisecond,
 			setup: func(c *FakeClock, wg *sync.WaitGroup) {
 				c.NewTimer(5 * time.Second)
 			},
@@ -754,7 +754,7 @@ func TestFakeClock_WaitForTimers(t *testing.T) {
 		{
 			name:    "works with zero timers",
 			n:       0,
-			timeout: 50 * time.Millisecond,
+			timeout: 5 * time.Millisecond,
 			setup: func(c *FakeClock, wg *sync.WaitGroup) {
 			},
 			wantErr: false,
