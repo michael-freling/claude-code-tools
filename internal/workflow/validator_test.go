@@ -199,8 +199,8 @@ func TestValidateDescription(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "valid long description",
-			input:   strings.Repeat("a", 1000),
+			name:    "valid long description at boundary",
+			input:   strings.Repeat("a", 32768),
 			wantErr: false,
 		},
 		{
@@ -216,9 +216,9 @@ func TestValidateDescription(t *testing.T) {
 		},
 		{
 			name:        "description too long",
-			input:       strings.Repeat("a", 1001),
+			input:       strings.Repeat("a", 32769),
 			wantErr:     true,
-			errContains: "too long",
+			errContains: "description too long: 32769 characters (max 32768 characters, 1 over limit)",
 		},
 	}
 
@@ -229,6 +229,71 @@ func TestValidateDescription(t *testing.T) {
 			if tt.wantErr {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestValidateDescriptionWithEnvOverride(t *testing.T) {
+	tests := []struct {
+		name        string
+		envValue    string
+		input       string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "env override: valid at custom limit",
+			envValue: "1000",
+			input:    strings.Repeat("a", 1000),
+			wantErr:  false,
+		},
+		{
+			name:        "env override: exceeds custom limit",
+			envValue:    "1000",
+			input:       strings.Repeat("a", 1001),
+			wantErr:     true,
+			errContains: "description too long: 1001 characters (max 1000 characters, 1 over limit)",
+		},
+		{
+			name:        "env override: exceeds custom limit by multiple characters",
+			envValue:    "500",
+			input:       strings.Repeat("a", 550),
+			wantErr:     true,
+			errContains: "description too long: 550 characters (max 500 characters, 50 over limit)",
+		},
+		{
+			name:     "env override: invalid value falls back to default",
+			envValue: "invalid",
+			input:    strings.Repeat("a", 32768),
+			wantErr:  false,
+		},
+		{
+			name:     "env override: zero value falls back to default",
+			envValue: "0",
+			input:    strings.Repeat("a", 32768),
+			wantErr:  false,
+		},
+		{
+			name:     "env override: negative value falls back to default",
+			envValue: "-100",
+			input:    strings.Repeat("a", 32768),
+			wantErr:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(EnvMaxDescriptionLength, tt.envValue)
+
+			err := ValidateDescription(tt.input)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Equal(t, tt.errContains, err.Error())
 				return
 			}
 

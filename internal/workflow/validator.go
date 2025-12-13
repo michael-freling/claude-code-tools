@@ -48,15 +48,18 @@ func ValidateWorkflowType(wfType WorkflowType) error {
 
 // ValidateDescription validates a workflow description
 // Rules:
-// - 1-1000 characters
+// - Minimum MinDescriptionLength characters
+// - Maximum configurable length (default DefaultMaxDescriptionLength, override via CLAUDE_WORKFLOW_MAX_DESCRIPTION_LENGTH)
 // - Cannot be empty
 func ValidateDescription(desc string) error {
 	if desc == "" {
 		return fmt.Errorf("description cannot be empty")
 	}
 
-	if len(desc) > 1000 {
-		return fmt.Errorf("description too long (max 1000 characters)")
+	maxLength := GetMaxDescriptionLength()
+	if len(desc) > maxLength {
+		overLimit := len(desc) - maxLength
+		return fmt.Errorf("description too long: %d characters (max %d characters, %d over limit)", len(desc), maxLength, overLimit)
 	}
 
 	return nil
