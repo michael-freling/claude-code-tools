@@ -6,45 +6,33 @@ import (
 	"time"
 )
 
-// Classification thresholds
 const (
-	// InfrastructureDurationThreshold - jobs cancelled within this duration are likely infrastructure issues
-	InfrastructureDurationThreshold = 30 * time.Second
-
-	// TimeoutDurationThreshold - jobs running longer than this before cancellation likely hit timeouts
-	TimeoutDurationThreshold = 5 * time.Minute
-
-	// DefaultPersistentFailureThreshold - number of identical failures before marking as persistent
+	InfrastructureDurationThreshold   = 30 * time.Second
+	TimeoutDurationThreshold          = 5 * time.Minute
 	DefaultPersistentFailureThreshold = 3
 )
 
-// CIFailureClassifier classifies CI failures
 type CIFailureClassifier struct {
 	PersistentThreshold int
 }
 
-// NewCIFailureClassifier creates a new classifier with default settings
 func NewCIFailureClassifier() *CIFailureClassifier {
 	return &CIFailureClassifier{
 		PersistentThreshold: DefaultPersistentFailureThreshold,
 	}
 }
 
-// ClassifyResult analyzes a CIResult and returns a ClassifiedCIResult
 func (c *CIFailureClassifier) ClassifyResult(result *CIResult, history *CIFailureHistory) *ClassifiedCIResult {
 	classified := &ClassifiedCIResult{
 		CIResult: result,
 		Reasons:  make([]CIFailureReason, 0),
 	}
 
-	// Parse job details from output
 	jobDetails := c.parseJobDetails(result.Output)
 	classified.JobDetails = jobDetails
 
-	// Classify each job
 	var infraCount, codeCount int
 
-	// Classify failed jobs (always code-related)
 	for _, job := range result.FailedJobs {
 		detail := c.findJobDetail(jobDetails, job)
 		reason := CIFailureReason{
@@ -61,7 +49,6 @@ func (c *CIFailureClassifier) ClassifyResult(result *CIResult, history *CIFailur
 		codeCount++
 	}
 
-	// Classify cancelled jobs (need analysis)
 	for _, job := range result.CancelledJobs {
 		detail := c.findJobDetail(jobDetails, job)
 		reason := c.classifyCancelledJob(job, detail)
@@ -74,14 +61,12 @@ func (c *CIFailureClassifier) ClassifyResult(result *CIResult, history *CIFailur
 		}
 	}
 
-	// Determine overall category
 	classified.Category = c.determineOverallCategory(infraCount, codeCount, history)
 	classified.RecommendedAction = c.getRecommendedAction(classified.Category)
 
 	return classified
 }
 
-// classifyCancelledJob determines why a job was cancelled
 func (c *CIFailureClassifier) classifyCancelledJob(jobName string, detail *CIJobDetail) CIFailureReason {
 	reason := CIFailureReason{
 		Job:        jobName,
@@ -89,7 +74,6 @@ func (c *CIFailureClassifier) classifyCancelledJob(jobName string, detail *CIJob
 	}
 
 	if detail == nil {
-		// No timing info available - assume infrastructure (conservative)
 		reason.Category = CategoryInfrastructure
 		reason.Explanation = "Job was cancelled (no timing data available - assuming infrastructure issue)"
 		return reason
@@ -97,34 +81,29 @@ func (c *CIFailureClassifier) classifyCancelledJob(jobName string, detail *CIJob
 
 	reason.Duration = detail.Duration
 
-	// Heuristic 1: Very short duration = likely infrastructure
 	if detail.Duration > 0 && detail.Duration < InfrastructureDurationThreshold {
 		reason.Category = CategoryInfrastructure
 		reason.Explanation = "Job cancelled within 30 seconds of start - likely workflow superseded or runner issue"
 		return reason
 	}
 
-	// Heuristic 2: Long duration = likely timeout or code issue
 	if detail.Duration >= TimeoutDurationThreshold {
 		reason.Category = CategoryCodeRelated
 		reason.Explanation = "Job ran for extended period before cancellation - likely timeout, infinite loop, or resource exhaustion"
 		return reason
 	}
 
-	// Heuristic 3: Medium duration - check job name for hints
 	if c.jobNameSuggestsTimeout(jobName) {
 		reason.Category = CategoryCodeRelated
 		reason.Explanation = "Job name suggests test/build that may have timed out"
 		return reason
 	}
 
-	// Default: assume infrastructure for medium-duration cancellations
 	reason.Category = CategoryInfrastructure
 	reason.Explanation = "Job was cancelled - likely infrastructure issue (workflow concurrency, manual cancellation)"
 	return reason
 }
 
-// jobNameSuggestsTimeout checks if job name suggests it might timeout
 func (c *CIFailureClassifier) jobNameSuggestsTimeout(jobName string) bool {
 	lower := strings.ToLower(jobName)
 	timeoutKeywords := []string{"test", "build", "lint", "check", "e2e", "integration"}
@@ -136,9 +115,7 @@ func (c *CIFailureClassifier) jobNameSuggestsTimeout(jobName string) bool {
 	return false
 }
 
-// determineOverallCategory determines the overall failure category
 func (c *CIFailureClassifier) determineOverallCategory(infraCount, codeCount int, history *CIFailureHistory) CIFailureCategory {
-	// Check for persistent failure first
 	if history != nil && history.IsPersistentFailure(c.PersistentThreshold) {
 		return CategoryPersistent
 	}
@@ -157,7 +134,6 @@ func (c *CIFailureClassifier) determineOverallCategory(infraCount, codeCount int
 	return CategoryCodeRelated
 }
 
-// getRecommendedAction returns the recommended action based on category
 func (c *CIFailureClassifier) getRecommendedAction(category CIFailureCategory) string {
 	switch category {
 	case CategoryInfrastructure:
@@ -173,7 +149,6 @@ func (c *CIFailureClassifier) getRecommendedAction(category CIFailureCategory) s
 	}
 }
 
-// parseJobDetails parses job timing information from CI output
 func (c *CIFailureClassifier) parseJobDetails(output string) []CIJobDetail {
 	if output == "" {
 		return nil
@@ -194,23 +169,13 @@ func (c *CIFailureClassifier) parseJobDetails(output string) []CIJobDetail {
 	details := make([]CIJobDetail, 0, len(checks))
 	for _, check := range checks {
 		detail := CIJobDetail{
-			Name:       check.Name,
-			Conclusion: check.Conclusion,
-			Status:     check.Status,
+			Name:        check.Name,
+			Conclusion:  check.Conclusion,
+			Status:      check.Status,
+			StartedAt:   parseTime(check.StartedAt),
+			CompletedAt: parseTime(check.CompletedAt),
 		}
 
-		if check.StartedAt != "" {
-			if t, err := time.Parse(time.RFC3339, check.StartedAt); err == nil {
-				detail.StartedAt = &t
-			}
-		}
-		if check.CompletedAt != "" {
-			if t, err := time.Parse(time.RFC3339, check.CompletedAt); err == nil {
-				detail.CompletedAt = &t
-			}
-		}
-
-		// Calculate duration if both times are available
 		if detail.StartedAt != nil && detail.CompletedAt != nil {
 			detail.Duration = detail.CompletedAt.Sub(*detail.StartedAt)
 		}
@@ -221,7 +186,19 @@ func (c *CIFailureClassifier) parseJobDetails(output string) []CIJobDetail {
 	return details
 }
 
-// findJobDetail finds job detail by name
+func parseTime(timeStr string) *time.Time {
+	if timeStr == "" {
+		return nil
+	}
+
+	t, err := time.Parse(time.RFC3339, timeStr)
+	if err != nil {
+		return nil
+	}
+
+	return &t
+}
+
 func (c *CIFailureClassifier) findJobDetail(details []CIJobDetail, jobName string) *CIJobDetail {
 	for i := range details {
 		if details[i].Name == jobName {
