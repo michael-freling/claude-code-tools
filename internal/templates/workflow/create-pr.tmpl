@@ -28,6 +28,8 @@ Look for patterns like:
 
 Extract label names (lowercase, hyphen-separated).
 
+**Important**: Labels must already exist in the repository before they can be applied. After extracting label hints, you must verify them against the repository's actual labels (see Step 3a).
+
 ### Project Hints
 Look for patterns like:
 - "project: Q1 Planning"
@@ -72,6 +74,24 @@ If push fails due to pre-commit hooks:
 - Retry the push
 - If fixes fail after 3 attempts, output "failed" status
 
+### Step 3a: Verify labels (if label hints were extracted)
+If you extracted label hints in the Metadata Extraction phase, verify them against the repository's actual labels:
+
+```bash
+gh label list --json name
+```
+
+Label matching rules:
+- Only use labels that exist in the repository
+- Match user's label hint to repository labels using case-insensitive partial matching
+  - Example: "bug" can match "bug", "Bug", "type: bug", "kind/bug"
+  - Example: "enhancement" can match "enhancement", "Enhancement", "type: enhancement"
+- If multiple labels match the hint, prefer exact case-insensitive matches first
+- If no match is found for a label hint, skip that label (don't fail the PR creation)
+- If ambiguous (multiple partial matches and no exact match), skip that label
+
+After matching, keep only the verified labels (exact names from the repository) for use in Step 4.
+
 ### Step 4: Create the PR
 Create the PR using gh CLI. If metadata was extracted, apply it using the appropriate flags:
 
@@ -80,10 +100,12 @@ Basic PR creation:
 gh pr create --title "<title based on branch/description>" --body "<description>"
 ```
 
-With labels (if extracted):
+With labels (if extracted and verified in Step 3a):
 ```bash
 gh pr create --title "<title>" --body "<description>" --label bug --label urgent
 ```
+
+**Important**: Only use labels that were verified to exist in Step 3a. Use the exact label names from the repository.
 
 With project (if extracted):
 ```bash
@@ -141,10 +163,17 @@ Output your result as JSON:
 
 The `metadata` field is OPTIONAL and should only be included if you extracted and applied metadata:
 - `issues`: Array of issue references (with # prefix) that were included in the PR body
-- `labels`: Array of label names that were applied to the PR
+- `labels`: Array of label names that were actually applied to the PR (only verified labels from Step 3a)
 - `projects`: Array of project names that the PR was added to
 
 If no metadata was extracted or applied, omit the `metadata` field entirely.
+
+**Important for labels**: Only include labels in the metadata output that were:
+1. Verified to exist in the repository (Step 3a)
+2. Successfully matched from the user's hint to an actual repository label
+3. Applied to the PR in the `gh pr create` command
+
+Do not include labels that were hinted but could not be matched or verified.
 
 Example without metadata:
 ```json
