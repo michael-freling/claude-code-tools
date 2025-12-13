@@ -607,6 +607,14 @@ func FormatWorkflowStatus(state *WorkflowState) string {
 	elapsed := time.Since(state.CreatedAt)
 	b.WriteString(fmt.Sprintf("Elapsed: %s\n", FormatDuration(elapsed)))
 
+	if state.SessionID != nil && *state.SessionID != "" {
+		b.WriteString(fmt.Sprintf("\n%s: %s\n", Bold("Session ID"), *state.SessionID))
+		if state.SessionCreatedAt != nil {
+			b.WriteString(fmt.Sprintf("%s: %s\n", Bold("Session Created"), state.SessionCreatedAt.Format("2006-01-02 15:04:05")))
+		}
+		b.WriteString(fmt.Sprintf("%s: %d\n", Bold("Session Reuse Count"), state.SessionReuseCount))
+	}
+
 	if state.Error != nil {
 		b.WriteString("\n" + Red("Error: ") + state.Error.Message + "\n")
 		if state.Error.Recoverable {
