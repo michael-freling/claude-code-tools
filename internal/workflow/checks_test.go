@@ -377,7 +377,7 @@ func TestCIChecker_CheckCI_NoPR(t *testing.T) {
 	// This test verifies the error handling when gh pr checks fails
 	// Uses mock that returns "no PR found" error
 	mockGhRunner := new(MockGhRunner)
-	mockGhRunner.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", fmt.Errorf("no pull requests found for branch"))
+	mockGhRunner.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return("", fmt.Errorf("no pull requests found for branch"))
 
 	checker := NewCICheckerWithRunner("/tmp", 1*time.Second, 10*time.Second, 1*time.Minute, mockGhRunner)
 	ctx := context.Background()
@@ -701,7 +701,7 @@ func TestCIChecker_InitialDelayCompletesWithinExpectedTime(t *testing.T) {
 	mockGhRunner := new(MockGhRunner)
 	// Return pending status to trigger waiting behavior
 	pendingOutput := `[{"name":"test","state":"PENDING"}]`
-	mockGhRunner.On("PRChecks", mock.Anything, "/tmp", 123, "name,state").Return(pendingOutput, nil).Maybe()
+	mockGhRunner.On("PRChecks", mock.Anything, "/tmp", 123, "name,state,conclusion,startedAt,completedAt").Return(pendingOutput, nil).Maybe()
 
 	initialDelay := 5 * time.Second
 	checker := NewCICheckerWithClock(
@@ -947,7 +947,7 @@ func TestCheckCI_ContextCancellation(t *testing.T) {
 
 func TestCheckCI_IsolatedCommandContext(t *testing.T) {
 	mockGhRunner := new(MockGhRunner)
-	mockGhRunner.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", fmt.Errorf("no PR found"))
+	mockGhRunner.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return("", fmt.Errorf("no PR found"))
 
 	checker := NewCICheckerWithRunner("/tmp", 1*time.Second, 50*time.Millisecond, 1*time.Minute, mockGhRunner)
 	ctx := context.Background()
@@ -1231,7 +1231,7 @@ func TestCheckCIOnce_ErrorHandling(t *testing.T) {
 		{
 			name: "context deadline exceeded returns timeout error",
 			mockSetup: func(m *MockGhRunner) {
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", context.DeadlineExceeded)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return("", context.DeadlineExceeded)
 			},
 			wantErr: true,
 			errType: ErrCICheckTimeout,
@@ -1239,7 +1239,7 @@ func TestCheckCIOnce_ErrorHandling(t *testing.T) {
 		{
 			name: "generic error is returned as-is",
 			mockSetup: func(m *MockGhRunner) {
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", fmt.Errorf("some error"))
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return("", fmt.Errorf("some error"))
 			},
 			wantErr:     true,
 			errContains: "some error",
@@ -1247,7 +1247,7 @@ func TestCheckCIOnce_ErrorHandling(t *testing.T) {
 		{
 			name: "context cancelled returns context error",
 			mockSetup: func(m *MockGhRunner) {
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", context.Canceled)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return("", context.Canceled)
 			},
 			wantErr: true,
 		},
@@ -1255,7 +1255,7 @@ func TestCheckCIOnce_ErrorHandling(t *testing.T) {
 			name: "successful check with pending status",
 			mockSetup: func(m *MockGhRunner) {
 				output := `[{"name":"test","state":"PENDING"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(output, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(output, nil)
 			},
 			wantErr: false,
 		},
@@ -1263,7 +1263,7 @@ func TestCheckCIOnce_ErrorHandling(t *testing.T) {
 			name: "successful check with success status",
 			mockSetup: func(m *MockGhRunner) {
 				output := `[{"name":"test","state":"SUCCESS"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(output, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(output, nil)
 			},
 			wantErr: false,
 		},
@@ -1271,7 +1271,7 @@ func TestCheckCIOnce_ErrorHandling(t *testing.T) {
 			name: "successful check with failure status",
 			mockSetup: func(m *MockGhRunner) {
 				output := `[{"name":"test","state":"FAILURE"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(output, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(output, nil)
 			},
 			wantErr: false,
 		},
@@ -1323,7 +1323,7 @@ func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
 			name: "CI already complete on first check",
 			mockSetup: func(m *MockGhRunner) {
 				successOutput := `[{"name":"test","state":"SUCCESS"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(successOutput, nil)
 			},
 			checkInterval:  10 * time.Millisecond,
 			commandTimeout: 20 * time.Millisecond,
@@ -1336,7 +1336,7 @@ func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
 			name: "CI fails on first check",
 			mockSetup: func(m *MockGhRunner) {
 				failOutput := `[{"name":"test","state":"FAILURE"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(failOutput, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(failOutput, nil)
 			},
 			checkInterval:  10 * time.Millisecond,
 			commandTimeout: 20 * time.Millisecond,
@@ -1349,7 +1349,7 @@ func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
 			name: "skip e2e failures",
 			mockSetup: func(m *MockGhRunner) {
 				failOutput := `[{"name":"test-unit","state":"SUCCESS"},{"name":"test-e2e","state":"FAILURE"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(failOutput, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(failOutput, nil)
 			},
 			checkInterval:  10 * time.Millisecond,
 			commandTimeout: 20 * time.Millisecond,
@@ -1363,7 +1363,7 @@ func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
 			name: "context timeout returns error",
 			mockSetup: func(m *MockGhRunner) {
 				pendingOutput := `[{"name":"test","state":"PENDING"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Maybe()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(pendingOutput, nil).Maybe()
 			},
 			checkInterval:  1 * time.Millisecond,
 			commandTimeout: 2 * time.Millisecond,
@@ -1375,7 +1375,7 @@ func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
 			name: "uses default timeout when zero",
 			mockSetup: func(m *MockGhRunner) {
 				successOutput := `[{"name":"test","state":"SUCCESS"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(successOutput, nil)
 			},
 			checkInterval:  10 * time.Millisecond,
 			commandTimeout: 20 * time.Millisecond,
@@ -1388,7 +1388,7 @@ func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
 			name: "uses default e2e pattern",
 			mockSetup: func(m *MockGhRunner) {
 				failOutput := `[{"name":"test","state":"SUCCESS"},{"name":"integration","state":"FAILURE"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(failOutput, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(failOutput, nil)
 			},
 			checkInterval:  10 * time.Millisecond,
 			commandTimeout: 20 * time.Millisecond,
@@ -1456,22 +1456,22 @@ func TestCheckCI_RetryLogic(t *testing.T) {
 			name: "retries on timeout and eventually succeeds",
 			mockSetup: func(m *MockGhRunner) {
 				successOutput := `[{"name":"test","state":"SUCCESS"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", ErrCICheckTimeout).Once()
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return("", ErrCICheckTimeout).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(successOutput, nil)
 			},
 			wantErr: false,
 		},
 		{
 			name: "retries maximum times and returns error",
 			mockSetup: func(m *MockGhRunner) {
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", ErrCICheckTimeout).Times(3)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return("", ErrCICheckTimeout).Times(3)
 			},
 			wantErr: true,
 		},
 		{
 			name: "non-timeout error returns immediately",
 			mockSetup: func(m *MockGhRunner) {
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", fmt.Errorf("some error")).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return("", fmt.Errorf("some error")).Once()
 			},
 			wantErr: true,
 		},
@@ -1537,7 +1537,7 @@ func TestWaitForCIWithOptions(t *testing.T) {
 			name: "waits and succeeds",
 			mockSetup: func(m *MockGhRunner) {
 				output := `[{"name":"test","state":"SUCCESS"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(output, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(output, nil)
 			},
 			wantErr:    false,
 			wantPassed: true,
@@ -1577,7 +1577,7 @@ func TestWaitForCI(t *testing.T) {
 			name: "waits and succeeds without options",
 			mockSetup: func(m *MockGhRunner) {
 				output := `[{"name":"test","state":"SUCCESS"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(output, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(output, nil)
 			},
 			wantErr:    false,
 			wantPassed: true,
@@ -1618,8 +1618,8 @@ func TestWaitForCIWithProgress_ProgressEvents(t *testing.T) {
 			mockSetup: func(m *MockGhRunner) {
 				pendingOutput := `[{"name":"test","state":"PENDING"}]`
 				successOutput := `[{"name":"test","state":"SUCCESS"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(pendingOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(successOutput, nil)
 			},
 			wantEventTypes:    []string{"checking", "status", "waiting"},
 			wantMinEventCount: 2,
@@ -1670,9 +1670,9 @@ func TestWaitForCIWithProgress_PollingLoop(t *testing.T) {
 			mockSetup: func(m *MockGhRunner) {
 				pendingOutput := `[{"name":"test","state":"PENDING"}]`
 				successOutput := `[{"name":"test","state":"SUCCESS"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(pendingOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(pendingOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(successOutput, nil)
 			},
 			wantErr:    false,
 			wantPassed: true,
@@ -1681,8 +1681,8 @@ func TestWaitForCIWithProgress_PollingLoop(t *testing.T) {
 			name: "handles non-timeout error in polling loop",
 			mockSetup: func(m *MockGhRunner) {
 				pendingOutput := `[{"name":"test","state":"PENDING"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", fmt.Errorf("some error"))
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(pendingOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return("", fmt.Errorf("some error"))
 			},
 			wantErr: true,
 		},
@@ -1691,9 +1691,9 @@ func TestWaitForCIWithProgress_PollingLoop(t *testing.T) {
 			mockSetup: func(m *MockGhRunner) {
 				pendingOutput := `[{"name":"test","state":"PENDING"}]`
 				successOutput := `[{"name":"test","state":"SUCCESS"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", ErrCICheckTimeout).Once()
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(pendingOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return("", ErrCICheckTimeout).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(successOutput, nil)
 			},
 			wantErr:    false,
 			wantPassed: true,
@@ -1767,7 +1767,7 @@ func TestWaitForCIWithProgress_AdditionalPaths(t *testing.T) {
 			name: "initial check succeeds with success status - immediate return",
 			mockSetup: func(m *MockGhRunner) {
 				successOutput := `[{"name":"build","state":"SUCCESS"},{"name":"test","state":"SUCCESS"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 123, "name,state").Return(successOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 123, "name,state,conclusion,startedAt,completedAt").Return(successOutput, nil).Once()
 			},
 			wantErr:    false,
 			wantPassed: true,
@@ -1777,7 +1777,7 @@ func TestWaitForCIWithProgress_AdditionalPaths(t *testing.T) {
 			name: "initial check succeeds with failure status - immediate return",
 			mockSetup: func(m *MockGhRunner) {
 				failOutput := `[{"name":"build","state":"SUCCESS"},{"name":"test","state":"FAILURE"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 456, "name,state").Return(failOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 456, "name,state,conclusion,startedAt,completedAt").Return(failOutput, nil).Once()
 			},
 			wantErr:    false,
 			wantPassed: false,
@@ -1787,7 +1787,7 @@ func TestWaitForCIWithProgress_AdditionalPaths(t *testing.T) {
 			name: "initial check succeeds with success and SkipE2E option",
 			mockSetup: func(m *MockGhRunner) {
 				successOutput := `[{"name":"build","state":"SUCCESS"},{"name":"e2e-test","state":"SUCCESS"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 789, "name,state").Return(successOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 789, "name,state,conclusion,startedAt,completedAt").Return(successOutput, nil).Once()
 			},
 			opts:       CheckCIOptions{SkipE2E: true, E2ETestPattern: "e2e"},
 			wantErr:    false,
@@ -1798,7 +1798,7 @@ func TestWaitForCIWithProgress_AdditionalPaths(t *testing.T) {
 			name: "initial check fails but SkipE2E filters out e2e failures",
 			mockSetup: func(m *MockGhRunner) {
 				failOutput := `[{"name":"build","state":"SUCCESS"},{"name":"e2e-test","state":"FAILURE"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 111, "name,state").Return(failOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 111, "name,state,conclusion,startedAt,completedAt").Return(failOutput, nil).Once()
 			},
 			opts:       CheckCIOptions{SkipE2E: true, E2ETestPattern: "e2e"},
 			wantErr:    false,
@@ -1809,7 +1809,7 @@ func TestWaitForCIWithProgress_AdditionalPaths(t *testing.T) {
 			name: "initial check fails with mixed failures and SkipE2E",
 			mockSetup: func(m *MockGhRunner) {
 				failOutput := `[{"name":"build","state":"FAILURE"},{"name":"e2e-test","state":"FAILURE"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 222, "name,state").Return(failOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 222, "name,state,conclusion,startedAt,completedAt").Return(failOutput, nil).Once()
 			},
 			opts:       CheckCIOptions{SkipE2E: true, E2ETestPattern: "e2e"},
 			wantErr:    false,
@@ -1877,7 +1877,7 @@ func TestWaitForCIWithProgress_ContextCancellationDuringDelay(t *testing.T) {
 			name: "context cancelled during initial delay wait",
 			mockSetup: func(m *MockGhRunner) {
 				pendingOutput := `[{"name":"test","state":"PENDING"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(pendingOutput, nil).Once()
 			},
 			advanceTime:  75 * time.Millisecond,
 			initialDelay: 200 * time.Millisecond,
@@ -1887,7 +1887,7 @@ func TestWaitForCIWithProgress_ContextCancellationDuringDelay(t *testing.T) {
 			name: "context cancelled early during initial delay",
 			mockSetup: func(m *MockGhRunner) {
 				pendingOutput := `[{"name":"test","state":"PENDING"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(pendingOutput, nil).Once()
 			},
 			advanceTime:  25 * time.Millisecond,
 			initialDelay: 150 * time.Millisecond,
@@ -1945,8 +1945,8 @@ func TestWaitForCIWithProgress_WaitingEvents(t *testing.T) {
 		mockGhRunner := new(MockGhRunner)
 		pendingOutput := `[{"name":"test","state":"PENDING"}]`
 		successOutput := `[{"name":"test","state":"SUCCESS"}]`
-		mockGhRunner.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
-		mockGhRunner.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+		mockGhRunner.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(pendingOutput, nil).Once()
+		mockGhRunner.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(successOutput, nil)
 
 		fakeClock := NewFakeClock(time.Now())
 		checker := NewCICheckerWithClock("/tmp", 50*time.Millisecond, 100*time.Millisecond, 6*time.Second, mockGhRunner, fakeClock)
@@ -2012,8 +2012,8 @@ func TestWaitForCIWithProgress_WithFakeClock(t *testing.T) {
 			mockSetup: func(m *MockGhRunner) {
 				pendingOutput := `[{"name":"test","state":"PENDING"}]`
 				successOutput := `[{"name":"test","state":"SUCCESS"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(pendingOutput, nil).Once()
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(successOutput, nil)
 			},
 			checkInterval: 50 * time.Millisecond,
 			initialDelay:  100 * time.Millisecond,
@@ -2029,8 +2029,8 @@ func TestWaitForCIWithProgress_WithFakeClock(t *testing.T) {
 			mockSetup: func(m *MockGhRunner) {
 				pendingOutput := `[{"name":"test","state":"PENDING"}]`
 				successOutput := `[{"name":"test","state":"SUCCESS"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Times(3)
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(pendingOutput, nil).Times(3)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(successOutput, nil)
 			},
 			checkInterval: 50 * time.Millisecond,
 			initialDelay:  100 * time.Millisecond,
@@ -2047,7 +2047,7 @@ func TestWaitForCIWithProgress_WithFakeClock(t *testing.T) {
 			name: "immediate success on first check",
 			mockSetup: func(m *MockGhRunner) {
 				successOutput := `[{"name":"test","state":"SUCCESS"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
+				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state,conclusion,startedAt,completedAt").Return(successOutput, nil)
 			},
 			checkInterval:  50 * time.Millisecond,
 			initialDelay:   100 * time.Millisecond,

@@ -1,25 +1,61 @@
-The CI checks have failed on your pull request. You need to fix the errors and ensure all CI jobs pass.
+# CI Fix Task
+
+## Current Status
+CI checks have failed on this pull request. The failures have been analyzed and classified.
 
 ## CI Failure Output
-
 {{.}}
+
+## Classification System
+
+The CI failures above have been analyzed and categorized. Each job is classified as one of:
+
+- **infrastructure**: Transient issues (runner problems, workflow superseded, network issues)
+  - These were automatically retried before reaching this point
+  - If you're seeing infrastructure-classified jobs, the auto-retry also failed
+
+- **code_related**: Issues caused by the code itself
+  - Test failures, build errors, lint issues
+  - Timeouts due to infinite loops or resource exhaustion
+  - Jobs that ran for extended periods before being cancelled
+
+- **persistent**: The same failure pattern has occurred multiple times
+  - Indicates a fundamental issue that simple fixes won't resolve
+  - May require architectural changes or manual investigation
 
 ## Instructions
 
-1. Analyze the CI failure output above carefully
-2. Identify which jobs failed and why:
-   - **Failed jobs**: These have actual errors that need code fixes
-   - **Cancelled jobs**: These were cancelled due to infrastructure issues (workflow superseded, concurrency settings, manual cancellation, or runner timeouts) - NOT code problems
-3. For FAILED jobs: Fix all issues reported by the CI system
-4. For CANCELLED jobs: These typically don't require code fixes. If you see only cancelled jobs with no actual failures:
-   - Verify tests pass locally
-   - If tests pass locally, push an empty commit to re-trigger CI: `git commit --allow-empty -m "Re-trigger CI" && git push`
-5. DO NOT skip or ignore actual errors
-6. Ensure your fixes address the root cause, not just symptoms
-7. Run tests locally to verify fixes before pushing
-8. Push your fixes to update the PR
+Based on the classification above:
 
-Common CI failures:
+1. Analyze the CI failure output above carefully
+2. Identify which jobs failed and why based on their classification:
+   - **Failed jobs**: These have actual errors that need code fixes
+   - **Cancelled jobs**: Check the classification - if marked as code_related (with long duration), these likely hit timeouts due to code problems, NOT infrastructure issues
+
+3. For FAILED jobs: Fix all issues reported by the CI system
+   - **For code_related failures**:
+     - Analyze the error messages and logs
+     - Identify the root cause
+     - Make targeted code fixes
+     - Do NOT assume cancelled jobs are infrastructure issues - check the classification and duration
+
+4. **For infrastructure failures that persisted**:
+   - If the job classification says infrastructure but it keeps failing, it may be misclassified
+   - Consider if the code might be causing resource exhaustion or timeouts
+   - Check if tests are running too long
+
+5. **For persistent failures**:
+   - This same failure has occurred multiple times
+   - Simple retry won't help
+   - Investigate the root cause more deeply
+   - Consider if there's a fundamental issue with the approach
+
+6. DO NOT skip or ignore actual errors
+7. Ensure your fixes address the root cause, not just symptoms
+8. Run tests locally to verify fixes before pushing
+9. Push your fixes to update the PR
+
+## Common CI failures
 - Unit tests failing
 - Integration tests failing
 - Build failures
@@ -29,15 +65,17 @@ Common CI failures:
 - Missing dependencies
 - Environment-specific issues
 
-Common reasons for CANCELLED jobs (NOT code issues):
-- A newer commit triggered a new workflow run, cancelling the previous one
-- GitHub Actions concurrency settings caused older runs to be cancelled
-- Someone manually cancelled the job
-- Runner issues or timeouts occurred
+## Important Notes
+
+- **Do NOT assume cancelled = infrastructure issue**. A job cancelled after running for 5+ minutes likely hit a timeout due to code problems.
+- **Check the duration** in the job analysis. Short duration (<30s) suggests infrastructure; long duration suggests code issues.
+- **Read the full error output** before making changes.
+- **Focus on the actual failure**, not on retrying infrastructure issues.
 
 ## Output Format
 
-After analyzing and fixing the errors (or determining no fixes are needed), output a summary as JSON in a code block:
+After analyzing and fixing the issues, provide your response as JSON:
+
 ```json
 {
   "filesChanged": ["file1.go", "file2.go"],
@@ -49,21 +87,8 @@ After analyzing and fixing the errors (or determining no fixes are needed), outp
 }
 ```
 
-If only cancelled jobs exist and tests pass locally:
-```json
-{
-  "filesChanged": [],
-  "linesAdded": 0,
-  "linesRemoved": 0,
-  "testsAdded": 0,
-  "summary": "CI jobs were cancelled due to infrastructure reasons, not code issues. Tests pass locally.",
-  "nextSteps": ["Push empty commit to re-trigger CI"]
-}
-```
-
 IMPORTANT:
-- Fix ALL actual CI failures (failed jobs)
-- For cancelled jobs with no failures, verify tests pass locally and re-trigger CI
+- Fix ALL actual CI failures (failed jobs) based on their classification
+- Address root causes, not symptoms
 - Ensure all tests pass locally before pushing
 - Do not skip or disable failing tests
-- Address root causes, not symptoms

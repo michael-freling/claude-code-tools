@@ -413,6 +413,7 @@ func TestOrchestrator_executePlanning(t *testing.T) {
 			tt.setupMocks(mockSM, mockExec, mockPG, mockOP)
 
 			o := &Orchestrator{
+				ciClassifier:    NewCIFailureClassifier(),
 				stateManager:    mockSM,
 				executor:        mockExec,
 				promptGenerator: mockPG,
@@ -516,6 +517,7 @@ func TestOrchestrator_executeConfirmation(t *testing.T) {
 			tt.setupMocks(mockSM)
 
 			o := &Orchestrator{
+				ciClassifier: NewCIFailureClassifier(),
 				stateManager: mockSM,
 				config:       DefaultConfig("/tmp/workflows"),
 				confirmFunc:  tt.confirmFunc,
@@ -650,6 +652,7 @@ func TestOrchestrator_executeImplementation(t *testing.T) {
 			tt.setupMocks(mockSM, mockExec, mockPG, mockOP, mockCI, mockWM)
 
 			o := &Orchestrator{
+				ciClassifier:    NewCIFailureClassifier(),
 				stateManager:    mockSM,
 				executor:        mockExec,
 				promptGenerator: mockPG,
@@ -793,6 +796,7 @@ func TestOrchestrator_executeImplementation_ErrorPaths(t *testing.T) {
 			tt.setupMocks(mockSM, mockExec, mockPG, mockOP, mockCI, mockWM)
 
 			o := &Orchestrator{
+				ciClassifier:    NewCIFailureClassifier(),
 				stateManager:    mockSM,
 				executor:        mockExec,
 				promptGenerator: mockPG,
@@ -987,6 +991,7 @@ func TestOrchestrator_executeImplementation_CIRetryLoop(t *testing.T) {
 				config:          config,
 				logger:          NewLogger(LogLevelNormal),
 				worktreeManager: mockWM,
+				ciClassifier:    NewCIFailureClassifier(),
 				ciCheckerFactory: func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) CIChecker {
 					return mockCI
 				},
@@ -1128,6 +1133,7 @@ func TestOrchestrator_executeRefactoring_ErrorPaths(t *testing.T) {
 			tt.setupMocks(mockSM, mockExec, mockPG, mockOP, mockCI)
 
 			o := &Orchestrator{
+				ciClassifier:    NewCIFailureClassifier(),
 				stateManager:    mockSM,
 				executor:        mockExec,
 				promptGenerator: mockPG,
@@ -1276,6 +1282,7 @@ func TestOrchestrator_executeRefactoring_CIRetryLoop(t *testing.T) {
 			config.MaxFixAttempts = 2
 
 			o := &Orchestrator{
+				ciClassifier:    NewCIFailureClassifier(),
 				stateManager:    mockSM,
 				executor:        mockExec,
 				promptGenerator: mockPG,
@@ -1427,6 +1434,7 @@ func TestOrchestrator_executePhase(t *testing.T) {
 			}
 
 			o := &Orchestrator{
+				ciClassifier:    NewCIFailureClassifier(),
 				stateManager:    mockSM,
 				executor:        mockExec,
 				promptGenerator: mockPG,
@@ -1476,6 +1484,7 @@ func TestOrchestrator_executePhase_InvalidPhase(t *testing.T) {
 	mockSM.On("SaveState", "test-workflow", mock.Anything).Return(nil)
 
 	o := &Orchestrator{
+		ciClassifier: NewCIFailureClassifier(),
 		stateManager: mockSM,
 		config:       DefaultConfig("/tmp/workflows"),
 		logger:       NewLogger(LogLevelNormal),
@@ -1564,6 +1573,7 @@ func TestOrchestrator_Start(t *testing.T) {
 			tt.setupMocks(mockSM)
 
 			o := &Orchestrator{
+				ciClassifier: NewCIFailureClassifier(),
 				stateManager: mockSM,
 				config:       DefaultConfig("/tmp/workflows"),
 				logger:       NewLogger(LogLevelNormal),
@@ -1634,6 +1644,7 @@ func TestOrchestrator_transitionPhase(t *testing.T) {
 			tt.setupMocks(mockSM)
 
 			o := &Orchestrator{
+				ciClassifier: NewCIFailureClassifier(),
 				stateManager: mockSM,
 				config:       DefaultConfig("/tmp/workflows"),
 				logger:       NewLogger(LogLevelNormal),
@@ -1720,6 +1731,7 @@ func TestOrchestrator_Resume(t *testing.T) {
 			tt.setupMocks(mockSM)
 
 			o := &Orchestrator{
+				ciClassifier: NewCIFailureClassifier(),
 				stateManager: mockSM,
 				config:       DefaultConfig("/tmp/workflows"),
 				logger:       NewLogger(LogLevelNormal),
@@ -1804,6 +1816,7 @@ func TestOrchestrator_Resume_RestoresFailedPhase(t *testing.T) {
 			}).Return(errors.New("stop execution for test"))
 
 			o := &Orchestrator{
+				ciClassifier: NewCIFailureClassifier(),
 				stateManager: mockSM,
 				config:       DefaultConfig("/tmp/workflows"),
 				logger:       NewLogger(LogLevelNormal),
@@ -1911,6 +1924,7 @@ func TestOrchestrator_Resume_PreservesCIFailure(t *testing.T) {
 			}).Return(errors.New("stop execution for test"))
 
 			o := &Orchestrator{
+				ciClassifier: NewCIFailureClassifier(),
 				stateManager: mockSM,
 				config:       DefaultConfig("/tmp/workflows"),
 				logger:       NewLogger(LogLevelNormal),
@@ -1972,6 +1986,7 @@ func TestOrchestrator_List(t *testing.T) {
 			tt.setupMocks(mockSM)
 
 			o := &Orchestrator{
+				ciClassifier: NewCIFailureClassifier(),
 				stateManager: mockSM,
 				logger:       NewLogger(LogLevelNormal),
 			}
@@ -2042,6 +2057,7 @@ func TestOrchestrator_Clean(t *testing.T) {
 			tt.setupMocks(mockSM)
 
 			o := &Orchestrator{
+				ciClassifier: NewCIFailureClassifier(),
 				stateManager: mockSM,
 				logger:       NewLogger(LogLevelNormal),
 			}
@@ -2291,7 +2307,8 @@ func TestDefaultConfig(t *testing.T) {
 
 func TestOrchestrator_SetConfirmFunc(t *testing.T) {
 	o := &Orchestrator{
-		logger: NewLogger(LogLevelNormal),
+		ciClassifier: NewCIFailureClassifier(),
+		logger:       NewLogger(LogLevelNormal),
 	}
 	customFunc := func(plan *Plan) (bool, string, error) {
 		return true, "", nil
@@ -2761,6 +2778,7 @@ func TestOrchestrator_executeRefactoring(t *testing.T) {
 			tt.setupMocks(mockSM, mockExec, mockPG, mockOP, mockCI)
 
 			o := &Orchestrator{
+				ciClassifier:    NewCIFailureClassifier(),
 				stateManager:    mockSM,
 				executor:        mockExec,
 				promptGenerator: mockPG,
@@ -2859,6 +2877,7 @@ func TestOrchestrator_executePRSplit(t *testing.T) {
 			}
 
 			o := &Orchestrator{
+				ciClassifier:    NewCIFailureClassifier(),
 				stateManager:    mockSM,
 				executor:        mockExec,
 				promptGenerator: mockPG,
@@ -2980,6 +2999,7 @@ func TestOrchestrator_executePRSplit_CIFailureRetry(t *testing.T) {
 	config.MaxFixAttempts = 3
 
 	o := &Orchestrator{
+		ciClassifier:    NewCIFailureClassifier(),
 		stateManager:    mockSM,
 		executor:        mockExec,
 		promptGenerator: mockPG,
@@ -3055,6 +3075,7 @@ func TestOrchestrator_Status(t *testing.T) {
 			tt.setupMocks(mockSM)
 
 			o := &Orchestrator{
+				ciClassifier: NewCIFailureClassifier(),
 				stateManager: mockSM,
 				logger:       NewLogger(LogLevelNormal),
 			}
@@ -3101,6 +3122,7 @@ func TestOrchestrator_Delete(t *testing.T) {
 			tt.setupMocks(mockSM)
 
 			o := &Orchestrator{
+				ciClassifier: NewCIFailureClassifier(),
 				stateManager: mockSM,
 				logger:       NewLogger(LogLevelNormal),
 			}
@@ -3139,6 +3161,7 @@ func TestOrchestrator_failWorkflow(t *testing.T) {
 			tt.setupMocks(mockSM)
 
 			o := &Orchestrator{
+				ciClassifier: NewCIFailureClassifier(),
 				stateManager: mockSM,
 				logger:       NewLogger(LogLevelNormal),
 			}
@@ -3185,6 +3208,7 @@ func TestOrchestrator_failWorkflowCI(t *testing.T) {
 			tt.setupMocks(mockSM)
 
 			o := &Orchestrator{
+				ciClassifier: NewCIFailureClassifier(),
 				stateManager: mockSM,
 				logger:       NewLogger(LogLevelNormal),
 			}
@@ -3249,6 +3273,7 @@ func TestOrchestrator_failWorkflowWithType(t *testing.T) {
 			tt.setupMocks(mockSM)
 
 			o := &Orchestrator{
+				ciClassifier: NewCIFailureClassifier(),
 				stateManager: mockSM,
 				logger:       NewLogger(LogLevelNormal),
 			}
@@ -3467,6 +3492,7 @@ func TestGetCIChecker(t *testing.T) {
 			}
 
 			o := &Orchestrator{
+				ciClassifier:     NewCIFailureClassifier(),
 				config:           config,
 				logger:           NewLogger(LogLevelNormal),
 				ciCheckerFactory: tt.ciCheckerFactory,
@@ -3634,7 +3660,7 @@ func TestFormatCIErrors(t *testing.T) {
 				FailedJobs:    []string{},
 				CancelledJobs: []string{"job1", "job2"},
 			},
-			want: "CI checks failed with the following errors:\n\nInfrastructure error\n\nCancelled jobs (infrastructure issue, not code failure):\n- job1\n- job2\n",
+			want: "CI checks failed with the following errors:\n\nInfrastructure error\n\nCancelled jobs:\n- job1\n- job2\n",
 		},
 		{
 			name: "formats with both failed and cancelled jobs",
@@ -3645,13 +3671,13 @@ func TestFormatCIErrors(t *testing.T) {
 				FailedJobs:    []string{"build"},
 				CancelledJobs: []string{"deploy"},
 			},
-			want: "CI checks failed with the following errors:\n\nMixed errors\n\nFailed jobs:\n- build\n\nCancelled jobs (infrastructure issue, not code failure):\n- deploy\n",
+			want: "CI checks failed with the following errors:\n\nMixed errors\n\nFailed jobs:\n- build\n\nCancelled jobs:\n- deploy\n",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := formatCIErrors(tt.result)
+			got := formatCIErrors(tt.result, nil)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -3706,6 +3732,7 @@ func TestOrchestrator_executePlanning_ParseErrors(t *testing.T) {
 			tt.setupMocks(mockSM, mockExec, mockPG, mockOP)
 
 			o := &Orchestrator{
+				ciClassifier:    NewCIFailureClassifier(),
 				stateManager:    mockSM,
 				executor:        mockExec,
 				promptGenerator: mockPG,
@@ -3826,7 +3853,7 @@ func TestHandleCancelledCI(t *testing.T) {
 			wantRerunCalled: false,
 		},
 		{
-			name: "GetLatestRunID fails - return error",
+			name: "GetLatestRunID fails - return original result with shouldContinue=true",
 			ciResult: &CIResult{
 				Passed:        false,
 				Status:        "failure",
@@ -3838,11 +3865,11 @@ func TestHandleCancelledCI(t *testing.T) {
 				gh.On("GetLatestRunID", mock.Anything, "/test/dir", 123).Return(int64(0), errors.New("failed to get run ID"))
 			},
 			wantPassed:      false,
-			wantErr:         true,
+			wantErr:         false,
 			wantRerunCalled: false,
 		},
 		{
-			name: "RunRerun fails - return error",
+			name: "RunRerun fails - return original result with shouldContinue=true",
 			ciResult: &CIResult{
 				Passed:        false,
 				Status:        "failure",
@@ -3855,11 +3882,11 @@ func TestHandleCancelledCI(t *testing.T) {
 				gh.On("RunRerun", mock.Anything, "/test/dir", int64(456)).Return(errors.New("rerun failed"))
 			},
 			wantPassed:      false,
-			wantErr:         true,
+			wantErr:         false,
 			wantRerunCalled: false,
 		},
 		{
-			name: "WaitForCI fails - return error",
+			name: "WaitForCI fails - return original result with shouldContinue=true",
 			ciResult: &CIResult{
 				Passed:        false,
 				Status:        "failure",
@@ -3873,7 +3900,7 @@ func TestHandleCancelledCI(t *testing.T) {
 				ci.On("WaitForCIWithProgress", mock.Anything, 123, mock.Anything, mock.Anything, mock.Anything).Return((*CIResult)(nil), errors.New("CI check failed"))
 			},
 			wantPassed:      false,
-			wantErr:         true,
+			wantErr:         false,
 			wantRerunCalled: true,
 		},
 	}
@@ -3886,15 +3913,20 @@ func TestHandleCancelledCI(t *testing.T) {
 			tt.setupMocks(mockGH, mockCI)
 
 			o := &Orchestrator{
-				config:   DefaultConfig("/tmp/workflows"),
-				logger:   NewLogger(LogLevelNormal),
-				ghRunner: mockGH,
+				config:       DefaultConfig("/tmp/workflows"),
+				logger:       NewLogger(LogLevelNormal),
+				ghRunner:     mockGH,
+				ciClassifier: NewCIFailureClassifier(),
 				ciCheckerFactory: func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) CIChecker {
 					return mockCI
 				},
 			}
 
-			result, err := o.handleCancelledCI(context.Background(), 123, "/test/dir", tt.ciResult)
+			phaseState := &PhaseState{
+				Attempts: 1,
+			}
+
+			result, shouldContinue, err := o.handleCancelledCI(context.Background(), 123, "/test/dir", tt.ciResult, phaseState)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -3902,12 +3934,18 @@ func TestHandleCancelledCI(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			if tt.wantRerunCalled {
-				assert.Equal(t, tt.wantPassed, result.Passed)
+			assert.Equal(t, tt.wantPassed, result.Passed)
+
+			// shouldContinue should be false only when CI passed after auto-retry
+			if result.Passed {
+				assert.False(t, shouldContinue, "shouldContinue should be false when CI passes")
 			} else {
-				// If no rerun, result should be the same as input
-				assert.Equal(t, tt.ciResult, result)
+				assert.True(t, shouldContinue, "shouldContinue should be true when CI still fails")
 			}
+
+			// Verify CI history was updated
+			assert.NotNil(t, phaseState.CIHistory)
+			assert.GreaterOrEqual(t, len(phaseState.CIHistory.Entries), 1)
 
 			mockGH.AssertExpectations(t)
 			mockCI.AssertExpectations(t)
@@ -4224,6 +4262,7 @@ func TestOrchestrator_ExecutePRCreation(t *testing.T) {
 
 			cmdRunner := command.NewRunner()
 			o := &Orchestrator{
+				ciClassifier:    NewCIFailureClassifier(),
 				stateManager:    mockSM,
 				executor:        mockExec,
 				promptGenerator: mockPG,
@@ -4512,6 +4551,7 @@ func TestOrchestrator_ExecuteImplementation_NoPRError(t *testing.T) {
 
 			cmdRunner := command.NewRunner()
 			o := &Orchestrator{
+				ciClassifier:    NewCIFailureClassifier(),
 				stateManager:    mockSM,
 				executor:        mockExec,
 				promptGenerator: mockPG,
@@ -4752,6 +4792,7 @@ func TestOrchestrator_ExecuteRefactoring_NoPRError(t *testing.T) {
 
 			cmdRunner := command.NewRunner()
 			o := &Orchestrator{
+				ciClassifier:    NewCIFailureClassifier(),
 				stateManager:    mockSM,
 				executor:        mockExec,
 				promptGenerator: mockPG,
