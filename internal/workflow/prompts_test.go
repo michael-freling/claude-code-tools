@@ -816,13 +816,10 @@ func TestPromptGenerator_GenerateFixCIPrompt_EdgeCases(t *testing.T) {
 		checkOutput func(t *testing.T, output string)
 	}{
 		{
-			name:     "whitespace-only failures treated as valid input",
-			failures: "   \t\n   ",
-			wantErr:  false,
-			checkOutput: func(t *testing.T, output string) {
-				assert.Contains(t, output, "CI Failure Output")
-				assert.Contains(t, output, "   \t\n   ")
-			},
+			name:        "whitespace-only failures returns error",
+			failures:    "   \t\n   ",
+			wantErr:     true,
+			errContains: "failures cannot be empty",
 		},
 		{
 			name:     "single character failure works",

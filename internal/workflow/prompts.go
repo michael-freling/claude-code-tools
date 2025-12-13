@@ -3,16 +3,14 @@ package workflow
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"text/template"
 
 	"github.com/michael-freling/claude-code-tools/internal/command"
 	"github.com/michael-freling/claude-code-tools/internal/templates"
 )
 
-// PRCreationContext contains context for generating PR creation prompts.
-// It provides the necessary information for Claude to create a pull request,
-// including the workflow type (feature, fix, refactor), the current branch name,
-// the target base branch, and a description of the changes.
+// PRCreationContext provides context for PR creation prompts.
 type PRCreationContext struct {
 	WorkflowType WorkflowType
 	Branch       string
@@ -47,7 +45,6 @@ func NewPromptGenerator() (PromptGenerator, error) {
 	return pg, nil
 }
 
-// loadTemplates loads all workflow templates from the embedded filesystem
 func (p *promptGenerator) loadTemplates() error {
 	templateNames := []string{
 		"planning.tmpl",
@@ -76,7 +73,6 @@ func (p *promptGenerator) loadTemplates() error {
 	return nil
 }
 
-// GeneratePlanningPrompt generates a prompt for the planning phase
 func (p *promptGenerator) GeneratePlanningPrompt(wfType WorkflowType, description string, feedback []string) (string, error) {
 	tmpl, ok := p.templates["planning.tmpl"]
 	if !ok {
@@ -101,7 +97,6 @@ func (p *promptGenerator) GeneratePlanningPrompt(wfType WorkflowType, descriptio
 	return buf.String(), nil
 }
 
-// GenerateImplementationPrompt generates a prompt for the implementation phase
 func (p *promptGenerator) GenerateImplementationPrompt(plan *Plan) (string, error) {
 	if plan == nil {
 		return "", fmt.Errorf("plan cannot be nil")
@@ -120,7 +115,6 @@ func (p *promptGenerator) GenerateImplementationPrompt(plan *Plan) (string, erro
 	return buf.String(), nil
 }
 
-// GenerateRefactoringPrompt generates a prompt for the refactoring phase
 func (p *promptGenerator) GenerateRefactoringPrompt(plan *Plan) (string, error) {
 	if plan == nil {
 		return "", fmt.Errorf("plan cannot be nil")
@@ -139,7 +133,6 @@ func (p *promptGenerator) GenerateRefactoringPrompt(plan *Plan) (string, error) 
 	return buf.String(), nil
 }
 
-// GeneratePRSplitPrompt generates a prompt for the PR split phase
 func (p *promptGenerator) GeneratePRSplitPrompt(metrics *PRMetrics, commits []command.Commit) (string, error) {
 	if metrics == nil {
 		return "", fmt.Errorf("metrics cannot be nil")
@@ -166,9 +159,8 @@ func (p *promptGenerator) GeneratePRSplitPrompt(metrics *PRMetrics, commits []co
 	return buf.String(), nil
 }
 
-// GenerateFixCIPrompt generates a prompt for fixing CI failures
 func (p *promptGenerator) GenerateFixCIPrompt(failures string) (string, error) {
-	if failures == "" {
+	if strings.TrimSpace(failures) == "" {
 		return "", fmt.Errorf("failures cannot be empty")
 	}
 
@@ -177,15 +169,20 @@ func (p *promptGenerator) GenerateFixCIPrompt(failures string) (string, error) {
 		return "", fmt.Errorf("fix-ci template not loaded")
 	}
 
+	data := struct {
+		Failures string
+	}{
+		Failures: failures,
+	}
+
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, failures); err != nil {
+	if err := tmpl.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("failed to execute fix-ci template: %w", err)
 	}
 
 	return buf.String(), nil
 }
 
-// GenerateCreatePRPrompt generates a prompt for creating a PR
 func (p *promptGenerator) GenerateCreatePRPrompt(ctx *PRCreationContext) (string, error) {
 	if ctx == nil {
 		return "", fmt.Errorf("context cannot be nil")
