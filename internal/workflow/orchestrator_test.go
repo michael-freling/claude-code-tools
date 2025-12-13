@@ -116,6 +116,10 @@ func (m *MockStateManager) DeleteWorkflow(name string) error {
 	return args.Error(0)
 }
 
+func (m *MockStateManager) SetTimeProvider(tp TimeProvider) {
+	m.Called(tp)
+}
+
 func (m *MockStateManager) SaveRawOutput(name string, phase Phase, output string) error {
 	args := m.Called(name, phase, output)
 	return args.Error(0)

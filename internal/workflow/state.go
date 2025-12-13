@@ -20,6 +20,9 @@ const (
 	phasesDir     = "phases"
 )
 
+// TimeProvider provides the current time (allows mocking in tests)
+type TimeProvider func() time.Time
+
 // StateManager interface for state persistence operations
 type StateManager interface {
 	// Workflow directory operations
@@ -47,21 +50,31 @@ type StateManager interface {
 	// List and delete
 	ListWorkflows() ([]WorkflowInfo, error)
 	DeleteWorkflow(name string) error
+
+	// Time provider for testing
+	SetTimeProvider(tp TimeProvider)
 }
 
 // fileStateManager implements StateManager using file-based storage
 type fileStateManager struct {
-	baseDir string
-	locks   map[string]*flock.Flock
-	mu      sync.Mutex
+	baseDir      string
+	locks        map[string]*flock.Flock
+	mu           sync.Mutex
+	timeProvider TimeProvider
 }
 
 // NewStateManager creates a new file-based state manager
 func NewStateManager(baseDir string) StateManager {
 	return &fileStateManager{
-		baseDir: baseDir,
-		locks:   make(map[string]*flock.Flock),
+		baseDir:      baseDir,
+		locks:        make(map[string]*flock.Flock),
+		timeProvider: time.Now,
 	}
+}
+
+// SetTimeProvider sets a custom time provider for testing
+func (s *fileStateManager) SetTimeProvider(tp TimeProvider) {
+	s.timeProvider = tp
 }
 
 // WorkflowDir returns the directory path for a workflow
@@ -179,7 +192,7 @@ func (s *fileStateManager) SaveState(name string, state *WorkflowState) error {
 	defer s.unlock(name)
 	defer fileLock.Close()
 
-	state.UpdatedAt = time.Now()
+	state.UpdatedAt = s.timeProvider()
 
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
@@ -212,7 +225,7 @@ func (s *fileStateManager) InitState(name, description string, wfType WorkflowTy
 		return nil, fmt.Errorf("%w: %s", ErrWorkflowExists, name)
 	}
 
-	now := time.Now()
+	now := s.timeProvider()
 	state := &WorkflowState{
 		Version:      stateVersion,
 		Name:         name,

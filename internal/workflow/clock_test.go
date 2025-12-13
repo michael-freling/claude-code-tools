@@ -258,44 +258,60 @@ func TestRealClock_Now(t *testing.T) {
 }
 
 func TestRealClock_Since(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow test in short mode")
+	}
+
 	clock := NewRealClock()
 	start := time.Now()
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(1 * time.Millisecond)
 	duration := clock.Since(start)
 
-	assert.True(t, duration >= 10*time.Millisecond, "Since should return at least 10ms")
+	assert.True(t, duration >= 1*time.Millisecond, "Since should return at least 1ms")
 }
 
 func TestRealClock_After(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow test in short mode")
+	}
+
 	clock := NewRealClock()
 	start := time.Now()
-	ch := clock.After(10 * time.Millisecond)
+	ch := clock.After(1 * time.Millisecond)
 	<-ch
 	elapsed := time.Since(start)
 
-	assert.True(t, elapsed >= 10*time.Millisecond, "After should fire after at least 10ms")
+	assert.True(t, elapsed >= 1*time.Millisecond, "After should fire after at least 1ms")
 }
 
 func TestRealClock_NewTimer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow test in short mode")
+	}
+
 	clock := NewRealClock()
 	start := time.Now()
-	timer := clock.NewTimer(10 * time.Millisecond)
+	timer := clock.NewTimer(1 * time.Millisecond)
 	<-timer.C()
 	elapsed := time.Since(start)
 
-	assert.True(t, elapsed >= 10*time.Millisecond, "Timer should fire after at least 10ms")
+	assert.True(t, elapsed >= 1*time.Millisecond, "Timer should fire after at least 1ms")
 }
 
 func TestRealClock_NewTicker(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow test in short mode")
+	}
+
 	clock := NewRealClock()
-	ticker := clock.NewTicker(10 * time.Millisecond)
+	ticker := clock.NewTicker(1 * time.Millisecond)
 	defer ticker.Stop()
 
 	start := time.Now()
 	<-ticker.C()
 	elapsed := time.Since(start)
 
-	assert.True(t, elapsed >= 10*time.Millisecond, "Ticker should fire after at least 10ms")
+	assert.True(t, elapsed >= 1*time.Millisecond, "Ticker should fire after at least 1ms")
 }
 
 // Tests for fake clock

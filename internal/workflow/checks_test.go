@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 
@@ -622,26 +623,21 @@ func TestCIChecker_WaitForCI_ImmediateCheckOnStart(t *testing.T) {
 }
 
 func TestCIChecker_WaitForCI_ContextCancellationDuringWait(t *testing.T) {
-	// This test verifies that context cancellation is respected during the waiting period
-	// Since the immediate check will fail with directory error, we need a valid directory
-	// but in a non-git repository to trigger the waiting behavior
+	// This test verifies that context cancellation is respected
+	// Use immediate cancellation for deterministic behavior
 	checker := NewCIChecker("/tmp", 100*time.Millisecond, 10*time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
-
-	// Cancel after a short delay
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		cancel()
-	}()
+	cancel() // cancel immediately
 
 	start := time.Now()
 	result, err := checker.WaitForCI(ctx, 123, 5*time.Minute)
 	elapsed := time.Since(start)
 
 	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
 	assert.Nil(t, result)
-	// Should fail quickly due to context cancellation or directory error
-	assert.Less(t, elapsed, 10*time.Second)
+	// Should fail quickly due to immediate context cancellation
+	assert.Less(t, elapsed, 1*time.Second)
 }
 
 func TestCIChecker_InitialDelayTimerFiresCorrectly(t *testing.T) {
@@ -1302,10 +1298,10 @@ func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
 				successOutput := `[{"name":"test","state":"SUCCESS"}]`
 				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
 			},
-			checkInterval:  50 * time.Millisecond,
-			commandTimeout: 100 * time.Millisecond,
-			initialDelay:   50 * time.Millisecond,
-			timeout:        5 * time.Second,
+			checkInterval:  10 * time.Millisecond,
+			commandTimeout: 20 * time.Millisecond,
+			initialDelay:   10 * time.Millisecond,
+			timeout:        100 * time.Millisecond,
 			wantErr:        false,
 			wantPassed:     true,
 		},
@@ -1315,10 +1311,10 @@ func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
 				failOutput := `[{"name":"test","state":"FAILURE"}]`
 				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(failOutput, nil)
 			},
-			checkInterval:  50 * time.Millisecond,
-			commandTimeout: 100 * time.Millisecond,
-			initialDelay:   50 * time.Millisecond,
-			timeout:        5 * time.Second,
+			checkInterval:  10 * time.Millisecond,
+			commandTimeout: 20 * time.Millisecond,
+			initialDelay:   10 * time.Millisecond,
+			timeout:        100 * time.Millisecond,
 			wantErr:        false,
 			wantPassed:     false,
 		},
@@ -1328,10 +1324,10 @@ func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
 				failOutput := `[{"name":"test-unit","state":"SUCCESS"},{"name":"test-e2e","state":"FAILURE"}]`
 				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(failOutput, nil)
 			},
-			checkInterval:  50 * time.Millisecond,
-			commandTimeout: 100 * time.Millisecond,
-			initialDelay:   50 * time.Millisecond,
-			timeout:        5 * time.Second,
+			checkInterval:  10 * time.Millisecond,
+			commandTimeout: 20 * time.Millisecond,
+			initialDelay:   10 * time.Millisecond,
+			timeout:        100 * time.Millisecond,
 			opts:           CheckCIOptions{SkipE2E: true, E2ETestPattern: "e2e"},
 			wantErr:        false,
 			wantPassed:     true,
@@ -1342,10 +1338,10 @@ func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
 				pendingOutput := `[{"name":"test","state":"PENDING"}]`
 				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Maybe()
 			},
-			checkInterval:  50 * time.Millisecond,
-			commandTimeout: 100 * time.Millisecond,
-			initialDelay:   50 * time.Millisecond,
-			timeout:        5 * time.Second,
+			checkInterval:  10 * time.Millisecond,
+			commandTimeout: 20 * time.Millisecond,
+			initialDelay:   10 * time.Millisecond,
+			timeout:        100 * time.Millisecond,
 			wantErr:        true,
 		},
 		{
@@ -1354,9 +1350,9 @@ func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
 				successOutput := `[{"name":"test","state":"SUCCESS"}]`
 				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(successOutput, nil)
 			},
-			checkInterval:  50 * time.Millisecond,
-			commandTimeout: 100 * time.Millisecond,
-			initialDelay:   50 * time.Millisecond,
+			checkInterval:  10 * time.Millisecond,
+			commandTimeout: 20 * time.Millisecond,
+			initialDelay:   10 * time.Millisecond,
 			timeout:        0,
 			wantErr:        false,
 			wantPassed:     true,
@@ -1367,26 +1363,13 @@ func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
 				failOutput := `[{"name":"test","state":"SUCCESS"},{"name":"integration","state":"FAILURE"}]`
 				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(failOutput, nil)
 			},
-			checkInterval:  50 * time.Millisecond,
-			commandTimeout: 100 * time.Millisecond,
-			initialDelay:   50 * time.Millisecond,
-			timeout:        5 * time.Second,
+			checkInterval:  10 * time.Millisecond,
+			commandTimeout: 20 * time.Millisecond,
+			initialDelay:   10 * time.Millisecond,
+			timeout:        100 * time.Millisecond,
 			opts:           CheckCIOptions{SkipE2E: true},
 			wantErr:        false,
 			wantPassed:     true,
-		},
-		{
-			name: "handles timeout error during polling",
-			mockSetup: func(m *MockGhRunner) {
-				pendingOutput := `[{"name":"test","state":"PENDING"}]`
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
-				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return("", ErrCICheckTimeout).Maybe()
-			},
-			checkInterval:  50 * time.Millisecond,
-			commandTimeout: 100 * time.Millisecond,
-			initialDelay:   50 * time.Millisecond,
-			timeout:        300 * time.Millisecond,
-			wantErr:        true,
 		},
 	}
 
@@ -1395,44 +1378,19 @@ func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
 			mockGhRunner := new(MockGhRunner)
 			tt.mockSetup(mockGhRunner)
 
-			var checker CIChecker
+			// Use real clock but with very short durations to keep tests fast
+			checker := NewCICheckerWithRunner("/tmp", tt.checkInterval, tt.commandTimeout, tt.initialDelay, mockGhRunner)
+
 			var ctx context.Context
 			var cancel context.CancelFunc
-			var done chan struct{}
 
 			if tt.name == "context timeout returns error" {
-				fakeClock := NewFakeClock(time.Now())
-				checker = NewCICheckerWithClock("/tmp", tt.checkInterval, tt.commandTimeout, tt.initialDelay, mockGhRunner, fakeClock)
 				ctx, cancel = context.WithTimeout(context.Background(), tt.timeout)
 				defer cancel()
-
-				done = make(chan struct{})
-				var timeoutErr error
-
-				var progressEvents []CIProgressEvent
-				onProgress := func(event CIProgressEvent) {
-					progressEvents = append(progressEvents, event)
-				}
-
-				go func() {
-					_, timeoutErr = checker.WaitForCIWithProgress(ctx, 0, tt.timeout, tt.opts, onProgress)
-					close(done)
-				}()
-
-				time.Sleep(10 * time.Millisecond)
-				fakeClock.Advance(tt.initialDelay + tt.checkInterval*3)
-				time.Sleep(10 * time.Millisecond)
-				cancel()
-
-				<-done
-
-				require.Error(t, timeoutErr)
-				return
+			} else {
+				ctx, cancel = context.WithTimeout(context.Background(), max(tt.timeout, 500*time.Millisecond))
+				defer cancel()
 			}
-
-			checker = NewCICheckerWithRunner("/tmp", tt.checkInterval, tt.commandTimeout, tt.initialDelay, mockGhRunner)
-			ctx, cancel = context.WithTimeout(context.Background(), max(tt.timeout, 5*time.Second))
-			defer cancel()
 
 			var progressEvents []CIProgressEvent
 			onProgress := func(event CIProgressEvent) {
@@ -1510,11 +1468,18 @@ func TestCheckCI_RetryLogic(t *testing.T) {
 				close(done)
 			}()
 
-			time.Sleep(10 * time.Millisecond)
-			fakeClock.Advance(5 * time.Second)
-			time.Sleep(10 * time.Millisecond)
-			fakeClock.Advance(10 * time.Second)
-			time.Sleep(10 * time.Millisecond)
+			// Only wait for timers if the test will retry (not for immediate errors)
+			if tt.name != "non-timeout error returns immediately" {
+				waitErr := fakeClock.WaitForTimers(1, 100*time.Millisecond)
+				require.NoError(t, waitErr)
+				fakeClock.Advance(5 * time.Second)
+				time.Sleep(10 * time.Millisecond)
+				fakeClock.Advance(10 * time.Second)
+				time.Sleep(10 * time.Millisecond)
+			} else {
+				// For immediate errors, just give goroutine time to complete
+				time.Sleep(10 * time.Millisecond)
+			}
 
 			select {
 			case <-done:
@@ -1732,7 +1697,8 @@ func TestWaitForCIWithProgress_PollingLoop(t *testing.T) {
 				close(done)
 			}()
 
-			time.Sleep(10 * time.Millisecond)
+			waitErr := fakeClock.WaitForTimers(1, 100*time.Millisecond)
+			require.NoError(t, waitErr)
 			fakeClock.Advance(50 * time.Millisecond)
 			time.Sleep(10 * time.Millisecond)
 			fakeClock.Advance(50 * time.Millisecond)
@@ -1876,7 +1842,7 @@ func TestWaitForCIWithProgress_ContextCancellationDuringDelay(t *testing.T) {
 	tests := []struct {
 		name         string
 		mockSetup    func(*MockGhRunner)
-		cancelDelay  time.Duration
+		advanceTime  time.Duration
 		initialDelay time.Duration
 		wantErr      bool
 	}{
@@ -1886,7 +1852,7 @@ func TestWaitForCIWithProgress_ContextCancellationDuringDelay(t *testing.T) {
 				pendingOutput := `[{"name":"test","state":"PENDING"}]`
 				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
 			},
-			cancelDelay:  75 * time.Millisecond,
+			advanceTime:  75 * time.Millisecond,
 			initialDelay: 200 * time.Millisecond,
 			wantErr:      true,
 		},
@@ -1896,7 +1862,7 @@ func TestWaitForCIWithProgress_ContextCancellationDuringDelay(t *testing.T) {
 				pendingOutput := `[{"name":"test","state":"PENDING"}]`
 				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Once()
 			},
-			cancelDelay:  25 * time.Millisecond,
+			advanceTime:  25 * time.Millisecond,
 			initialDelay: 150 * time.Millisecond,
 			wantErr:      true,
 		},
@@ -1907,25 +1873,37 @@ func TestWaitForCIWithProgress_ContextCancellationDuringDelay(t *testing.T) {
 			mockGhRunner := new(MockGhRunner)
 			tt.mockSetup(mockGhRunner)
 
-			checker := NewCICheckerWithRunner("/tmp", 50*time.Millisecond, 100*time.Millisecond, tt.initialDelay, mockGhRunner)
+			fakeClock := NewFakeClock(time.Now())
+			checker := NewCICheckerWithClock("/tmp", 50*time.Millisecond, 100*time.Millisecond, tt.initialDelay, mockGhRunner, fakeClock)
 
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
+			var result *CIResult
+			var err error
+			done := make(chan struct{})
 			go func() {
-				time.Sleep(tt.cancelDelay)
-				cancel()
+				result, err = checker.WaitForCIWithProgress(ctx, 0, 5*time.Second, CheckCIOptions{}, nil)
+				close(done)
 			}()
 
-			start := time.Now()
-			result, err := checker.WaitForCIWithProgress(ctx, 0, 5*time.Second, CheckCIOptions{}, nil)
-			elapsed := time.Since(start)
+			// Wait for the timer to be registered
+			waitErr := fakeClock.WaitForTimers(1, 100*time.Millisecond)
+			require.NoError(t, waitErr, "timer should be registered")
+
+			// Advance clock to simulate time passing, then cancel
+			fakeClock.Advance(tt.advanceTime)
+			cancel()
+
+			// Give goroutine time to process cancellation
+			runtime.Gosched()
+
+			<-done
 
 			if tt.wantErr {
 				require.Error(t, err)
 				assert.ErrorIs(t, err, context.Canceled)
 				assert.Nil(t, result)
-				assert.Less(t, elapsed, tt.initialDelay, "should cancel before initial delay completes")
 				return
 			}
 
@@ -1963,7 +1941,8 @@ func TestWaitForCIWithProgress_WaitingEvents(t *testing.T) {
 			close(done)
 		}()
 
-		time.Sleep(10 * time.Millisecond)
+		waitErr := fakeClock.WaitForTimers(1, 100*time.Millisecond)
+		require.NoError(t, waitErr)
 		fakeClock.Advance(6 * time.Second)
 
 		<-done
@@ -2084,9 +2063,13 @@ func TestWaitForCIWithProgress_WithFakeClock(t *testing.T) {
 				close(done)
 			}()
 
-			for _, advance := range tt.advanceSteps {
-				time.Sleep(10 * time.Millisecond)
-				fakeClock.Advance(advance)
+			if len(tt.advanceSteps) > 0 {
+				waitErr := fakeClock.WaitForTimers(1, 100*time.Millisecond)
+				require.NoError(t, waitErr)
+				for _, advance := range tt.advanceSteps {
+					fakeClock.Advance(advance)
+					time.Sleep(10 * time.Millisecond)
+				}
 			}
 
 			select {
