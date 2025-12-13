@@ -373,6 +373,10 @@ func TestCIChecker_CheckCI_NotInstalled(t *testing.T) {
 }
 
 func TestCIChecker_CheckCI_NoPR(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow test in short mode")
+	}
+
 	// This test verifies the error handling when gh pr checks fails
 	// Running in /tmp (non-git directory) will cause an error
 	checker := NewCIChecker("/tmp", 1*time.Second, 10*time.Second)
@@ -687,11 +691,15 @@ func TestCIChecker_InitialDelayTimerFiresCorrectly(t *testing.T) {
 }
 
 func TestCIChecker_InitialDelayCompletesWithinExpectedTime(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow test in short mode")
+	}
+
 	// This test verifies that when CI is pending, the initial delay completes
 	// and doesn't loop forever. We test this by using a mock-like approach
 	// where we cancel the context after the initial delay should have completed.
 
-	initialDelay := 200 * time.Millisecond
+	initialDelay := 20 * time.Millisecond
 	checker := NewCICheckerWithOptions(
 		"/tmp",
 		50*time.Millisecond,  // checkInterval
@@ -1338,10 +1346,10 @@ func TestWaitForCIWithProgress_WithMocks(t *testing.T) {
 				pendingOutput := `[{"name":"test","state":"PENDING"}]`
 				m.On("PRChecks", mock.Anything, "/tmp", 0, "name,state").Return(pendingOutput, nil).Maybe()
 			},
-			checkInterval:  10 * time.Millisecond,
-			commandTimeout: 20 * time.Millisecond,
-			initialDelay:   10 * time.Millisecond,
-			timeout:        100 * time.Millisecond,
+			checkInterval:  1 * time.Millisecond,
+			commandTimeout: 2 * time.Millisecond,
+			initialDelay:   1 * time.Millisecond,
+			timeout:        10 * time.Millisecond,
 			wantErr:        true,
 		},
 		{
@@ -1473,12 +1481,12 @@ func TestCheckCI_RetryLogic(t *testing.T) {
 				waitErr := fakeClock.WaitForTimers(1, 100*time.Millisecond)
 				require.NoError(t, waitErr)
 				fakeClock.Advance(5 * time.Second)
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(100 * time.Microsecond)
 				fakeClock.Advance(10 * time.Second)
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(100 * time.Microsecond)
 			} else {
 				// For immediate errors, just give goroutine time to complete
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(100 * time.Microsecond)
 			}
 
 			select {
@@ -1604,7 +1612,7 @@ func TestWaitForCIWithProgress_ProgressEvents(t *testing.T) {
 			mockGhRunner := new(MockGhRunner)
 			tt.mockSetup(mockGhRunner)
 
-			checker := NewCICheckerWithRunner("/tmp", 50*time.Millisecond, 100*time.Millisecond, 100*time.Millisecond, mockGhRunner)
+			checker := NewCICheckerWithRunner("/tmp", 5*time.Millisecond, 10*time.Millisecond, 10*time.Millisecond, mockGhRunner)
 
 			ctx := context.Background()
 			var events []CIProgressEvent
@@ -1700,13 +1708,13 @@ func TestWaitForCIWithProgress_PollingLoop(t *testing.T) {
 			waitErr := fakeClock.WaitForTimers(1, 100*time.Millisecond)
 			require.NoError(t, waitErr)
 			fakeClock.Advance(50 * time.Millisecond)
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(100 * time.Microsecond)
 			fakeClock.Advance(50 * time.Millisecond)
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(100 * time.Microsecond)
 			fakeClock.Advance(50 * time.Millisecond)
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(100 * time.Microsecond)
 			fakeClock.Advance(5 * time.Second)
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(100 * time.Microsecond)
 			fakeClock.Advance(50 * time.Millisecond)
 
 			select {
@@ -2068,7 +2076,7 @@ func TestWaitForCIWithProgress_WithFakeClock(t *testing.T) {
 				require.NoError(t, waitErr)
 				for _, advance := range tt.advanceSteps {
 					fakeClock.Advance(advance)
-					time.Sleep(10 * time.Millisecond)
+					time.Sleep(100 * time.Microsecond)
 				}
 			}
 

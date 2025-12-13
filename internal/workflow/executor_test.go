@@ -843,7 +843,7 @@ while true; do sleep 0.01; done`
 
 	config := ExecuteConfig{
 		Prompt:  "test prompt",
-		Timeout: 100 * time.Millisecond,
+		Timeout: 20 * time.Millisecond,
 	}
 
 	got, err := executor.ExecuteStreaming(ctx, config, nil)

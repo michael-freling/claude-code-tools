@@ -789,11 +789,11 @@ func TestFakeClock_WaitForTimers_Timeout(t *testing.T) {
 	clock := NewFakeClock(start)
 
 	before := time.Now()
-	err := clock.WaitForTimers(10, 100*time.Millisecond)
+	err := clock.WaitForTimers(10, 10*time.Millisecond)
 	elapsed := time.Since(before)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "timeout waiting for 10 timers")
-	assert.GreaterOrEqual(t, elapsed, 100*time.Millisecond)
-	assert.Less(t, elapsed, 200*time.Millisecond)
+	assert.GreaterOrEqual(t, elapsed, 10*time.Millisecond)
+	assert.Less(t, elapsed, 50*time.Millisecond)
 }
