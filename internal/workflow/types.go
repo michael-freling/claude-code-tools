@@ -5,7 +5,6 @@ import (
 	"time"
 )
 
-// Phase represents a workflow phase
 type Phase string
 
 const (
@@ -18,7 +17,6 @@ const (
 	PhaseFailed         Phase = "FAILED"
 )
 
-// PhaseStatus represents the status of a phase
 type PhaseStatus string
 
 const (
@@ -29,7 +27,6 @@ const (
 	StatusFailed     PhaseStatus = "failed"
 )
 
-// WorkflowType represents the type of workflow
 type WorkflowType string
 
 const (
@@ -73,17 +70,13 @@ type PRMetrics struct {
 	FilesDeleted  []string `json:"filesDeleted,omitempty"`
 }
 
-// FailureType represents the type of failure that occurred
 type FailureType string
 
 const (
-	// FailureTypeExecution indicates the phase execution itself failed (e.g., code generation)
 	FailureTypeExecution FailureType = "execution"
-	// FailureTypeCI indicates CI check failed after successful execution
-	FailureTypeCI FailureType = "ci"
+	FailureTypeCI        FailureType = "ci"
 )
 
-// WorkflowError represents an error that occurred during workflow
 type WorkflowError struct {
 	Message     string                 `json:"message"`
 	Phase       Phase                  `json:"phase"`
@@ -97,7 +90,6 @@ func (e *WorkflowError) Error() string {
 	return e.Message
 }
 
-// Plan represents the structured plan output from Claude
 type Plan struct {
 	Summary             string       `json:"summary"`
 	ContextType         string       `json:"contextType"`
@@ -131,7 +123,6 @@ type WorkStream struct {
 	DependsOn []string `json:"dependsOn,omitempty"`
 }
 
-// ImplementationSummary represents output from implementation phase
 type ImplementationSummary struct {
 	FilesChanged []string `json:"filesChanged"`
 	LinesAdded   int      `json:"linesAdded"`
@@ -141,14 +132,12 @@ type ImplementationSummary struct {
 	NextSteps    []string `json:"nextSteps,omitempty"`
 }
 
-// RefactoringSummary represents output from refactoring phase
 type RefactoringSummary struct {
 	FilesChanged     []string `json:"filesChanged"`
 	ImprovementsMade []string `json:"improvementsMade"`
 	Summary          string   `json:"summary"`
 }
 
-// SplitStrategy represents the strategy for creating child branches
 type SplitStrategy string
 
 const (
@@ -158,7 +147,6 @@ const (
 	SplitByFiles SplitStrategy = "files"
 )
 
-// ChildPRPlan represents the plan for a single child PR
 type ChildPRPlan struct {
 	Title       string   `json:"title"`
 	Description string   `json:"description"`
@@ -166,7 +154,6 @@ type ChildPRPlan struct {
 	Files       []string `json:"files,omitempty"`
 }
 
-// PRSplitPlan represents the overall split plan output from Claude
 type PRSplitPlan struct {
 	Strategy    SplitStrategy `json:"strategy"`
 	ParentTitle string        `json:"parentTitle"`
@@ -175,7 +162,6 @@ type PRSplitPlan struct {
 	Summary     string        `json:"summary"`
 }
 
-// PRSplitResult represents output from PR split phase
 type PRSplitResult struct {
 	ParentPR    PRInfo   `json:"parentPR"`
 	ChildPRs    []PRInfo `json:"childPRs"`
@@ -183,7 +169,6 @@ type PRSplitResult struct {
 	BranchNames []string `json:"branchNames,omitempty"`
 }
 
-// PRInfo contains information about a pull request
 type PRInfo struct {
 	Number      int    `json:"number"`
 	URL         string `json:"url"`
@@ -191,7 +176,6 @@ type PRInfo struct {
 	Description string `json:"description"`
 }
 
-// WorkflowInfo represents summary information for listing
 type WorkflowInfo struct {
 	Name         string       `json:"name"`
 	Type         WorkflowType `json:"type"`
@@ -201,28 +185,23 @@ type WorkflowInfo struct {
 	Status       string       `json:"status"`
 }
 
-// CheckCIOptions configures CI checking behavior
 type CheckCIOptions struct {
 	SkipE2E        bool
 	E2ETestPattern string
 }
 
-// Commit represents a git commit
 type Commit struct {
 	Hash    string `json:"hash"`
 	Subject string `json:"subject"`
 }
 
-// CIFailureCategory represents the category of CI failure
 type CIFailureCategory string
 
 const (
 	// CategoryInfrastructure indicates the failure is due to infrastructure issues
-	// (e.g., runner availability, network issues, workflow superseded)
 	CategoryInfrastructure CIFailureCategory = "infrastructure"
 
 	// CategoryCodeRelated indicates the failure is due to code issues
-	// (e.g., test failures, build errors, timeouts due to infinite loops)
 	CategoryCodeRelated CIFailureCategory = "code_related"
 
 	// CategoryMixed indicates both infrastructure and code issues are present
@@ -274,7 +253,9 @@ type CIFailureHistory struct {
 	Entries []CIFailureHistoryEntry `json:"entries"`
 }
 
-// IsPersistentFailure checks if the same failure pattern has occurred threshold times
+// IsPersistentFailure checks if the same job failure pattern has occurred
+// consecutively for the specified threshold number of times, indicating
+// a fundamental issue that retries won't resolve.
 func (h *CIFailureHistory) IsPersistentFailure(threshold int) bool {
 	if len(h.Entries) < threshold {
 		return false
