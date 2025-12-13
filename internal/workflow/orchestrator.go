@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -338,6 +339,13 @@ func (o *Orchestrator) executePlanning(ctx context.Context, state *WorkflowState
 
 	if err != nil {
 		spinner.Fail("Planning failed")
+		if errors.Is(err, ErrPromptTooLong) {
+			phaseState.Feedback = append(phaseState.Feedback, "Your previous response was too long and exceeded the prompt limit. Please provide a more concise response with less verbose output.")
+			if err := o.stateManager.SaveState(state.Name, state); err != nil {
+				return fmt.Errorf("failed to save state: %w", err)
+			}
+			return nil
+		}
 		return o.failWorkflow(state, fmt.Errorf("failed to execute planning: %w", err))
 	}
 
@@ -498,6 +506,13 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 
 		if err != nil {
 			spinner.Fail("Implementation failed")
+			if errors.Is(err, ErrPromptTooLong) {
+				phaseState.Feedback = append(phaseState.Feedback, "Your previous response was too long and exceeded the prompt limit. Please provide a more concise response with less verbose output.")
+				if err := o.stateManager.SaveState(state.Name, state); err != nil {
+					return fmt.Errorf("failed to save state: %w", err)
+				}
+				return nil
+			}
 			return o.failWorkflow(state, fmt.Errorf("failed to execute implementation: %w", err))
 		}
 
@@ -657,6 +672,13 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 
 		if err != nil {
 			spinner.Fail("Refactoring failed")
+			if errors.Is(err, ErrPromptTooLong) {
+				phaseState.Feedback = append(phaseState.Feedback, "Your previous response was too long and exceeded the prompt limit. Please provide a more concise response with less verbose output.")
+				if err := o.stateManager.SaveState(state.Name, state); err != nil {
+					return fmt.Errorf("failed to save state: %w", err)
+				}
+				return nil
+			}
 			return o.failWorkflow(state, fmt.Errorf("failed to execute refactoring: %w", err))
 		}
 
@@ -833,6 +855,13 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 
 		if err != nil {
 			spinner.Fail("PR split failed")
+			if errors.Is(err, ErrPromptTooLong) {
+				phaseState.Feedback = append(phaseState.Feedback, "Your previous response was too long and exceeded the prompt limit. Please provide a more concise response with less verbose output.")
+				if err := o.stateManager.SaveState(state.Name, state); err != nil {
+					return fmt.Errorf("failed to save state: %w", err)
+				}
+				return nil
+			}
 			return o.failWorkflow(state, fmt.Errorf("failed to execute PR split: %w", err))
 		}
 
@@ -1004,6 +1033,10 @@ func (o *Orchestrator) executePRCreation(ctx context.Context, state *WorkflowSta
 
 		if err != nil {
 			spinner.Fail("PR creation failed")
+			if errors.Is(err, ErrPromptTooLong) {
+				o.logger.Verbose("PR creation failed due to prompt too long, skipping retry")
+				return 0, fmt.Errorf("PR creation failed: %w", err)
+			}
 			o.logger.Verbose("PR creation attempt %d failed: %v", attempt, err)
 			lastError = err.Error()
 			continue

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"testing"
@@ -4793,6 +4794,428 @@ func TestOrchestrator_ExecuteRefactoring_NoPRError(t *testing.T) {
 			mockPG.AssertExpectations(t)
 			mockOP.AssertExpectations(t)
 			mockCI.AssertExpectations(t)
+		})
+	}
+}
+
+func TestOrchestrator_executePlanning_PromptTooLong(t *testing.T) {
+	tests := []struct {
+		name            string
+		setupMocks      func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator)
+		wantErr         bool
+		wantPhase       Phase
+		wantFeedbackLen int
+	}{
+		{
+			name: "returns nil on ErrPromptTooLong to trigger retry",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil).Times(2)
+				pg.On("GeneratePlanningPrompt", WorkflowTypeFeature, "test description", []string(nil)).Return("planning prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(
+					(*ExecuteResult)(nil),
+					fmt.Errorf("claude execution failed with exit code 1: %w", ErrPromptTooLong),
+				)
+			},
+			wantErr:         false,
+			wantPhase:       PhasePlanning,
+			wantFeedbackLen: 1,
+		},
+		{
+			name: "returns error on other errors",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil).Times(2)
+				pg.On("GeneratePlanningPrompt", WorkflowTypeFeature, "test description", []string(nil)).Return("planning prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(
+					(*ExecuteResult)(nil),
+					errors.New("some other error"),
+				)
+			},
+			wantErr:         true,
+			wantPhase:       PhaseFailed,
+			wantFeedbackLen: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSM := new(MockStateManager)
+			mockExec := new(MockClaudeExecutor)
+			mockPG := new(MockPromptGenerator)
+
+			tt.setupMocks(mockSM, mockExec, mockPG)
+
+			o := &Orchestrator{
+				stateManager:    mockSM,
+				executor:        mockExec,
+				promptGenerator: mockPG,
+				config:          DefaultConfig("/tmp/workflows"),
+				logger:          NewLogger(LogLevelNormal),
+			}
+
+			state := &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test description",
+				CurrentPhase: PhasePlanning,
+				Phases: map[Phase]*PhaseState{
+					PhasePlanning: {Status: StatusInProgress},
+				},
+			}
+
+			err := o.executePlanning(context.Background(), state)
+
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, tt.wantPhase, state.CurrentPhase)
+			assert.Len(t, state.Phases[PhasePlanning].Feedback, tt.wantFeedbackLen)
+			if tt.wantFeedbackLen > 0 {
+				assert.Contains(t, state.Phases[PhasePlanning].Feedback[0], "too long")
+			}
+
+			mockSM.AssertExpectations(t)
+			mockExec.AssertExpectations(t)
+			mockPG.AssertExpectations(t)
+		})
+	}
+}
+
+func TestOrchestrator_executeImplementation_PromptTooLong(t *testing.T) {
+	tests := []struct {
+		name            string
+		setupMocks      func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockWorktreeManager)
+		wantErr         bool
+		wantPhase       Phase
+		wantFeedbackLen int
+	}{
+		{
+			name: "returns nil on ErrPromptTooLong to trigger retry",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, wm *MockWorktreeManager) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil).Times(2)
+				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
+				pg.On("GenerateImplementationPrompt", mock.Anything).Return("implementation prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(
+					(*ExecuteResult)(nil),
+					fmt.Errorf("claude execution failed with exit code 1: %w", ErrPromptTooLong),
+				)
+			},
+			wantErr:         false,
+			wantPhase:       PhaseImplementation,
+			wantFeedbackLen: 1,
+		},
+		{
+			name: "returns error on other errors",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, wm *MockWorktreeManager) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil).Times(2)
+				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
+				pg.On("GenerateImplementationPrompt", mock.Anything).Return("implementation prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(
+					(*ExecuteResult)(nil),
+					errors.New("some other error"),
+				)
+			},
+			wantErr:         true,
+			wantPhase:       PhaseFailed,
+			wantFeedbackLen: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSM := new(MockStateManager)
+			mockExec := new(MockClaudeExecutor)
+			mockPG := new(MockPromptGenerator)
+			mockWM := new(MockWorktreeManager)
+
+			tt.setupMocks(mockSM, mockExec, mockPG, mockWM)
+
+			o := &Orchestrator{
+				stateManager:    mockSM,
+				executor:        mockExec,
+				promptGenerator: mockPG,
+				worktreeManager: mockWM,
+				config:          DefaultConfig("/tmp/workflows"),
+				logger:          NewLogger(LogLevelNormal),
+			}
+
+			state := &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test description",
+				CurrentPhase: PhaseImplementation,
+				WorktreePath: "/tmp/worktree",
+				Phases: map[Phase]*PhaseState{
+					PhaseImplementation: {Status: StatusInProgress},
+				},
+			}
+
+			err := o.executeImplementation(context.Background(), state)
+
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, tt.wantPhase, state.CurrentPhase)
+			assert.Len(t, state.Phases[PhaseImplementation].Feedback, tt.wantFeedbackLen)
+			if tt.wantFeedbackLen > 0 {
+				assert.Contains(t, state.Phases[PhaseImplementation].Feedback[0], "too long")
+			}
+
+			mockSM.AssertExpectations(t)
+			mockExec.AssertExpectations(t)
+			mockPG.AssertExpectations(t)
+		})
+	}
+}
+
+func TestOrchestrator_executeRefactoring_PromptTooLong(t *testing.T) {
+	tests := []struct {
+		name            string
+		setupMocks      func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator)
+		wantErr         bool
+		wantPhase       Phase
+		wantFeedbackLen int
+	}{
+		{
+			name: "returns nil on ErrPromptTooLong to trigger retry",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil).Times(2)
+				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
+				pg.On("GenerateRefactoringPrompt", mock.Anything).Return("refactoring prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(
+					(*ExecuteResult)(nil),
+					fmt.Errorf("claude execution failed with exit code 1: %w", ErrPromptTooLong),
+				)
+			},
+			wantErr:         false,
+			wantPhase:       PhaseRefactoring,
+			wantFeedbackLen: 1,
+		},
+		{
+			name: "returns error on other errors",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil).Times(2)
+				sm.On("LoadPlan", "test-workflow").Return(&Plan{Summary: "test plan"}, nil)
+				pg.On("GenerateRefactoringPrompt", mock.Anything).Return("refactoring prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(
+					(*ExecuteResult)(nil),
+					errors.New("some other error"),
+				)
+			},
+			wantErr:         true,
+			wantPhase:       PhaseFailed,
+			wantFeedbackLen: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSM := new(MockStateManager)
+			mockExec := new(MockClaudeExecutor)
+			mockPG := new(MockPromptGenerator)
+
+			tt.setupMocks(mockSM, mockExec, mockPG)
+
+			o := &Orchestrator{
+				stateManager:    mockSM,
+				executor:        mockExec,
+				promptGenerator: mockPG,
+				config:          DefaultConfig("/tmp/workflows"),
+				logger:          NewLogger(LogLevelNormal),
+			}
+
+			state := &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test description",
+				CurrentPhase: PhaseRefactoring,
+				WorktreePath: "/tmp/worktree",
+				Phases: map[Phase]*PhaseState{
+					PhaseRefactoring: {Status: StatusInProgress},
+				},
+			}
+
+			err := o.executeRefactoring(context.Background(), state)
+
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, tt.wantPhase, state.CurrentPhase)
+			assert.Len(t, state.Phases[PhaseRefactoring].Feedback, tt.wantFeedbackLen)
+			if tt.wantFeedbackLen > 0 {
+				assert.Contains(t, state.Phases[PhaseRefactoring].Feedback[0], "too long")
+			}
+
+			mockSM.AssertExpectations(t)
+			mockExec.AssertExpectations(t)
+			mockPG.AssertExpectations(t)
+		})
+	}
+}
+
+func TestOrchestrator_executePRSplit_PromptTooLong(t *testing.T) {
+	tests := []struct {
+		name            string
+		setupMocks      func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockGitRunner)
+		wantErr         bool
+		wantPhase       Phase
+		wantFeedbackLen int
+	}{
+		{
+			name: "returns nil on ErrPromptTooLong to trigger retry",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, gr *MockGitRunner) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil).Times(2)
+				gr.On("GetCurrentBranch", mock.Anything, "/tmp/worktree").Return("test-branch", nil)
+				gr.On("GetCommits", mock.Anything, "/tmp/worktree", "main").Return([]command.Commit{}, nil)
+				pg.On("GeneratePRSplitPrompt", mock.Anything, mock.Anything).Return("pr split prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(
+					(*ExecuteResult)(nil),
+					fmt.Errorf("claude execution failed with exit code 1: %w", ErrPromptTooLong),
+				)
+			},
+			wantErr:         false,
+			wantPhase:       PhasePRSplit,
+			wantFeedbackLen: 1,
+		},
+		{
+			name: "returns error on other errors",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, gr *MockGitRunner) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil).Times(2)
+				gr.On("GetCurrentBranch", mock.Anything, "/tmp/worktree").Return("test-branch", nil)
+				gr.On("GetCommits", mock.Anything, "/tmp/worktree", "main").Return([]command.Commit{}, nil)
+				pg.On("GeneratePRSplitPrompt", mock.Anything, mock.Anything).Return("pr split prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(
+					(*ExecuteResult)(nil),
+					errors.New("some other error"),
+				)
+			},
+			wantErr:         true,
+			wantPhase:       PhaseFailed,
+			wantFeedbackLen: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSM := new(MockStateManager)
+			mockExec := new(MockClaudeExecutor)
+			mockPG := new(MockPromptGenerator)
+			mockGR := new(MockGitRunner)
+
+			tt.setupMocks(mockSM, mockExec, mockPG, mockGR)
+
+			o := &Orchestrator{
+				stateManager:    mockSM,
+				executor:        mockExec,
+				promptGenerator: mockPG,
+				gitRunner:       mockGR,
+				config:          DefaultConfig("/tmp/workflows"),
+				logger:          NewLogger(LogLevelNormal),
+			}
+
+			state := &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test description",
+				CurrentPhase: PhasePRSplit,
+				WorktreePath: "/tmp/worktree",
+				Phases: map[Phase]*PhaseState{
+					PhasePRSplit: {
+						Status:  StatusInProgress,
+						Metrics: &PRMetrics{LinesChanged: 100, FilesChanged: 10},
+					},
+				},
+			}
+
+			err := o.executePRSplit(context.Background(), state)
+
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, tt.wantPhase, state.CurrentPhase)
+			assert.Len(t, state.Phases[PhasePRSplit].Feedback, tt.wantFeedbackLen)
+			if tt.wantFeedbackLen > 0 {
+				assert.Contains(t, state.Phases[PhasePRSplit].Feedback[0], "too long")
+			}
+
+			mockSM.AssertExpectations(t)
+			mockExec.AssertExpectations(t)
+			mockPG.AssertExpectations(t)
+			mockGR.AssertExpectations(t)
+		})
+	}
+}
+
+func TestOrchestrator_executePRCreation_PromptTooLong(t *testing.T) {
+	tests := []struct {
+		name       string
+		setupMocks func(*MockClaudeExecutor, *MockPromptGenerator, *MockGitRunner)
+		wantErr    bool
+		wantPRNum  int
+	}{
+		{
+			name: "returns error immediately on ErrPromptTooLong without retry",
+			setupMocks: func(exec *MockClaudeExecutor, pg *MockPromptGenerator, gr *MockGitRunner) {
+				gr.On("GetCurrentBranch", mock.Anything, "/tmp/worktree").Return("test-branch", nil)
+				pg.On("GenerateCreatePRPrompt", mock.Anything).Return("pr creation prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(
+					(*ExecuteResult)(nil),
+					fmt.Errorf("claude execution failed with exit code 1: %w", ErrPromptTooLong),
+				)
+			},
+			wantErr:   true,
+			wantPRNum: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockExec := new(MockClaudeExecutor)
+			mockPG := new(MockPromptGenerator)
+			mockGR := new(MockGitRunner)
+
+			tt.setupMocks(mockExec, mockPG, mockGR)
+
+			o := &Orchestrator{
+				executor:        mockExec,
+				promptGenerator: mockPG,
+				gitRunner:       mockGR,
+				config:          DefaultConfig("/tmp/workflows"),
+				logger:          NewLogger(LogLevelNormal),
+			}
+
+			state := &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test description",
+				WorktreePath: "/tmp/worktree",
+			}
+
+			prNum, err := o.executePRCreation(context.Background(), state)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, errors.Is(err, ErrPromptTooLong))
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, tt.wantPRNum, prNum)
+
+			mockExec.AssertExpectations(t)
+			mockPG.AssertExpectations(t)
+			mockGR.AssertExpectations(t)
 		})
 	}
 }

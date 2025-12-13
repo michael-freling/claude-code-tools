@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/michael-freling/claude-code-tools/internal/command"
@@ -155,7 +156,13 @@ func (e *claudeExecutor) Execute(ctx context.Context, config ExecuteConfig) (*Ex
 
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			result.ExitCode = exitErr.ExitCode()
-			result.Error = fmt.Errorf("%s", stderr.String())
+			stderrStr := stderr.String()
+			result.Error = fmt.Errorf("%s", stderrStr)
+
+			if strings.Contains(stderrStr, "Prompt is too long") {
+				return result, fmt.Errorf("claude execution failed with exit code %d: %w", result.ExitCode, ErrPromptTooLong)
+			}
+
 			return result, fmt.Errorf("claude execution failed with exit code %d: %w", result.ExitCode, ErrClaude)
 		}
 
@@ -329,7 +336,13 @@ func (e *claudeExecutor) ExecuteStreaming(ctx context.Context, config ExecuteCon
 
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			result.ExitCode = exitErr.ExitCode()
-			result.Error = fmt.Errorf("%s", stderr.String())
+			stderrStr := stderr.String()
+			result.Error = fmt.Errorf("%s", stderrStr)
+
+			if strings.Contains(stderrStr, "Prompt is too long") {
+				return result, fmt.Errorf("claude execution failed with exit code %d: %w", result.ExitCode, ErrPromptTooLong)
+			}
+
 			return result, fmt.Errorf("claude execution failed with exit code %d: %w", result.ExitCode, ErrClaude)
 		}
 

@@ -224,6 +224,7 @@ var (
 	ErrClaudeTimeout       = errors.New("claude execution timeout")
 	ErrClaudeNotFound      = errors.New("claude CLI not found in PATH")
 	ErrClaude              = errors.New("claude execution failed")
+	ErrPromptTooLong       = errors.New("prompt is too long")
 	ErrParseJSON           = errors.New("failed to parse JSON output")
 	ErrUserCancelled       = errors.New("workflow cancelled by user")
 	ErrCICheckTimeout      = errors.New("CI check command timeout")

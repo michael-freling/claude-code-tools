@@ -1243,6 +1243,75 @@ exit 0`,
 	}
 }
 
+func TestClaudeExecutor_ExecuteStreaming_PromptTooLong(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tests := []struct {
+		name        string
+		script      string
+		wantErr     error
+		errContains string
+	}{
+		{
+			name: "detects 'Prompt is too long' error in streaming",
+			script: `#!/bin/bash
+echo "Error: Prompt is too long" >&2
+exit 1`,
+			wantErr:     ErrPromptTooLong,
+			errContains: "exit code 1",
+		},
+		{
+			name: "detects 'Prompt is too long' with context in streaming",
+			script: `#!/bin/bash
+echo "Failed: Prompt is too long for the model" >&2
+exit 1`,
+			wantErr:     ErrPromptTooLong,
+			errContains: "exit code 1",
+		},
+		{
+			name: "does not match similar errors in streaming",
+			script: `#!/bin/bash
+echo "Error: Prompt is short" >&2
+exit 1`,
+			wantErr:     ErrClaude,
+			errContains: "exit code 1",
+		},
+		{
+			name: "case sensitive - does not match different case in streaming",
+			script: `#!/bin/bash
+echo "Error: prompt is too long" >&2
+exit 1`,
+			wantErr:     ErrClaude,
+			errContains: "exit code 1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scriptPath := filepath.Join(tmpDir, "claude-streaming-prompt-too-long")
+			err := os.WriteFile(scriptPath, []byte(tt.script), 0755)
+			require.NoError(t, err)
+
+			executor := NewClaudeExecutorWithPath(scriptPath, NewLogger(LogLevelNormal))
+			ctx := context.Background()
+
+			config := ExecuteConfig{
+				Prompt:  "test prompt",
+				Timeout: 5 * time.Second,
+			}
+
+			got, err := executor.ExecuteStreaming(ctx, config, nil)
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, tt.wantErr)
+			if tt.errContains != "" {
+				assert.Contains(t, err.Error(), tt.errContains)
+			}
+			require.NotNil(t, got)
+		})
+	}
+}
+
 func TestClaudeExecutor_Execute_WithTimeout(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping slow test in short mode")
@@ -1364,6 +1433,75 @@ exit 127`,
 			}
 
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestClaudeExecutor_Execute_PromptTooLong(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tests := []struct {
+		name        string
+		script      string
+		wantErr     error
+		errContains string
+	}{
+		{
+			name: "detects 'Prompt is too long' error",
+			script: `#!/bin/bash
+echo "Error: Prompt is too long" >&2
+exit 1`,
+			wantErr:     ErrPromptTooLong,
+			errContains: "exit code 1",
+		},
+		{
+			name: "detects 'Prompt is too long' with context",
+			script: `#!/bin/bash
+echo "Failed to execute: Prompt is too long (max 100k tokens)" >&2
+exit 1`,
+			wantErr:     ErrPromptTooLong,
+			errContains: "exit code 1",
+		},
+		{
+			name: "does not match similar errors",
+			script: `#!/bin/bash
+echo "Error: Prompt too short" >&2
+exit 1`,
+			wantErr:     ErrClaude,
+			errContains: "exit code 1",
+		},
+		{
+			name: "case sensitive - does not match different case",
+			script: `#!/bin/bash
+echo "Error: PROMPT IS TOO LONG" >&2
+exit 1`,
+			wantErr:     ErrClaude,
+			errContains: "exit code 1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scriptPath := filepath.Join(tmpDir, "claude-prompt-too-long")
+			err := os.WriteFile(scriptPath, []byte(tt.script), 0755)
+			require.NoError(t, err)
+
+			executor := NewClaudeExecutorWithPath(scriptPath, NewLogger(LogLevelNormal))
+			ctx := context.Background()
+
+			config := ExecuteConfig{
+				Prompt:  "test prompt",
+				Timeout: 5 * time.Second,
+			}
+
+			got, err := executor.Execute(ctx, config)
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, tt.wantErr)
+			if tt.errContains != "" {
+				assert.Contains(t, err.Error(), tt.errContains)
+			}
+			require.NotNil(t, got)
 		})
 	}
 }
