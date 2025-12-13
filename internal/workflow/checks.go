@@ -91,87 +91,108 @@ type ciChecker struct {
 	clock          Clock
 }
 
-// NewCIChecker creates a new CI checker
-func NewCIChecker(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) CIChecker {
-	if checkInterval == 0 {
-		checkInterval = 30 * time.Second
+// CICheckerOption configures a CIChecker
+type CICheckerOption func(*ciChecker)
+
+// WithCheckInterval sets the interval between CI status checks
+func WithCheckInterval(interval time.Duration) CICheckerOption {
+	return func(c *ciChecker) {
+		c.checkInterval = interval
 	}
-	if commandTimeout == 0 {
-		commandTimeout = 2 * time.Minute
+}
+
+// WithCommandTimeout sets the timeout for individual gh CLI commands
+func WithCommandTimeout(timeout time.Duration) CICheckerOption {
+	return func(c *ciChecker) {
+		c.commandTimeout = timeout
 	}
+}
+
+// WithInitialDelay sets the initial delay before starting CI polling
+func WithInitialDelay(delay time.Duration) CICheckerOption {
+	return func(c *ciChecker) {
+		c.initialDelay = delay
+	}
+}
+
+// WithGhRunner sets a custom GhRunner (for testing)
+func WithGhRunner(runner command.GhRunner) CICheckerOption {
+	return func(c *ciChecker) {
+		c.ghRunner = runner
+	}
+}
+
+// WithClock sets a custom Clock (for testing)
+func WithClock(clock Clock) CICheckerOption {
+	return func(c *ciChecker) {
+		c.clock = clock
+	}
+}
+
+// NewCIChecker creates a new CI checker with the given options
+func NewCIChecker(workingDir string, opts ...CICheckerOption) CIChecker {
 	cmdRunner := command.NewRunner()
-	return &ciChecker{
+	checker := &ciChecker{
 		workingDir:     workingDir,
-		checkInterval:  checkInterval,
-		commandTimeout: commandTimeout,
+		checkInterval:  30 * time.Second,
+		commandTimeout: 2 * time.Minute,
 		initialDelay:   1 * time.Minute,
 		ghRunner:       command.NewGhRunner(cmdRunner),
 		clock:          NewRealClock(),
 	}
+
+	for _, opt := range opts {
+		opt(checker)
+	}
+
+	return checker
 }
 
-// NewCICheckerWithOptions creates a new CI checker with custom options (for testing)
+// Deprecated: Use NewCIChecker with WithCheckInterval and WithCommandTimeout options instead.
 func NewCICheckerWithOptions(workingDir string, checkInterval, commandTimeout, initialDelay time.Duration) CIChecker {
-	if checkInterval == 0 {
-		checkInterval = 30 * time.Second
+	var opts []CICheckerOption
+	if checkInterval != 0 {
+		opts = append(opts, WithCheckInterval(checkInterval))
 	}
-	if commandTimeout == 0 {
-		commandTimeout = 2 * time.Minute
+	if commandTimeout != 0 {
+		opts = append(opts, WithCommandTimeout(commandTimeout))
 	}
-	if initialDelay == 0 {
-		initialDelay = 1 * time.Minute
+	if initialDelay != 0 {
+		opts = append(opts, WithInitialDelay(initialDelay))
 	}
-	cmdRunner := command.NewRunner()
-	return &ciChecker{
-		workingDir:     workingDir,
-		checkInterval:  checkInterval,
-		commandTimeout: commandTimeout,
-		initialDelay:   initialDelay,
-		ghRunner:       command.NewGhRunner(cmdRunner),
-		clock:          NewRealClock(),
-	}
+	return NewCIChecker(workingDir, opts...)
 }
 
-// NewCICheckerWithRunner creates a new CI checker with injected GhRunner (for testing)
+// Deprecated: Use NewCIChecker with WithCheckInterval, WithCommandTimeout, WithInitialDelay, and WithGhRunner options instead.
 func NewCICheckerWithRunner(workingDir string, checkInterval, commandTimeout, initialDelay time.Duration, ghRunner command.GhRunner) CIChecker {
-	if checkInterval == 0 {
-		checkInterval = 30 * time.Second
+	var opts []CICheckerOption
+	if checkInterval != 0 {
+		opts = append(opts, WithCheckInterval(checkInterval))
 	}
-	if commandTimeout == 0 {
-		commandTimeout = 2 * time.Minute
+	if commandTimeout != 0 {
+		opts = append(opts, WithCommandTimeout(commandTimeout))
 	}
-	if initialDelay == 0 {
-		initialDelay = 1 * time.Minute
+	if initialDelay != 0 {
+		opts = append(opts, WithInitialDelay(initialDelay))
 	}
-	return &ciChecker{
-		workingDir:     workingDir,
-		checkInterval:  checkInterval,
-		commandTimeout: commandTimeout,
-		initialDelay:   initialDelay,
-		ghRunner:       ghRunner,
-		clock:          NewRealClock(),
-	}
+	opts = append(opts, WithGhRunner(ghRunner))
+	return NewCIChecker(workingDir, opts...)
 }
 
-// NewCICheckerWithClock creates a new CI checker with injected GhRunner and Clock (for testing)
+// Deprecated: Use NewCIChecker with WithCheckInterval, WithCommandTimeout, WithInitialDelay, WithGhRunner, and WithClock options instead.
 func NewCICheckerWithClock(workingDir string, checkInterval, commandTimeout, initialDelay time.Duration, ghRunner command.GhRunner, clock Clock) CIChecker {
-	if checkInterval == 0 {
-		checkInterval = 30 * time.Second
+	var opts []CICheckerOption
+	if checkInterval != 0 {
+		opts = append(opts, WithCheckInterval(checkInterval))
 	}
-	if commandTimeout == 0 {
-		commandTimeout = 2 * time.Minute
+	if commandTimeout != 0 {
+		opts = append(opts, WithCommandTimeout(commandTimeout))
 	}
-	if initialDelay == 0 {
-		initialDelay = 1 * time.Minute
+	if initialDelay != 0 {
+		opts = append(opts, WithInitialDelay(initialDelay))
 	}
-	return &ciChecker{
-		workingDir:     workingDir,
-		checkInterval:  checkInterval,
-		commandTimeout: commandTimeout,
-		initialDelay:   initialDelay,
-		ghRunner:       ghRunner,
-		clock:          clock,
-	}
+	opts = append(opts, WithGhRunner(ghRunner), WithClock(clock))
+	return NewCIChecker(workingDir, opts...)
 }
 
 // CheckCI checks the current CI status. If prNumber is 0, checks the current branch's PR.
@@ -199,7 +220,7 @@ func (c *ciChecker) CheckCI(ctx context.Context, prNumber int) (*CIResult, error
 			continue
 		}
 
-		return result, err
+		return nil, err
 	}
 
 	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
@@ -218,30 +239,30 @@ func (c *ciChecker) checkCIOnce(ctx context.Context, prNumber int) (*CIResult, e
 	result.Output = output
 
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || (cmdCtx.Err() == context.DeadlineExceeded) {
-			return result, ErrCICheckTimeout
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
+			return nil, ErrCICheckTimeout
 		}
 
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			if exitErr.String() == "signal: killed" {
-				return result, ErrCICheckTimeout
+			if exitErr.ExitCode() == -1 || strings.Contains(strings.ToLower(exitErr.Error()), "killed") {
+				return nil, ErrCICheckTimeout
 			}
 
 			switch exitErr.ExitCode() {
 			case 127:
-				return result, fmt.Errorf("gh CLI not found: is it installed?")
+				return nil, fmt.Errorf("gh CLI not found: is it installed?")
 			case 8:
-				return result, &NoPRError{
+				return nil, &NoPRError{
 					Branch: "",
 					Msg:    "no PR found for the current branch: ensure a PR exists before checking CI status",
 				}
 			case 1:
-				return result, err
+				return nil, err
 			}
 		}
 
-		return result, err
+		return nil, err
 	}
 
 	result.Status, result.FailedJobs, result.CancelledJobs = parseCIOutput(output)
@@ -399,10 +420,10 @@ checkLoop:
 	}
 }
 
-// parseCIOutput parses gh pr checks --json output to extract status, failed jobs, and cancelled jobs
-// The output is expected to be JSON array: [{"name":"build","state":"SUCCESS"},...]
+// parseCIOutput converts GitHub CI check JSON to overall status and job lists.
+// Expected format: [{"name":"build","state":"SUCCESS"},...]
 // State values: SUCCESS, FAILURE, PENDING, QUEUED, IN_PROGRESS, SKIPPED, NEUTRAL, CANCELLED
-func parseCIOutput(output string) (string, []string, []string) {
+func parseCIOutput(output string) (status string, failedJobs, cancelledJobs []string) {
 	var checks []ciCheck
 	if err := json.Unmarshal([]byte(output), &checks); err != nil {
 		// If JSON parsing fails, return pending (safest default)
@@ -413,8 +434,8 @@ func parseCIOutput(output string) (string, []string, []string) {
 		return "pending", []string{}, []string{}
 	}
 
-	failedJobs := []string{}
-	cancelledJobs := []string{}
+	failedJobs = []string{}
+	cancelledJobs = []string{}
 	allPassed := true
 	hasPending := false
 
