@@ -7,6 +7,14 @@ import (
 	"strings"
 )
 
+// PRInfo contains information about a pull request
+type PRInfo struct {
+	Number      int    `json:"number"`
+	URL         string `json:"url"`
+	Title       string `json:"title"`
+	HeadRefName string `json:"headRefName"`
+}
+
 // GhRunner abstracts gh CLI command execution for testing
 type GhRunner interface {
 	// PRCreate creates a new PR and returns the PR URL
@@ -25,6 +33,8 @@ type GhRunner interface {
 	RunRerun(ctx context.Context, dir string, runID int64) error
 	// GetLatestRunID gets the latest workflow run ID for a PR
 	GetLatestRunID(ctx context.Context, dir string, prNumber int) (int64, error)
+	// ListPRs returns all PRs for a specific branch
+	ListPRs(ctx context.Context, dir string, branch string) ([]PRInfo, error)
 }
 
 // ghRunner implements GhRunner interface
@@ -169,4 +179,25 @@ func (g *ghRunner) GetLatestRunID(ctx context.Context, dir string, prNumber int)
 
 	// Return the first (latest) run ID
 	return checks[0].DatabaseID, nil
+}
+
+// ListPRs returns all PRs for a specific branch
+func (g *ghRunner) ListPRs(ctx context.Context, dir string, branch string) ([]PRInfo, error) {
+	if branch == "" {
+		return nil, fmt.Errorf("branch cannot be empty")
+	}
+
+	args := []string{"pr", "list", "--head", branch, "--json", "number,url,title,headRefName", "--limit", "1"}
+
+	stdout, stderr, err := g.runner.RunInDir(ctx, dir, "gh", args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list PRs for branch %s: %w (stderr: %s)", branch, err, stderr)
+	}
+
+	var prs []PRInfo
+	if err := json.Unmarshal([]byte(stdout), &prs); err != nil {
+		return nil, fmt.Errorf("failed to parse PR list from output: %w", err)
+	}
+
+	return prs, nil
 }

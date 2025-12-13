@@ -265,6 +265,7 @@ func (o *Orchestrator) runWorkflow(ctx context.Context, state *WorkflowState) er
 	for {
 		if state.CurrentPhase == PhaseCompleted || state.CurrentPhase == PhaseFailed {
 			if state.CurrentPhase == PhaseCompleted {
+				o.displayWorkflowSummary(ctx, state.Name)
 				elapsed := time.Since(state.CreatedAt)
 				fmt.Printf("\n%s Workflow completed in %s\n", Green("✓"), FormatDuration(elapsed))
 			}
@@ -277,6 +278,7 @@ func (o *Orchestrator) runWorkflow(ctx context.Context, state *WorkflowState) er
 
 		if state.CurrentPhase == PhaseCompleted || state.CurrentPhase == PhaseFailed {
 			if state.CurrentPhase == PhaseCompleted {
+				o.displayWorkflowSummary(ctx, state.Name)
 				elapsed := time.Since(state.CreatedAt)
 				fmt.Printf("\n%s Workflow completed in %s\n", Green("✓"), FormatDuration(elapsed))
 			}

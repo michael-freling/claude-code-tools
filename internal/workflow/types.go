@@ -187,7 +187,39 @@ type PRInfo struct {
 	Number      int    `json:"number"`
 	URL         string `json:"url"`
 	Title       string `json:"title"`
+	Branch      string `json:"branch,omitempty"`
 	Description string `json:"description"`
+}
+
+// PRSummaryType represents the type of PR workflow
+type PRSummaryType string
+
+const (
+	PRSummaryTypeSingle PRSummaryType = "single"
+	PRSummaryTypeSplit  PRSummaryType = "split"
+	PRSummaryTypeNone   PRSummaryType = "none"
+)
+
+// PhaseStats tracks execution statistics for a workflow phase
+type PhaseStats struct {
+	Name     string        `json:"name"`
+	Attempts int           `json:"attempts"`
+	Duration time.Duration `json:"duration"`
+	Success  bool          `json:"success"`
+}
+
+// WorkflowSummary contains comprehensive summary of workflow execution
+type WorkflowSummary struct {
+	WorkflowName  string        `json:"workflowName"`
+	PRType        PRSummaryType `json:"prType"`
+	MainPR        *PRInfo       `json:"mainPR,omitempty"`
+	ChildPRs      []PRInfo      `json:"childPRs,omitempty"`
+	FilesChanged  []string      `json:"filesChanged"`
+	LinesAdded    int           `json:"linesAdded"`
+	LinesRemoved  int           `json:"linesRemoved"`
+	TestsAdded    int           `json:"testsAdded"`
+	Phases        []PhaseStats  `json:"phases"`
+	TotalDuration time.Duration `json:"totalDuration"`
 }
 
 // WorkflowInfo represents summary information for listing

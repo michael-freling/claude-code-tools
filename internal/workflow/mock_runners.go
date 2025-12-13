@@ -161,3 +161,11 @@ func (m *MockGhRunner) GetLatestRunID(ctx context.Context, dir string, prNumber 
 	args := m.Called(ctx, dir, prNumber)
 	return args.Get(0).(int64), args.Error(1)
 }
+
+func (m *MockGhRunner) ListPRs(ctx context.Context, dir string, branch string) ([]command.PRInfo, error) {
+	args := m.Called(ctx, dir, branch)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]command.PRInfo), args.Error(1)
+}

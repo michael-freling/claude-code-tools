@@ -70,6 +70,21 @@ func (mr *MockGhRunnerMockRecorder) GetPRBaseBranch(ctx, dir, prNumber any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPRBaseBranch", reflect.TypeOf((*MockGhRunner)(nil).GetPRBaseBranch), ctx, dir, prNumber)
 }
 
+// ListPRs mocks base method.
+func (m *MockGhRunner) ListPRs(ctx context.Context, dir, branch string) ([]PRInfo, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListPRs", ctx, dir, branch)
+	ret0, _ := ret[0].([]PRInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListPRs indicates an expected call of ListPRs.
+func (mr *MockGhRunnerMockRecorder) ListPRs(ctx, dir, branch any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListPRs", reflect.TypeOf((*MockGhRunner)(nil).ListPRs), ctx, dir, branch)
+}
+
 // PRChecks mocks base method.
 func (m *MockGhRunner) PRChecks(ctx context.Context, dir string, prNumber int, jsonFields string) (string, error) {
 	m.ctrl.T.Helper()

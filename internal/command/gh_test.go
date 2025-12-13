@@ -648,3 +648,103 @@ func TestGhRunner_PRClose(t *testing.T) {
 		})
 	}
 }
+
+func TestGhRunner_ListPRs(t *testing.T) {
+	tests := []struct {
+		name        string
+		dir         string
+		branch      string
+		setupMock   func(*MockRunner)
+		want        []PRInfo
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:   "lists PRs successfully",
+			dir:    "/test/repo",
+			branch: "feature-branch",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "list", "--head", "feature-branch", "--json", "number,url,title,headRefName", "--limit", "1").
+					Return(`[{"number":123,"url":"https://github.com/owner/repo/pull/123","title":"Test PR","headRefName":"feature-branch"}]`, "", nil)
+			},
+			want: []PRInfo{
+				{
+					Number:      123,
+					URL:         "https://github.com/owner/repo/pull/123",
+					Title:       "Test PR",
+					HeadRefName: "feature-branch",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:   "returns empty slice when no PRs found",
+			dir:    "/test/repo",
+			branch: "feature-branch",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "list", "--head", "feature-branch", "--json", "number,url,title,headRefName", "--limit", "1").
+					Return(`[]`, "", nil)
+			},
+			want:    []PRInfo{},
+			wantErr: false,
+		},
+		{
+			name:        "fails when branch is empty",
+			dir:         "/test/repo",
+			branch:      "",
+			setupMock:   func(m *MockRunner) {},
+			wantErr:     true,
+			errContains: "branch cannot be empty",
+		},
+		{
+			name:   "fails when gh command fails",
+			dir:    "/test/repo",
+			branch: "feature-branch",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "list", "--head", "feature-branch", "--json", "number,url,title,headRefName", "--limit", "1").
+					Return("", "error: failed to list PRs", fmt.Errorf("exit status 1"))
+			},
+			wantErr:     true,
+			errContains: "failed to list PRs for branch feature-branch",
+		},
+		{
+			name:   "fails when JSON is invalid",
+			dir:    "/test/repo",
+			branch: "feature-branch",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "gh", "pr", "list", "--head", "feature-branch", "--json", "number,url,title,headRefName", "--limit", "1").
+					Return(`invalid json`, "", nil)
+			},
+			wantErr:     true,
+			errContains: "failed to parse PR list from output",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockRunner := NewMockRunner(ctrl)
+			tt.setupMock(mockRunner)
+
+			ghRunner := NewGhRunner(mockRunner)
+			ctx := context.Background()
+
+			got, err := ghRunner.ListPRs(ctx, tt.dir, tt.branch)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
