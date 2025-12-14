@@ -14,6 +14,10 @@ import (
 	"github.com/michael-freling/claude-code-tools/internal/command"
 )
 
+const (
+	feedbackEmptyChildPRs = "Your plan has an empty childPRs array. You MUST create at least one child PR. If the changes are too small to split, create a single child PR containing all the changes."
+)
+
 // Config holds configuration for the orchestrator
 type Config struct {
 	BaseDir                    string
@@ -886,9 +890,9 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 			}
 
 			// Check if this is the empty childPRs error
-			if strings.Contains(err.Error(), "plan must have at least one child PR") {
+			if errors.Is(err, ErrEmptyChildPRs) {
 				// Save feedback and continue retry loop
-				phaseState.Feedback = append(phaseState.Feedback, "Your plan has an empty childPRs array. You MUST create at least one child PR. If the changes are too small to split, create a single child PR containing all the changes.")
+				phaseState.Feedback = append(phaseState.Feedback, feedbackEmptyChildPRs)
 				if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
 					return fmt.Errorf("failed to save state: %w", saveErr)
 				}
@@ -899,7 +903,7 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 				}
 
 				// Continue to next attempt
-				lastError = "Your plan has an empty childPRs array. You MUST create at least one child PR."
+				lastError = feedbackEmptyChildPRs
 				continue
 			}
 

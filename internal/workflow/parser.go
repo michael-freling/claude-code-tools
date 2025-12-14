@@ -2,9 +2,15 @@ package workflow
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+)
+
+// Sentinel errors for specific validation failures
+var (
+	ErrEmptyChildPRs = errors.New("plan must have at least one child PR")
 )
 
 // OutputParser interface for parsing Claude's output
@@ -141,7 +147,7 @@ func (p *outputParser) ParsePRSplitPlan(jsonStr string) (*PRSplitPlan, error) {
 	}
 
 	if len(plan.ChildPRs) == 0 {
-		return nil, fmt.Errorf("plan must have at least one child PR: %w", ErrParseJSON)
+		return nil, fmt.Errorf("%w: %w", ErrEmptyChildPRs, ErrParseJSON)
 	}
 
 	return &plan, nil

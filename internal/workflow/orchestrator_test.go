@@ -5201,14 +5201,14 @@ func TestOrchestrator_executePRSplit_EmptyChildPRsRetry(t *testing.T) {
 
 				// First parse fails with empty childPRs error
 				op.On("ParsePRSplitPlan", `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`).
-					Return((*PRSplitPlan)(nil), fmt.Errorf("plan must have at least one child PR: %w", ErrParseJSON)).Once()
+					Return((*PRSplitPlan)(nil), fmt.Errorf("%w: %w", ErrEmptyChildPRs, ErrParseJSON)).Once()
 
 				// SaveRawOutput is called after parse failure
 				sm.On("SaveRawOutput", "test-workflow", PhasePRSplit, `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`).Return(nil).Once()
 				sm.On("WorkflowDir", "test-workflow").Return("/tmp/workflows/test-workflow")
 
 				// Second attempt: GenerateFixCIPrompt
-				pg.On("GenerateFixCIPrompt", "Your plan has an empty childPRs array. You MUST create at least one child PR.").Return("fix prompt", nil).Once()
+				pg.On("GenerateFixCIPrompt", feedbackEmptyChildPRs).Return("fix prompt", nil).Once()
 
 				// Second execution returns valid childPRs
 				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
@@ -5256,7 +5256,7 @@ func TestOrchestrator_executePRSplit_EmptyChildPRsRetry(t *testing.T) {
 				}, nil).Times(2)
 
 				op.On("ExtractJSON", mock.Anything).Return(`{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`, nil).Times(2)
-				op.On("ParsePRSplitPlan", mock.Anything).Return((*PRSplitPlan)(nil), fmt.Errorf("plan must have at least one child PR: %w", ErrParseJSON)).Times(2)
+				op.On("ParsePRSplitPlan", mock.Anything).Return((*PRSplitPlan)(nil), fmt.Errorf("%w: %w", ErrEmptyChildPRs, ErrParseJSON)).Times(2)
 
 				sm.On("SaveRawOutput", "test-workflow", PhasePRSplit, mock.Anything).Return(nil).Times(2)
 				sm.On("WorkflowDir", "test-workflow").Return("/tmp/workflows/test-workflow")
@@ -5414,7 +5414,7 @@ func TestOrchestrator_executePRSplit_FeedbackMessage(t *testing.T) {
 	}, nil).Once()
 
 	mockOP.On("ExtractJSON", mock.Anything).Return(`{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`, nil).Once()
-	mockOP.On("ParsePRSplitPlan", mock.Anything).Return((*PRSplitPlan)(nil), fmt.Errorf("plan must have at least one child PR: %w", ErrParseJSON)).Once()
+	mockOP.On("ParsePRSplitPlan", mock.Anything).Return((*PRSplitPlan)(nil), fmt.Errorf("%w: %w", ErrEmptyChildPRs, ErrParseJSON)).Once()
 
 	mockSM.On("SaveRawOutput", "test-workflow", PhasePRSplit, mock.Anything).Return(nil).Once()
 	mockSM.On("WorkflowDir", "test-workflow").Return("/tmp/workflows/test-workflow")
@@ -5426,7 +5426,7 @@ func TestOrchestrator_executePRSplit_FeedbackMessage(t *testing.T) {
 	}, nil).Once()
 
 	mockOP.On("ExtractJSON", mock.Anything).Return(`{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`, nil).Once()
-	mockOP.On("ParsePRSplitPlan", mock.Anything).Return((*PRSplitPlan)(nil), fmt.Errorf("plan must have at least one child PR: %w", ErrParseJSON)).Once()
+	mockOP.On("ParsePRSplitPlan", mock.Anything).Return((*PRSplitPlan)(nil), fmt.Errorf("%w: %w", ErrEmptyChildPRs, ErrParseJSON)).Once()
 	mockSM.On("SaveRawOutput", "test-workflow", PhasePRSplit, mock.Anything).Return(nil).Once()
 
 	config := DefaultConfig("/tmp/workflows")
