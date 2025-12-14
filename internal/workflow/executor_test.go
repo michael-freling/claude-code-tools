@@ -3,8 +3,10 @@ package workflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +30,30 @@ func (m *mockExecutor) Execute(ctx context.Context, config ExecuteConfig) (*Exec
 		ExitCode: 0,
 		Duration: 100 * time.Millisecond,
 	}, nil
+}
+
+// mockLogger is a mock implementation of Logger for testing
+type mockLogger struct {
+	level        LogLevel
+	verboseCalls []string
+}
+
+func (m *mockLogger) Info(format string, args ...interface{}) {}
+
+func (m *mockLogger) Verbose(format string, args ...interface{}) {
+	if m.level == LogLevelVerbose {
+		msg := format
+		if len(args) > 0 {
+			msg = fmt.Sprintf(format, args...)
+		}
+		m.verboseCalls = append(m.verboseCalls, msg)
+	}
+}
+
+func (m *mockLogger) Debug(format string, args ...interface{}) {}
+
+func (m *mockLogger) IsVerbose() bool {
+	return m.level == LogLevelVerbose
 }
 
 func TestNewClaudeExecutor(t *testing.T) {
