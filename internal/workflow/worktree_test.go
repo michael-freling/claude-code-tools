@@ -439,6 +439,107 @@ func TestWorktreeManager_setupPreCommitHooks(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "succeeds when config exists and pre-commit is available",
+			setup: func(t *testing.T) (string, func()) {
+				tmpDir, err := os.MkdirTemp("", "precommit-test-*")
+				require.NoError(t, err)
+
+				configPath := filepath.Join(tmpDir, ".pre-commit-config.yaml")
+				err = os.WriteFile(configPath, []byte("repos: []"), 0644)
+				require.NoError(t, err)
+
+				mockPreCommitPath := filepath.Join(tmpDir, "bin")
+				err = os.MkdirAll(mockPreCommitPath, 0755)
+				require.NoError(t, err)
+
+				preCommitScript := filepath.Join(mockPreCommitPath, "pre-commit")
+				script := `#!/bin/bash
+exit 0
+`
+				err = os.WriteFile(preCommitScript, []byte(script), 0755)
+				require.NoError(t, err)
+
+				oldPath := os.Getenv("PATH")
+				err = os.Setenv("PATH", mockPreCommitPath+":"+oldPath)
+				require.NoError(t, err)
+
+				return tmpDir, func() {
+					os.Setenv("PATH", oldPath)
+					os.RemoveAll(tmpDir)
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name: "fails when pre-commit install fails",
+			setup: func(t *testing.T) (string, func()) {
+				tmpDir, err := os.MkdirTemp("", "precommit-test-*")
+				require.NoError(t, err)
+
+				configPath := filepath.Join(tmpDir, ".pre-commit-config.yaml")
+				err = os.WriteFile(configPath, []byte("repos: []"), 0644)
+				require.NoError(t, err)
+
+				mockPreCommitPath := filepath.Join(tmpDir, "bin")
+				err = os.MkdirAll(mockPreCommitPath, 0755)
+				require.NoError(t, err)
+
+				preCommitScript := filepath.Join(mockPreCommitPath, "pre-commit")
+				script := `#!/bin/bash
+exit 1
+`
+				err = os.WriteFile(preCommitScript, []byte(script), 0755)
+				require.NoError(t, err)
+
+				oldPath := os.Getenv("PATH")
+				err = os.Setenv("PATH", mockPreCommitPath+":"+oldPath)
+				require.NoError(t, err)
+
+				return tmpDir, func() {
+					os.Setenv("PATH", oldPath)
+					os.RemoveAll(tmpDir)
+				}
+			},
+			wantErr:     true,
+			errContains: "failed to run pre-commit install",
+		},
+		{
+			name: "fails when pre-commit install --hook-type pre-push fails",
+			setup: func(t *testing.T) (string, func()) {
+				tmpDir, err := os.MkdirTemp("", "precommit-test-*")
+				require.NoError(t, err)
+
+				configPath := filepath.Join(tmpDir, ".pre-commit-config.yaml")
+				err = os.WriteFile(configPath, []byte("repos: []"), 0644)
+				require.NoError(t, err)
+
+				mockPreCommitPath := filepath.Join(tmpDir, "bin")
+				err = os.MkdirAll(mockPreCommitPath, 0755)
+				require.NoError(t, err)
+
+				preCommitScript := filepath.Join(mockPreCommitPath, "pre-commit")
+				script := `#!/bin/bash
+if [[ "$1" == "install" ]] && [[ "$2" == "--hook-type" ]]; then
+    exit 1
+fi
+exit 0
+`
+				err = os.WriteFile(preCommitScript, []byte(script), 0755)
+				require.NoError(t, err)
+
+				oldPath := os.Getenv("PATH")
+				err = os.Setenv("PATH", mockPreCommitPath+":"+oldPath)
+				require.NoError(t, err)
+
+				return tmpDir, func() {
+					os.Setenv("PATH", oldPath)
+					os.RemoveAll(tmpDir)
+				}
+			},
+			wantErr:     true,
+			errContains: "failed to run pre-commit install --hook-type pre-push",
+		},
 	}
 
 	for _, tt := range tests {
