@@ -3,8 +3,10 @@ package workflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +30,38 @@ func (m *mockExecutor) Execute(ctx context.Context, config ExecuteConfig) (*Exec
 		ExitCode: 0,
 		Duration: 100 * time.Millisecond,
 	}, nil
+}
+
+func (m *mockExecutor) ExecuteStreaming(ctx context.Context, config ExecuteConfig, onProgress func(ProgressEvent)) (*ExecuteResult, error) {
+	return m.Execute(ctx, config)
+}
+
+// mockLogger is a mock implementation of Logger for testing
+type mockLogger struct {
+	level        LogLevel
+	infoCalls    []string
+	verboseCalls []string
+	debugCalls   []string
+}
+
+func (m *mockLogger) Info(format string, args ...interface{}) {
+	m.infoCalls = append(m.infoCalls, fmt.Sprintf(format, args...))
+}
+
+func (m *mockLogger) Verbose(format string, args ...interface{}) {
+	if m.level >= LogLevelVerbose {
+		m.verboseCalls = append(m.verboseCalls, fmt.Sprintf(format, args...))
+	}
+}
+
+func (m *mockLogger) Debug(format string, args ...interface{}) {
+	if m.level >= LogLevelDebug {
+		m.debugCalls = append(m.debugCalls, fmt.Sprintf(format, args...))
+	}
+}
+
+func (m *mockLogger) IsVerbose() bool {
+	return m.level >= LogLevelVerbose
 }
 
 func TestNewClaudeExecutor(t *testing.T) {
@@ -1504,4 +1538,240 @@ exit 1`,
 			require.NotNil(t, got)
 		})
 	}
+}
+
+func TestClaudeExecutor_logPromptIfVerbose(t *testing.T) {
+	tests := []struct {
+		name           string
+		config         ExecuteConfig
+		args           []string
+		logLevel       LogLevel
+		wantLogCalls   int
+		claudePath     string
+		checkLogOutput func(t *testing.T, logger *mockLogger)
+	}{
+		{
+			name: "short prompt with phase and attempt",
+			config: ExecuteConfig{
+				Prompt:  "test prompt",
+				Phase:   "planning",
+				Attempt: 2,
+			},
+			args:         []string{"--print", "test prompt"},
+			logLevel:     LogLevelVerbose,
+			wantLogCalls: 3,
+			claudePath:   "claude",
+			checkLogOutput: func(t *testing.T, logger *mockLogger) {
+				assert.Len(t, logger.verboseCalls, 3)
+				assert.Contains(t, logger.verboseCalls[0], "Prompt [Phase: planning, Attempt: 2]:")
+				assert.Contains(t, logger.verboseCalls[1], "Command: claude --print 'test prompt'")
+				assert.Contains(t, logger.verboseCalls[2], "Content: test prompt")
+			},
+		},
+		{
+			name: "short prompt with phase only",
+			config: ExecuteConfig{
+				Prompt: "test prompt",
+				Phase:  "implementation",
+			},
+			args:         []string{"--print", "test prompt"},
+			logLevel:     LogLevelVerbose,
+			wantLogCalls: 3,
+			claudePath:   "claude",
+			checkLogOutput: func(t *testing.T, logger *mockLogger) {
+				assert.Len(t, logger.verboseCalls, 3)
+				assert.Contains(t, logger.verboseCalls[0], "Prompt [Phase: implementation]:")
+			},
+		},
+		{
+			name: "short prompt with attempt only",
+			config: ExecuteConfig{
+				Prompt:  "test prompt",
+				Attempt: 1,
+			},
+			args:         []string{"--print", "test prompt"},
+			logLevel:     LogLevelVerbose,
+			wantLogCalls: 3,
+			claudePath:   "claude",
+			checkLogOutput: func(t *testing.T, logger *mockLogger) {
+				assert.Len(t, logger.verboseCalls, 3)
+				assert.Contains(t, logger.verboseCalls[0], "Prompt [Attempt: 1]:")
+			},
+		},
+		{
+			name: "short prompt without phase or attempt",
+			config: ExecuteConfig{
+				Prompt: "test prompt",
+			},
+			args:         []string{"--print", "test prompt"},
+			logLevel:     LogLevelVerbose,
+			wantLogCalls: 3,
+			claudePath:   "claude",
+			checkLogOutput: func(t *testing.T, logger *mockLogger) {
+				assert.Len(t, logger.verboseCalls, 3)
+				assert.Contains(t, logger.verboseCalls[0], "Prompt:")
+				assert.NotContains(t, logger.verboseCalls[0], "[Phase:")
+				assert.NotContains(t, logger.verboseCalls[0], "[Attempt:")
+			},
+		},
+		{
+			name: "long prompt shows preview",
+			config: ExecuteConfig{
+				Prompt:  strings.Repeat("x", 600),
+				Phase:   "planning",
+				Attempt: 1,
+			},
+			args:         []string{"--print", strings.Repeat("x", 600)},
+			logLevel:     LogLevelVerbose,
+			wantLogCalls: 4,
+			claudePath:   "claude",
+			checkLogOutput: func(t *testing.T, logger *mockLogger) {
+				assert.Len(t, logger.verboseCalls, 4)
+				assert.Contains(t, logger.verboseCalls[2], "Content (preview, 600 total):")
+				assert.Contains(t, logger.verboseCalls[2], "...")
+				assert.Contains(t, logger.verboseCalls[3], "Full prompt available in command arguments above")
+			},
+		},
+		{
+			name: "non-verbose mode does not log",
+			config: ExecuteConfig{
+				Prompt:  "test prompt",
+				Phase:   "planning",
+				Attempt: 1,
+			},
+			args:         []string{"--print", "test prompt"},
+			logLevel:     LogLevelNormal,
+			wantLogCalls: 0,
+			claudePath:   "claude",
+			checkLogOutput: func(t *testing.T, logger *mockLogger) {
+				assert.Len(t, logger.verboseCalls, 0)
+			},
+		},
+		{
+			name: "handles args with spaces",
+			config: ExecuteConfig{
+				Prompt: "prompt with spaces",
+			},
+			args:         []string{"--print", "prompt with spaces"},
+			logLevel:     LogLevelVerbose,
+			wantLogCalls: 3,
+			claudePath:   "claude",
+			checkLogOutput: func(t *testing.T, logger *mockLogger) {
+				assert.Contains(t, logger.verboseCalls[1], "Command: claude --print 'prompt with spaces'")
+			},
+		},
+		{
+			name: "handles args with newlines",
+			config: ExecuteConfig{
+				Prompt: "prompt\nwith\nnewlines",
+			},
+			args:         []string{"--print", "prompt\nwith\nnewlines"},
+			logLevel:     LogLevelVerbose,
+			wantLogCalls: 3,
+			claudePath:   "claude",
+			checkLogOutput: func(t *testing.T, logger *mockLogger) {
+				assert.Contains(t, logger.verboseCalls[1], "Command: claude --print 'prompt")
+				assert.Contains(t, logger.verboseCalls[1], "with")
+				assert.Contains(t, logger.verboseCalls[1], "newlines'")
+			},
+		},
+		{
+			name: "handles custom claude path",
+			config: ExecuteConfig{
+				Prompt: "test",
+			},
+			args:         []string{"--print", "test"},
+			logLevel:     LogLevelVerbose,
+			wantLogCalls: 3,
+			claudePath:   "/custom/path/to/claude",
+			checkLogOutput: func(t *testing.T, logger *mockLogger) {
+				assert.Contains(t, logger.verboseCalls[1], "Command: /custom/path/to/claude")
+			},
+		},
+		{
+			name: "handles empty claude path",
+			config: ExecuteConfig{
+				Prompt: "test",
+			},
+			args:         []string{"--print", "test"},
+			logLevel:     LogLevelVerbose,
+			wantLogCalls: 3,
+			claudePath:   "",
+			checkLogOutput: func(t *testing.T, logger *mockLogger) {
+				assert.Contains(t, logger.verboseCalls[1], "Command: claude")
+			},
+		},
+		{
+			name: "handles args with single quotes",
+			config: ExecuteConfig{
+				Prompt: "prompt's content",
+			},
+			args:         []string{"--print", "prompt's content"},
+			logLevel:     LogLevelVerbose,
+			wantLogCalls: 3,
+			claudePath:   "claude",
+			checkLogOutput: func(t *testing.T, logger *mockLogger) {
+				assert.Contains(t, logger.verboseCalls[1], "\\'")
+			},
+		},
+		{
+			name: "handles multiple args with different formats",
+			config: ExecuteConfig{
+				Prompt:                     "test prompt",
+				DangerouslySkipPermissions: true,
+				JSONSchema:                 `{"type": "object"}`,
+			},
+			args: []string{
+				"--print",
+				"--dangerously-skip-permissions",
+				"--output-format",
+				"json",
+				"--json-schema",
+				`{"type": "object"}`,
+				"test prompt",
+			},
+			logLevel:     LogLevelVerbose,
+			wantLogCalls: 3,
+			claudePath:   "claude",
+			checkLogOutput: func(t *testing.T, logger *mockLogger) {
+				assert.Contains(t, logger.verboseCalls[1], "Command: claude --print --dangerously-skip-permissions --output-format json --json-schema")
+				assert.Contains(t, logger.verboseCalls[1], `'{"type": "object"}'`)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockLog := &mockLogger{
+				level: tt.logLevel,
+			}
+			executor := &claudeExecutor{
+				claudePath: tt.claudePath,
+				logger:     mockLog,
+			}
+
+			executor.logPromptIfVerbose(tt.config, tt.args)
+
+			assert.Len(t, mockLog.verboseCalls, tt.wantLogCalls)
+			if tt.checkLogOutput != nil {
+				tt.checkLogOutput(t, mockLog)
+			}
+		})
+	}
+}
+
+func TestClaudeExecutor_logPromptIfVerbose_NilLogger(t *testing.T) {
+	executor := &claudeExecutor{
+		claudePath: "claude",
+		logger:     nil,
+	}
+
+	config := ExecuteConfig{
+		Prompt:  "test prompt",
+		Phase:   "planning",
+		Attempt: 1,
+	}
+	args := []string{"--print", "test prompt"}
+
+	executor.logPromptIfVerbose(config, args)
 }

@@ -18,6 +18,8 @@ const (
 	planFileName  = "plan.json"
 	planMdFile    = "plan.md"
 	phasesDir     = "phases"
+	// promptsDir is the subdirectory within workflow dir where debug prompts are saved
+	promptsDir = "prompts"
 )
 
 // TimeProvider provides the current time (allows mocking in tests)
@@ -46,6 +48,9 @@ type StateManager interface {
 
 	// Debug output operations
 	SaveRawOutput(name string, phase Phase, output string) error
+
+	// Prompt saving operations
+	SavePrompt(name string, phase Phase, attempt int, prompt string) (string, error)
 
 	// List and delete
 	ListWorkflows() ([]WorkflowInfo, error)
@@ -372,6 +377,35 @@ func (s *fileStateManager) SaveRawOutput(name string, phase Phase, output string
 	}
 
 	return nil
+}
+
+// SavePrompt saves a prompt to a file for debugging purposes.
+// Prompts are stored in .claude/workflow/<name>/prompts/<phase>_attempt<N>.txt
+func (s *fileStateManager) SavePrompt(name string, phase Phase, attempt int, prompt string) (string, error) {
+	if err := ValidateWorkflowName(name); err != nil {
+		return "", err
+	}
+
+	if attempt <= 0 {
+		return "", fmt.Errorf("attempt must be positive, got %d", attempt)
+	}
+	if prompt == "" {
+		return "", fmt.Errorf("prompt cannot be empty")
+	}
+
+	promptsPath := filepath.Join(s.WorkflowDir(name), promptsDir)
+	if err := os.MkdirAll(promptsPath, 0755); err != nil {
+		return "", fmt.Errorf("failed to create prompts directory: %w", err)
+	}
+
+	promptFile := fmt.Sprintf("%s_attempt%d.txt", string(phase), attempt)
+	promptPath := filepath.Join(promptsPath, promptFile)
+
+	if err := s.atomicWrite(promptPath, []byte(prompt)); err != nil {
+		return "", fmt.Errorf("failed to write prompt file: %w", err)
+	}
+
+	return promptPath, nil
 }
 
 // ListWorkflows returns information about all workflows

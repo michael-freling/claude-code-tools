@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1368,4 +1369,210 @@ func TestFileStateManager_ListWorkflows_StatusDetection(t *testing.T) {
 			assert.Equal(t, tt.wantStatus, workflows[0].Status)
 		})
 	}
+}
+
+func TestFileStateManager_SavePrompt(t *testing.T) {
+	tests := []struct {
+		name         string
+		workflowName string
+		phase        Phase
+		attempt      int
+		prompt       string
+		wantErr      bool
+		errContains  string
+	}{
+		{
+			name:         "saves prompt successfully for planning phase attempt 1",
+			workflowName: "test-workflow",
+			phase:        PhasePlanning,
+			attempt:      1,
+			prompt:       "This is a test prompt for planning",
+			wantErr:      false,
+		},
+		{
+			name:         "saves prompt successfully for implementation phase attempt 2",
+			workflowName: "test-workflow",
+			phase:        PhaseImplementation,
+			attempt:      2,
+			prompt:       "This is a test prompt for implementation on second attempt",
+			wantErr:      false,
+		},
+		{
+			name:         "returns error for empty prompt",
+			workflowName: "test-workflow",
+			phase:        PhaseRefactoring,
+			attempt:      1,
+			prompt:       "",
+			wantErr:      true,
+			errContains:  "prompt cannot be empty",
+		},
+		{
+			name:         "saves very long prompt",
+			workflowName: "test-workflow",
+			phase:        PhasePlanning,
+			attempt:      3,
+			prompt:       string(make([]byte, 100000)),
+			wantErr:      false,
+		},
+		{
+			name:         "returns error for invalid workflow name",
+			workflowName: "../invalid",
+			phase:        PhasePlanning,
+			attempt:      1,
+			prompt:       "test",
+			wantErr:      true,
+			errContains:  "invalid workflow name",
+		},
+		{
+			name:         "returns error for zero attempt",
+			workflowName: "test-workflow",
+			phase:        PhasePlanning,
+			attempt:      0,
+			prompt:       "test",
+			wantErr:      true,
+			errContains:  "attempt must be positive",
+		},
+		{
+			name:         "returns error for negative attempt",
+			workflowName: "test-workflow",
+			phase:        PhasePlanning,
+			attempt:      -1,
+			prompt:       "test",
+			wantErr:      true,
+			errContains:  "attempt must be positive",
+		},
+		{
+			name:         "saves prompt for confirmation phase",
+			workflowName: "test-workflow",
+			phase:        PhaseConfirmation,
+			attempt:      1,
+			prompt:       "Confirmation prompt",
+			wantErr:      false,
+		},
+		{
+			name:         "saves prompt for pr-split phase",
+			workflowName: "test-workflow",
+			phase:        PhasePRSplit,
+			attempt:      5,
+			prompt:       "PR split prompt",
+			wantErr:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			sm := NewStateManager(tmpDir)
+
+			if !tt.wantErr {
+				_, err := sm.InitState(tt.workflowName, "test", WorkflowTypeFeature)
+				require.NoError(t, err)
+			}
+
+			gotPath, err := sm.SavePrompt(tt.workflowName, tt.phase, tt.attempt, tt.prompt)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				assert.Empty(t, gotPath)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotEmpty(t, gotPath)
+
+			expectedFilename := fmt.Sprintf("%s_attempt%d.txt", string(tt.phase), tt.attempt)
+			expectedPath := filepath.Join(sm.WorkflowDir(tt.workflowName), "prompts", expectedFilename)
+			assert.Equal(t, expectedPath, gotPath)
+
+			assert.FileExists(t, gotPath)
+
+			content, err := os.ReadFile(gotPath)
+			require.NoError(t, err)
+			assert.Equal(t, tt.prompt, string(content))
+		})
+	}
+}
+
+func TestFileStateManager_SavePrompt_CreatesDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	sm := NewStateManager(tmpDir)
+
+	workflowName := "test-workflow"
+	_, err := sm.InitState(workflowName, "test", WorkflowTypeFeature)
+	require.NoError(t, err)
+
+	promptsDir := filepath.Join(sm.WorkflowDir(workflowName), "prompts")
+	_, err = os.Stat(promptsDir)
+	assert.True(t, os.IsNotExist(err))
+
+	_, err = sm.SavePrompt(workflowName, PhasePlanning, 1, "test prompt")
+	require.NoError(t, err)
+
+	assert.DirExists(t, promptsDir)
+}
+
+func TestFileStateManager_SavePrompt_Overwriting(t *testing.T) {
+	tmpDir := t.TempDir()
+	sm := NewStateManager(tmpDir)
+
+	workflowName := "test-workflow"
+	_, err := sm.InitState(workflowName, "test", WorkflowTypeFeature)
+	require.NoError(t, err)
+
+	firstPrompt := "First prompt content"
+	path1, err := sm.SavePrompt(workflowName, PhasePlanning, 1, firstPrompt)
+	require.NoError(t, err)
+
+	content1, err := os.ReadFile(path1)
+	require.NoError(t, err)
+	assert.Equal(t, firstPrompt, string(content1))
+
+	secondPrompt := "Second prompt content that overwrites the first"
+	path2, err := sm.SavePrompt(workflowName, PhasePlanning, 1, secondPrompt)
+	require.NoError(t, err)
+
+	assert.Equal(t, path1, path2)
+
+	content2, err := os.ReadFile(path2)
+	require.NoError(t, err)
+	assert.Equal(t, secondPrompt, string(content2))
+}
+
+func TestFileStateManager_SavePrompt_MultipleAttempts(t *testing.T) {
+	tmpDir := t.TempDir()
+	sm := NewStateManager(tmpDir)
+
+	workflowName := "test-workflow"
+	_, err := sm.InitState(workflowName, "test", WorkflowTypeFeature)
+	require.NoError(t, err)
+
+	path1, err := sm.SavePrompt(workflowName, PhasePlanning, 1, "Attempt 1")
+	require.NoError(t, err)
+
+	path2, err := sm.SavePrompt(workflowName, PhasePlanning, 2, "Attempt 2")
+	require.NoError(t, err)
+
+	path3, err := sm.SavePrompt(workflowName, PhasePlanning, 3, "Attempt 3")
+	require.NoError(t, err)
+
+	assert.NotEqual(t, path1, path2)
+	assert.NotEqual(t, path2, path3)
+	assert.NotEqual(t, path1, path3)
+
+	assert.FileExists(t, path1)
+	assert.FileExists(t, path2)
+	assert.FileExists(t, path3)
+
+	content1, err := os.ReadFile(path1)
+	require.NoError(t, err)
+	assert.Equal(t, "Attempt 1", string(content1))
+
+	content2, err := os.ReadFile(path2)
+	require.NoError(t, err)
+	assert.Equal(t, "Attempt 2", string(content2))
+
+	content3, err := os.ReadFile(path3)
+	require.NoError(t, err)
+	assert.Equal(t, "Attempt 3", string(content3))
 }

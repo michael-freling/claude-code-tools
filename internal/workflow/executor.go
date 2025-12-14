@@ -13,6 +13,16 @@ import (
 	"github.com/michael-freling/claude-code-tools/internal/command"
 )
 
+const (
+	// promptLogThreshold is the character length below which prompts are logged inline.
+	// Prompts at or above this threshold show a preview with the full content saved to file.
+	promptLogThreshold = 500
+	// promptPreviewFirst is the number of characters shown from the start of long prompts.
+	promptPreviewFirst = 200
+	// promptPreviewLast is the number of characters shown from the end of long prompts.
+	promptPreviewLast = 100
+)
+
 // ClaudeExecutor interface allows mocking of Claude CLI invocation
 type ClaudeExecutor interface {
 	Execute(ctx context.Context, config ExecuteConfig) (*ExecuteResult, error)
@@ -60,6 +70,10 @@ type ExecuteConfig struct {
 	Env                        map[string]string
 	JSONSchema                 string
 	DangerouslySkipPermissions bool
+	Phase                      string
+	Attempt                    int
+	StateManager               StateManager
+	WorkflowName               string
 }
 
 // ExecuteResult holds the result of Claude CLI execution
@@ -104,6 +118,81 @@ func NewClaudeExecutorWithRunner(claudePath string, cmdRunner command.Runner, lo
 	}
 }
 
+// logPromptIfVerbose logs the prompt with CLI command for debugging.
+// For long prompts (>500 chars), saves full content to .claude/workflow/<name>/prompts/<phase>_attempt<N>.txt
+func (e *claudeExecutor) logPromptIfVerbose(config ExecuteConfig, args []string) {
+	if e.logger == nil || !e.logger.IsVerbose() {
+		return
+	}
+
+	claudePath := e.claudePath
+	if claudePath == "" {
+		claudePath = "claude"
+	}
+
+	// Build context string
+	context := ""
+	if config.Phase != "" && config.Attempt > 0 {
+		context = fmt.Sprintf(" [Phase: %s, Attempt: %d]", config.Phase, config.Attempt)
+	} else if config.Phase != "" {
+		context = fmt.Sprintf(" [Phase: %s]", config.Phase)
+	} else if config.Attempt > 0 {
+		context = fmt.Sprintf(" [Attempt: %d]", config.Attempt)
+	}
+
+	e.logger.Verbose("Prompt%s:", context)
+
+	// Log CLI command
+	var cmdLine strings.Builder
+	cmdLine.WriteString(claudePath)
+	for _, arg := range args {
+		cmdLine.WriteString(" ")
+		if strings.Contains(arg, " ") || strings.Contains(arg, "\n") {
+			cmdLine.WriteString("'")
+			cmdLine.WriteString(strings.ReplaceAll(arg, "'", "\\'"))
+			cmdLine.WriteString("'")
+		} else {
+			cmdLine.WriteString(arg)
+		}
+	}
+	e.logger.Verbose("  Command: %s", cmdLine.String())
+
+	// Log prompt content
+	promptLen := len(config.Prompt)
+
+	if promptLen < promptLogThreshold {
+		e.logger.Verbose("  Content: %s", config.Prompt)
+		return
+	}
+
+	// Ensure we have enough chars for preview (firstChars + lastChars)
+	minPreviewLen := promptPreviewFirst + promptPreviewLast
+	if promptLen < minPreviewLen {
+		e.logger.Verbose("  Content (%s total): %s", formatNumber(promptLen), config.Prompt)
+		return
+	}
+
+	preview := config.Prompt[:promptPreviewFirst] + "..." + config.Prompt[promptLen-promptPreviewLast:]
+	e.logger.Verbose("  Content (preview, %s total): %s", formatNumber(promptLen), preview)
+
+	// Check prerequisites for saving prompt to file
+	if config.StateManager == nil || config.WorkflowName == "" || config.Phase == "" || config.Attempt == 0 {
+		e.logger.Verbose("  Full prompt available in command arguments above")
+		return
+	}
+
+	// Save prompt to file for later inspection
+	// Non-critical debug feature - log error but don't fail execution
+	phase := Phase(config.Phase)
+	savedPath, err := config.StateManager.SavePrompt(config.WorkflowName, phase, config.Attempt, config.Prompt)
+	if err != nil {
+		e.logger.Verbose("  Warning: Failed to save prompt to file: %v", err)
+		return
+	}
+
+	e.logger.Verbose("  Full prompt saved to: %s", savedPath)
+}
+
 // Execute runs the Claude CLI with the given configuration
 func (e *claudeExecutor) Execute(ctx context.Context, config ExecuteConfig) (*ExecuteResult, error) {
 	if config.Timeout > 0 {
@@ -129,6 +218,9 @@ func (e *claudeExecutor) Execute(ctx context.Context, config ExecuteConfig) (*Ex
 		args = append(args, "--output-format", "json", "--json-schema", config.JSONSchema)
 	}
 	args = append(args, config.Prompt)
+
+	e.logPromptIfVerbose(config, args)
+
 	cmd := exec.CommandContext(ctx, claudePath, args...)
 
 	if config.WorkingDirectory != "" {
@@ -223,6 +315,9 @@ func (e *claudeExecutor) ExecuteStreaming(ctx context.Context, config ExecuteCon
 		args = append(args, "--json-schema", config.JSONSchema)
 	}
 	args = append(args, config.Prompt)
+
+	e.logPromptIfVerbose(config, args)
+
 	cmd := exec.CommandContext(ctx, claudePath, args...)
 
 	if e.logger != nil {
