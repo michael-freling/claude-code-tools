@@ -231,4 +231,5 @@ var (
 	ErrParseJSON           = errors.New("failed to parse JSON output")
 	ErrUserCancelled       = errors.New("workflow cancelled by user")
 	ErrCICheckTimeout      = errors.New("CI check command timeout")
+	ErrSessionInvalid      = errors.New("session is invalid or expired")
 )

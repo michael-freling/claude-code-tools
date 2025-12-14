@@ -1841,3 +1841,137 @@ func TestClaudeExecutor_logPromptIfVerbose_NilLogger(t *testing.T) {
 
 	executor.logPromptIfVerbose(config, args)
 }
+
+func TestClaudeExecutor_ExecuteStreaming_SessionRetry(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tests := []struct {
+		name           string
+		script         string
+		config         ExecuteConfig
+		wantOutput     string
+		wantErr        bool
+		errContains    string
+		wantRetryCount int
+	}{
+		{
+			name: "retries with new session when session resume fails with exit code 1",
+			script: `#!/bin/bash
+# First call has --resume flag (session resume), second call doesn't
+if [[ "$*" == *"--resume"* ]]; then
+  echo "Session invalid" >&2
+  exit 1
+else
+  echo '{"type":"result","result":"success with new session","is_error":false}'
+  exit 0
+fi`,
+			config: ExecuteConfig{
+				Prompt:    "test prompt",
+				SessionID: "test-session-id",
+				Timeout:   5 * time.Second,
+			},
+			wantOutput:     "success with new session",
+			wantErr:        false,
+			wantRetryCount: 1,
+		},
+		{
+			name: "does not retry when ForceNewSession is true",
+			script: `#!/bin/bash
+echo "Error" >&2
+exit 1`,
+			config: ExecuteConfig{
+				Prompt:          "test prompt",
+				SessionID:       "test-session-id",
+				ForceNewSession: true,
+				Timeout:         5 * time.Second,
+			},
+			wantErr:        true,
+			errContains:    "exit code 1",
+			wantRetryCount: 0,
+		},
+		{
+			name: "does not retry when no session ID provided",
+			script: `#!/bin/bash
+echo "Error" >&2
+exit 1`,
+			config: ExecuteConfig{
+				Prompt:  "test prompt",
+				Timeout: 5 * time.Second,
+			},
+			wantErr:        true,
+			errContains:    "exit code 1",
+			wantRetryCount: 0,
+		},
+		{
+			name: "does not retry when exit code is not 1",
+			script: `#!/bin/bash
+echo "Different error" >&2
+exit 2`,
+			config: ExecuteConfig{
+				Prompt:    "test prompt",
+				SessionID: "test-session-id",
+				Timeout:   5 * time.Second,
+			},
+			wantErr:        true,
+			errContains:    "exit code 2",
+			wantRetryCount: 0,
+		},
+		{
+			name: "successful session resume does not retry",
+			script: `#!/bin/bash
+echo '{"type":"result","result":"success","is_error":false}'
+exit 0`,
+			config: ExecuteConfig{
+				Prompt:    "test prompt",
+				SessionID: "test-session-id",
+				Timeout:   5 * time.Second,
+			},
+			wantOutput:     "success",
+			wantErr:        false,
+			wantRetryCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scriptPath := filepath.Join(tmpDir, "claude-session-retry-"+tt.name)
+			err := os.WriteFile(scriptPath, []byte(tt.script), 0755)
+			require.NoError(t, err)
+
+			mockLog := &mockLogger{
+				level: LogLevelVerbose,
+			}
+			executor := NewClaudeExecutorWithPath(scriptPath, mockLog)
+			ctx := context.Background()
+
+			got, err := executor.ExecuteStreaming(ctx, tt.config, nil)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, got)
+
+			if tt.wantOutput != "" {
+				assert.Contains(t, got.Output, tt.wantOutput)
+			}
+
+			// Check retry behavior via log messages
+			if tt.wantRetryCount > 0 {
+				found := false
+				for _, logMsg := range mockLog.infoCalls {
+					if strings.Contains(logMsg, "Session resume failed") && strings.Contains(logMsg, "retrying with new session") {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "Expected retry log message not found")
+			}
+		})
+	}
+}

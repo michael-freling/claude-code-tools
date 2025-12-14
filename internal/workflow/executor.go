@@ -455,6 +455,21 @@ func (e *claudeExecutor) ExecuteStreaming(ctx context.Context, config ExecuteCon
 				return result, fmt.Errorf("claude execution failed with exit code %d: %w", result.ExitCode, ErrPromptTooLong)
 			}
 
+			// Check if this is a session resume failure and retry once
+			// Only retry if: session ID was provided, not already forcing new session, and exit code is 1
+			if config.SessionID != "" && !config.ForceNewSession && result.ExitCode == 1 {
+				if e.logger != nil {
+					e.logger.Info("Session resume failed (session may have expired), retrying with new session...")
+				}
+
+				// Retry with new session - ForceNewSession prevents infinite retry loop
+				retryConfig := config
+				retryConfig.SessionID = ""
+				retryConfig.ForceNewSession = true
+
+				return e.ExecuteStreaming(ctx, retryConfig, onProgress)
+			}
+
 			return result, fmt.Errorf("claude execution failed with exit code %d: %w", result.ExitCode, ErrClaude)
 		}
 
