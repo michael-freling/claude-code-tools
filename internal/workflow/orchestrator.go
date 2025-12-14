@@ -911,15 +911,6 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 	var prResult *PRSplitResult
 	var lastError string
 
-	sessionInfo := o.sessionManager.GetSessionFromState(state)
-	var sessionID string
-	if sessionInfo != nil {
-		sessionID = sessionInfo.SessionID
-		o.logger.Verbose("Resuming session: %s (reuse count: %d)", sessionInfo.SessionID, sessionInfo.ReuseCount)
-	} else {
-		o.logger.Verbose("Starting new session")
-	}
-
 	for attempt := 1; attempt <= o.config.MaxFixAttempts; attempt++ {
 		phaseState.Attempts = attempt
 
@@ -1009,12 +1000,10 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 
 		spinner.Success("PR split plan created")
 
-		// Parse session ID from output and update state
+		// Parse session ID from output and update state (always new since ForceNewSession is true)
 		newSessionID := o.sessionManager.ParseSessionID(result.RawOutput)
 		if newSessionID != "" {
-			isNew := sessionInfo == nil || sessionInfo.SessionID != newSessionID
-			o.sessionManager.UpdateStateWithSession(state, newSessionID, isNew)
-			sessionID = newSessionID
+			o.sessionManager.UpdateStateWithSession(state, newSessionID, true)
 		}
 
 		executionSpinner := NewStreamingSpinnerWithLogger("Creating branches and PRs...", o.logger)
