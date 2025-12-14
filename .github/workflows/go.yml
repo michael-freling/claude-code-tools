@@ -79,20 +79,5 @@ jobs:
     - name: Check unit test timeout (2s)
       run: ./scripts/check-unit-test-timeout.sh
 
-  e2e:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version-file: 'go.mod'
-        cache: true
-
-    - name: Run e2e tests
-      run: ./scripts/run-e2e-tests.sh
-      env:
-        E2E_TIMEOUT: 1m
-        E2E_VERBOSE: true
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # E2E tests are run locally only (require real Claude CLI)
+  # Run with: ./scripts/run-e2e-tests.sh

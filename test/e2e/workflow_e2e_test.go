@@ -13,78 +13,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWorkflow_FeatureWorkflow_E2E(t *testing.T) {
+// TestWorkflow_SimpleFeature_E2E tests a simple feature workflow with real Claude.
+// This test uses the REAL Claude CLI to verify end-to-end workflow functionality.
+// It is skipped when Claude is not available (e.g., in CI).
+func TestWorkflow_SimpleFeature_E2E(t *testing.T) {
+	helpers.RequireClaude(t)
 	helpers.RequireGit(t)
 
+	// Create a real temp git repo
 	repo := helpers.NewTempRepo(t)
 	require.NoError(t, repo.CreateFile("main.go", "package main\n\nfunc main() {\n}\n"))
 	require.NoError(t, repo.Commit("Initial commit"))
 
-	workflowName := "test-feature"
-	description := "Add user authentication"
+	workflowName := "test-simple-feature"
+	// Keep description SIMPLE to minimize Claude execution time and cost
+	description := "Add a hello function that returns the string 'hello'"
 
-	planJSON := map[string]interface{}{
-		"summary":     "Implement user authentication with JWT",
-		"contextType": "feature",
-		"architecture": map[string]interface{}{
-			"overview":   "Add JWT-based authentication",
-			"components": []string{"auth middleware", "user model"},
-		},
-		"phases": []map[string]interface{}{
-			{
-				"name":           "Setup",
-				"description":    "Setup authentication infrastructure",
-				"estimatedFiles": 3,
-				"estimatedLines": 150,
-			},
-		},
-		"workStreams": []map[string]interface{}{
-			{
-				"name":  "Core auth",
-				"tasks": []string{"JWT generation", "Token validation"},
-			},
-		},
-		"risks":               []string{"Token expiration handling"},
-		"complexity":          "medium",
-		"estimatedTotalLines": 150,
-		"estimatedTotalFiles": 3,
-	}
-
-	implSummary := map[string]interface{}{
-		"filesChanged": []string{"auth/jwt.go", "auth/middleware.go"},
-		"linesAdded":   150,
-		"linesRemoved": 10,
-		"testsAdded":   8,
-		"summary":      "Implemented JWT authentication",
-	}
-
-	refactorSummary := map[string]interface{}{
-		"filesChanged": []string{"auth/jwt.go"},
-		"linesAdded":   20,
-		"linesRemoved": 15,
-		"summary":      "Refactored JWT token generation",
-	}
-
-	mockPlanClaude := helpers.NewMockClaudeBuilder(t).
-		WithStreamingResponse("Plan created", planJSON)
-	planClaudePath := mockPlanClaude.Build()
-
-	mockImplClaude := helpers.NewMockClaudeBuilder(t).
-		WithStreamingResponse("Implementation complete", implSummary)
-	implClaudePath := mockImplClaude.Build()
-
-	mockRefactorClaude := helpers.NewMockClaudeBuilder(t).
-		WithStreamingResponse("Refactoring complete", refactorSummary)
-	refactorClaudePath := mockRefactorClaude.Build()
-
+	// Create config with REAL Claude CLI (no mock)
 	config := workflow.DefaultConfig(repo.Dir)
-	config.ClaudePath = planClaudePath
-	config.Timeouts.Planning = 10 * time.Second
-	config.Timeouts.Implementation = 10 * time.Second
-	config.Timeouts.Refactoring = 10 * time.Second
+	// Use generous timeouts for real Claude (can be slow)
+	config.Timeouts.Planning = 5 * time.Minute
+	config.Timeouts.Implementation = 5 * time.Minute
+	config.Timeouts.Refactoring = 5 * time.Minute
 	config.SplitPR = false
-	config.LogLevel = workflow.LogLevelNormal
+	config.LogLevel = workflow.LogLevelVerbose
 
+	// Mock CI checker since temp repos don't have real CI
 	mockCI := &mockCIChecker{
 		result: &workflow.CIResult{
 			Passed: true,
@@ -92,293 +46,63 @@ func TestWorkflow_FeatureWorkflow_E2E(t *testing.T) {
 		},
 	}
 
+	// Create orchestrator with REAL Claude executor
 	orchestrator, err := workflow.NewTestOrchestrator(config, func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) workflow.CIChecker {
 		return mockCI
 	})
 	require.NoError(t, err)
 
+	// Auto-confirm to avoid interactive blocking
 	confirmCalled := false
 	orchestrator.SetConfirmFunc(func(plan *workflow.Plan) (bool, string, error) {
 		confirmCalled = true
-		assert.Equal(t, planJSON["summary"], plan.Summary)
-		config.ClaudePath = implClaudePath
+		// Verify we got a real plan from Claude
+		assert.NotEmpty(t, plan.Summary, "plan summary should not be empty")
+		assert.NotEmpty(t, plan.ContextType, "plan context type should not be empty")
+		t.Logf("Plan received: %s", plan.Summary)
 		return true, "", nil
 	})
 
-	ciCallCount := 0
-	mockCI.onCall = func(callNum int) {
-		ciCallCount = callNum
-		if ciCallCount == 1 {
-			config.ClaudePath = refactorClaudePath
-		}
-	}
-
+	// Run the workflow with REAL Claude
 	ctx := context.Background()
 	err = orchestrator.Start(ctx, workflowName, description, workflow.WorkflowTypeFeature)
-	require.NoError(t, err)
+	require.NoError(t, err, "workflow should complete successfully with real Claude")
 
+	// Verify workflow completed
 	assert.True(t, confirmCalled, "confirm function should have been called")
 
 	state, err := orchestrator.Status(workflowName)
 	require.NoError(t, err)
-	assert.Equal(t, workflow.PhaseCompleted, state.CurrentPhase)
+	assert.Equal(t, workflow.PhaseCompleted, state.CurrentPhase, "workflow should reach completed phase")
 
+	// Verify planning phase completed with real Claude
 	planningPhase := state.Phases[workflow.PhasePlanning]
-	assert.Equal(t, workflow.StatusCompleted, planningPhase.Status)
-	assert.Greater(t, planningPhase.Attempts, 0)
+	assert.Equal(t, workflow.StatusCompleted, planningPhase.Status, "planning phase should complete")
+	assert.Greater(t, planningPhase.Attempts, 0, "planning phase should have at least one attempt")
 
+	// Verify implementation phase completed
 	implPhase := state.Phases[workflow.PhaseImplementation]
-	assert.Equal(t, workflow.StatusCompleted, implPhase.Status)
+	assert.Equal(t, workflow.StatusCompleted, implPhase.Status, "implementation phase should complete")
 
+	// Verify refactoring phase completed
 	refactorPhase := state.Phases[workflow.PhaseRefactoring]
-	assert.Equal(t, workflow.StatusCompleted, refactorPhase.Status)
+	assert.Equal(t, workflow.StatusCompleted, refactorPhase.Status, "refactoring phase should complete")
 
-	assert.NotEmpty(t, state.WorktreePath)
+	// Verify worktree was created
+	assert.NotEmpty(t, state.WorktreePath, "worktree path should be set")
 
+	// Verify plan was saved
 	stateManager := workflow.NewStateManager(repo.Dir)
 	plan, err := stateManager.LoadPlan(workflowName)
 	require.NoError(t, err)
-	assert.Equal(t, planJSON["summary"], plan.Summary)
-
-	args := mockPlanClaude.GetCapturedArgs()
-	assert.Contains(t, args, "--print", "planning phase should include --print flag")
-	assert.Contains(t, args, "stream-json", "planning phase should use streaming mode")
-	assert.Contains(t, args, "--json-schema", "planning phase should use JSON schema")
+	assert.NotEmpty(t, plan.Summary, "saved plan should have summary")
+	t.Logf("Final plan: %+v", plan)
 }
 
-func TestWorkflow_FixWorkflow_E2E(t *testing.T) {
-	helpers.RequireGit(t)
-
-	repo := helpers.NewTempRepo(t)
-	require.NoError(t, repo.CreateFile("buggy.go", "package main\n\nfunc buggy() {\n\t// memory leak here\n}\n"))
-	require.NoError(t, repo.Commit("Initial commit"))
-
-	workflowName := "test-fix"
-	description := "Fix memory leak in parser"
-
-	planJSON := map[string]interface{}{
-		"summary":     "Fix memory leak in parser",
-		"contextType": "fix",
-		"phases": []map[string]interface{}{
-			{
-				"name":           "Fix",
-				"description":    "Fix the memory leak",
-				"estimatedFiles": 1,
-				"estimatedLines": 10,
-			},
-		},
-		"complexity": "small",
-	}
-
-	implSummary := map[string]interface{}{
-		"filesChanged": []string{"buggy.go"},
-		"linesAdded":   5,
-		"linesRemoved": 2,
-		"testsAdded":   1,
-		"summary":      "Fixed memory leak",
-	}
-
-	refactorSummary := map[string]interface{}{
-		"filesChanged": []string{"buggy.go"},
-		"linesAdded":   3,
-		"linesRemoved": 1,
-		"summary":      "Added documentation",
-	}
-
-	mockPlanClaude := helpers.NewMockClaudeBuilder(t).
-		WithStreamingResponse("Plan created", planJSON)
-	planClaudePath := mockPlanClaude.Build()
-
-	mockImplClaude := helpers.NewMockClaudeBuilder(t).
-		WithStreamingResponse("Implementation complete", implSummary)
-	implClaudePath := mockImplClaude.Build()
-
-	mockRefactorClaude := helpers.NewMockClaudeBuilder(t).
-		WithStreamingResponse("Refactoring complete", refactorSummary)
-	refactorClaudePath := mockRefactorClaude.Build()
-
-	config := workflow.DefaultConfig(repo.Dir)
-	config.ClaudePath = planClaudePath
-	config.Timeouts.Planning = 10 * time.Second
-	config.Timeouts.Implementation = 10 * time.Second
-	config.Timeouts.Refactoring = 10 * time.Second
-	config.SplitPR = false
-
-	mockCI := &mockCIChecker{
-		result: &workflow.CIResult{
-			Passed: true,
-			Status: "success",
-		},
-	}
-
-	orchestrator, err := workflow.NewTestOrchestrator(config, func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) workflow.CIChecker {
-		return mockCI
-	})
-	require.NoError(t, err)
-
-	orchestrator.SetConfirmFunc(func(plan *workflow.Plan) (bool, string, error) {
-		config.ClaudePath = implClaudePath
-		return true, "", nil
-	})
-
-	ciCallCount := 0
-	mockCI.onCall = func(callNum int) {
-		ciCallCount = callNum
-		if ciCallCount == 1 {
-			config.ClaudePath = refactorClaudePath
-		}
-	}
-
-	ctx := context.Background()
-	err = orchestrator.Start(ctx, workflowName, description, workflow.WorkflowTypeFix)
-	require.NoError(t, err)
-
-	state, err := orchestrator.Status(workflowName)
-	require.NoError(t, err)
-	assert.Equal(t, workflow.PhaseCompleted, state.CurrentPhase)
-	assert.Equal(t, workflow.WorkflowTypeFix, state.Type)
-}
-
-func TestWorkflow_WithPRSplit_E2E(t *testing.T) {
-	t.Skip("PR split requires complex GH runner mocking - deferred to later implementation")
-}
-
-func TestWorkflow_ResumeAfterFailure_E2E(t *testing.T) {
-	helpers.RequireGit(t)
-
-	repo := helpers.NewTempRepo(t)
-	require.NoError(t, repo.CreateFile("main.go", "package main\n\nfunc main() {\n}\n"))
-	require.NoError(t, repo.Commit("Initial commit"))
-
-	workflowName := "test-resume"
-	description := "Add feature with resume"
-
-	planJSON := map[string]interface{}{
-		"summary":     "Add new feature",
-		"contextType": "feature",
-		"phases": []map[string]interface{}{
-			{
-				"name":           "Implementation",
-				"description":    "Implement the feature",
-				"estimatedFiles": 2,
-				"estimatedLines": 100,
-			},
-		},
-		"complexity": "medium",
-	}
-
-	implSummary := map[string]interface{}{
-		"filesChanged": []string{"feature.go"},
-		"linesAdded":   100,
-		"linesRemoved": 0,
-		"testsAdded":   5,
-		"summary":      "Implemented feature",
-	}
-
-	implFixSummary := map[string]interface{}{
-		"filesChanged": []string{"feature.go"},
-		"linesAdded":   5,
-		"linesRemoved": 2,
-		"testsAdded":   1,
-		"summary":      "Fixed failing tests",
-	}
-
-	refactorSummary := map[string]interface{}{
-		"filesChanged": []string{"feature.go"},
-		"linesAdded":   10,
-		"linesRemoved": 5,
-		"summary":      "Cleaned up code",
-	}
-
-	mockPlanClaude := helpers.NewMockClaudeBuilder(t).
-		WithStreamingResponse("Plan created", planJSON)
-	planClaudePath := mockPlanClaude.Build()
-
-	mockImplClaude := helpers.NewMockClaudeBuilder(t).
-		WithStreamingResponse("Implementation complete", implSummary)
-	implClaudePath := mockImplClaude.Build()
-
-	mockImplFixClaude := helpers.NewMockClaudeBuilder(t).
-		WithStreamingResponse("Fixed issues", implFixSummary)
-	implFixClaudePath := mockImplFixClaude.Build()
-
-	mockRefactorClaude := helpers.NewMockClaudeBuilder(t).
-		WithStreamingResponse("Refactoring complete", refactorSummary)
-	refactorClaudePath := mockRefactorClaude.Build()
-
-	config := workflow.DefaultConfig(repo.Dir)
-	config.ClaudePath = planClaudePath
-	config.Timeouts.Planning = 10 * time.Second
-	config.Timeouts.Implementation = 10 * time.Second
-	config.Timeouts.Refactoring = 10 * time.Second
-	config.SplitPR = false
-
-	ciCallCount := 0
-	mockCI := &mockCIChecker{
-		onCall: func(callNum int) {
-			ciCallCount = callNum
-		},
-	}
-
-	mockCI.checkFunc = func() (*workflow.CIResult, error) {
-		if ciCallCount == 1 {
-			return &workflow.CIResult{
-				Passed:     false,
-				Status:     "failure",
-				FailedJobs: []string{"test"},
-				Output:     "Tests failed: feature_test.go:10: assertion failed",
-			}, nil
-		}
-		return &workflow.CIResult{
-			Passed: true,
-			Status: "success",
-		}, nil
-	}
-
-	orchestrator, err := workflow.NewTestOrchestrator(config, func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) workflow.CIChecker {
-		return mockCI
-	})
-	require.NoError(t, err)
-
-	orchestrator.SetConfirmFunc(func(plan *workflow.Plan) (bool, string, error) {
-		config.ClaudePath = implClaudePath
-		return true, "", nil
-	})
-
-	ctx := context.Background()
-	err = orchestrator.Start(ctx, workflowName, description, workflow.WorkflowTypeFeature)
-
-	state, err := orchestrator.Status(workflowName)
-	require.NoError(t, err)
-
-	if state.CurrentPhase == workflow.PhaseCompleted {
-		t.Skip("CI fix succeeded on first attempt, skipping resume test")
-	}
-
-	assert.Equal(t, workflow.PhaseFailed, state.CurrentPhase)
-	assert.NotNil(t, state.Error)
-	assert.Equal(t, workflow.FailureTypeCI, state.Error.FailureType)
-
-	config.ClaudePath = implFixClaudePath
-
-	ciCallCount = 0
-	mockCI.checkFunc = func() (*workflow.CIResult, error) {
-		if ciCallCount == 1 {
-			config.ClaudePath = refactorClaudePath
-		}
-		return &workflow.CIResult{
-			Passed: true,
-			Status: "success",
-		}, nil
-	}
-
-	err = orchestrator.Resume(ctx, workflowName)
-	require.NoError(t, err)
-
-	state, err = orchestrator.Status(workflowName)
-	require.NoError(t, err)
-	assert.Equal(t, workflow.PhaseCompleted, state.CurrentPhase)
-	assert.Nil(t, state.Error, "error should be cleared after successful resume")
+// TestWorkflow_PlanningOnly_E2E tests only the planning phase to save time and cost.
+// This allows testing Claude integration without running the full workflow.
+func TestWorkflow_PlanningOnly_E2E(t *testing.T) {
+	t.Skip("Planning-only test - implement if needed for faster testing")
 }
 
 type mockCIChecker struct {

@@ -1,48 +1,16 @@
 # E2E Testing
 
-This directory contains end-to-end (e2e) tests that verify complete workflows by testing Claude CLI execution.
+This directory contains end-to-end (e2e) tests that verify complete workflows using the REAL Claude CLI.
 
 ## Overview
 
-E2E tests are separated from unit tests using Go build tags (`//go:build e2e`). We have two types of E2E tests:
+E2E tests are separated from unit tests using Go build tags (`//go:build e2e`). These tests:
 
-1. **Mock-based tests** - Tests that use MockClaudeBuilder to simulate Claude CLI responses
-   - Run in CI without requiring Claude API access
-   - Fast and deterministic
-   - Test argument construction, response parsing, and workflow logic
-
-2. **Real CLI tests** - Tests that execute the actual Claude CLI
-   - Skipped in CI (require Claude authentication)
-   - Useful for local development and manual verification
-   - Test real Claude API integration
-
-## Test Files
-
-### Mock-Based Tests (Run in CI)
-
-- `workflow_e2e_test.go` - Tests workflow execution using MockClaudeBuilder
-  - Argument construction and validation
-  - Prompt generation for different workflow phases
-  - Response parsing (streaming and non-streaming)
-  - Error handling (e.g., "Prompt is too long")
-  - Timeout and working directory handling
-
-### Real CLI Tests (Skipped in CI)
-
-- `claude_cli_e2e_test.go` - Tests using real Claude CLI
-  - Simple execution and streaming modes
-  - JSON schema validation
-  - Working directory file access
-  - Requires Claude authentication
-
-### Helpers
-
-- `helpers/` - Test helper utilities
-  - `mock_claude.go` - MockClaudeBuilder for creating mock Claude CLI scripts
-  - `claude.go` - Claude CLI detection and availability checks
-  - `repo.go` - Temporary Git repository management
-  - `git.go`, `gh.go` - Git and GitHub CLI test utilities
-  - `cleanup.go` - Resource cleanup helpers
+- **Use REAL Claude CLI** - Tests execute actual Claude commands (not mocks)
+- **Run locally only** - Skipped in CI since they require Claude authentication
+- **Test real integration** - Verify the actual Claude API integration works
+- **Are intentionally slow** - Real Claude calls take 30s-2min per phase
+- **Cost real money** - Each test makes actual API calls to Claude
 
 ## Prerequisites
 
@@ -50,27 +18,24 @@ E2E tests are separated from unit tests using Go build tags (`//go:build e2e`). 
 
 - **git** - Required for all e2e tests
 - **Go** - For running the tests
+- **claude** - Claude Code CLI (required for E2E tests)
 
-### Optional Tools
+### Claude CLI Installation and Authentication
 
-- **gh** - GitHub CLI (tests requiring gh authentication will be skipped if not available)
-- **claude** - Claude Code CLI (real CLI tests will be skipped if not available)
-
-### Tool Installation
+E2E tests require Claude CLI to be installed and authenticated:
 
 ```bash
-# Install gh CLI (macOS)
-brew install gh
-
-# Install gh CLI (Linux)
-# See https://cli.github.com/manual/installation
-
-# Authenticate gh
-gh auth login
-
 # Install claude CLI
 # See https://docs.anthropic.com/en/docs/claude-code
+
+# Authenticate (if needed)
+# The CLI will prompt for authentication on first use
+
+# Verify Claude is available
+claude --version
 ```
+
+Tests will be automatically skipped if Claude is not available in PATH.
 
 ## Running E2E Tests
 
@@ -83,8 +48,8 @@ gh auth login
 # Run with verbose output
 E2E_VERBOSE=true ./scripts/run-e2e-tests.sh
 
-# Run with custom timeout
-E2E_TIMEOUT=2m ./scripts/run-e2e-tests.sh
+# Run with custom timeout (E2E tests can be slow!)
+E2E_TIMEOUT=10m ./scripts/run-e2e-tests.sh
 ```
 
 ### Using go test Directly
@@ -96,20 +61,45 @@ go test -tags=e2e ./test/e2e/...
 # Run with verbose output
 go test -tags=e2e -v ./test/e2e/...
 
-# Run specific test file
-go test -tags=e2e -v ./test/e2e/workflow_e2e_test.go
-
 # Run specific test
-go test -tags=e2e -v -run TestExecutor_ArgumentConstruction ./test/e2e/...
+go test -tags=e2e -v -run TestWorkflow_SimpleFeature_E2E ./test/e2e/...
+
+# Use longer timeout for slow real Claude calls
+go test -tags=e2e -timeout=10m ./test/e2e/...
 ```
+
+## Test Files
+
+### Workflow E2E Tests
+
+- `workflow_e2e_test.go` - Tests complete workflow execution with real Claude
+  - `TestWorkflow_SimpleFeature_E2E` - Full workflow with minimal feature (saves time/cost)
+  - Uses real Claude for planning, implementation, and refactoring phases
+  - Auto-confirms plans to avoid interactive blocking
+  - Uses mock CI checker (temp repos don't have real CI)
+
+### Real CLI Tests
+
+- `claude_cli_e2e_test.go` - Tests low-level Claude CLI execution
+  - Simple execution and streaming modes
+  - JSON schema validation
+  - Working directory file access
+
+### Helpers
+
+- `helpers/` - Test helper utilities
+  - `claude.go` - Claude CLI detection and availability checks
+  - `repo.go` - Temporary Git repository management
+  - `git.go`, `gh.go` - Git and GitHub CLI test utilities
+  - `cleanup.go` - Resource cleanup helpers
+
+Note: `mock_claude.go` is still available for unit tests but is NOT used in E2E tests.
 
 ## Writing E2E Tests
 
-### Using MockClaudeBuilder
+### Basic E2E Test Template
 
-MockClaudeBuilder creates a temporary mock Claude CLI script that simulates Claude's behavior. This is useful for testing in CI without requiring Claude API access.
-
-#### Basic Usage
+E2E tests should use the REAL Claude CLI, not mocks:
 
 ```go
 //go:build e2e
@@ -117,141 +107,95 @@ MockClaudeBuilder creates a temporary mock Claude CLI script that simulates Clau
 package e2e
 
 import (
-    "context"
-    "testing"
+	"context"
+	"testing"
+	"time"
 
-    "github.com/michael-freling/claude-code-tools/internal/workflow"
-    "github.com/michael-freling/claude-code-tools/test/e2e/helpers"
-    "github.com/stretchr/testify/assert"
-    "github.com/stretchr/testify/require"
-)
-
-func TestMyFeature_WithMockClaude(t *testing.T) {
-    // Create a mock Claude CLI that returns structured output
-    mock := helpers.NewMockClaudeBuilder(t).
-        WithStreamingResponse("Task completed", map[string]interface{}{
-            "summary": "Feature implemented",
-            "status":  "success",
-        })
-    claudePath := mock.Build()
-
-    // Use the mock in your workflow
-    logger := workflow.NewLogger(workflow.LogLevelNormal)
-    executor := workflow.NewClaudeExecutorWithPath(claudePath, logger)
-
-    ctx := context.Background()
-    result, err := executor.ExecuteStreaming(ctx, workflow.ExecuteConfig{
-        Prompt: "test prompt",
-    }, nil)
-
-    require.NoError(t, err)
-    assert.NotEmpty(t, result.Output)
-
-    // Verify what arguments were passed to Claude
-    args := mock.GetCapturedArgs()
-    assert.Contains(t, args, "--print")
-    assert.Contains(t, args, "stream-json")
-}
-```
-
-#### MockClaudeBuilder Methods
-
-```go
-// Create a new mock builder
-mock := helpers.NewMockClaudeBuilder(t)
-
-// Set response for non-streaming mode
-mock.WithResponse("Simple response text")
-
-// Set response for streaming mode with structured output
-mock.WithStreamingResponse("Result message", map[string]interface{}{
-    "key": "value",
-})
-
-// Simulate error conditions
-mock.WithExitCode(1).
-    WithStderr("Prompt is too long")
-
-// Build the mock script (returns path to executable)
-claudePath := mock.Build()
-
-// After execution, inspect captured arguments
-args := mock.GetCapturedArgs()        // All arguments
-prompt := mock.GetCapturedPrompt()    // Last argument (the prompt)
-```
-
-### Using Real Claude CLI
-
-For tests that require real Claude execution (skipped in CI):
-
-```go
-func TestRealClaude_MyFeature(t *testing.T) {
-    // Skip if Claude CLI not available
-    helpers.RequireClaude(t)
-
-    logger := workflow.NewLogger(workflow.LogLevelNormal)
-    executor := workflow.NewClaudeExecutor(logger)
-
-    ctx := context.Background()
-    result, err := executor.Execute(ctx, workflow.ExecuteConfig{
-        Prompt:  "Reply with: PONG",
-        Timeout: 30 * time.Second,
-    })
-
-    require.NoError(t, err)
-    assert.Contains(t, result.Output, "PONG")
-}
-```
-
-### Test Template
-
-```go
-//go:build e2e
-
-package e2e
-
-import (
-    "testing"
-
-    "github.com/michael-freling/claude-code-tools/test/e2e/helpers"
-    "github.com/stretchr/testify/require"
+	"github.com/michael-freling/claude-code-tools/internal/workflow"
+	"github.com/michael-freling/claude-code-tools/test/e2e/helpers"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMyFeature_E2E(t *testing.T) {
-    tests := []struct {
-        name       string
-        mockSetup  func(*helpers.MockClaudeBuilder) *helpers.MockClaudeBuilder
-        wantErr    bool
-        wantResult string
-    }{
-        {
-            name: "success case",
-            mockSetup: func(m *helpers.MockClaudeBuilder) *helpers.MockClaudeBuilder {
-                return m.WithStreamingResponse("done", map[string]string{
-                    "status": "ok",
-                })
-            },
-            wantResult: "ok",
-        },
-        {
-            name: "error case",
-            mockSetup: func(m *helpers.MockClaudeBuilder) *helpers.MockClaudeBuilder {
-                return m.WithExitCode(1).WithStderr("error occurred")
-            },
-            wantErr: true,
-        },
-    }
+	// REQUIRED: Skip if Claude not available
+	helpers.RequireClaude(t)
+	helpers.RequireGit(t)
 
-    for _, tt := range tests {
-        t.Run(tt.name, func(t *testing.T) {
-            mock := tt.mockSetup(helpers.NewMockClaudeBuilder(t))
-            claudePath := mock.Build()
+	// Create real temp repo
+	repo := helpers.NewTempRepo(t)
+	require.NoError(t, repo.CreateFile("main.go", "package main\n\nfunc main() {}\n"))
+	require.NoError(t, repo.Commit("Initial commit"))
 
-            // Your test logic here
-        })
-    }
+	// Create config with REAL Claude (no mock paths)
+	config := workflow.DefaultConfig(repo.Dir)
+	config.Timeouts.Planning = 5 * time.Minute       // Generous timeouts for real Claude
+	config.Timeouts.Implementation = 5 * time.Minute
+	config.LogLevel = workflow.LogLevelVerbose
+
+	// Mock only CI checker (temp repos don't have CI)
+	mockCI := &mockCIChecker{
+		result: &workflow.CIResult{Passed: true, Status: "success"},
+	}
+
+	// Create orchestrator with REAL Claude executor
+	orchestrator, err := workflow.NewTestOrchestrator(config, func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) workflow.CIChecker {
+		return mockCI
+	})
+	require.NoError(t, err)
+
+	// Auto-confirm to avoid interactive blocking
+	orchestrator.SetConfirmFunc(func(plan *workflow.Plan) (bool, string, error) {
+		t.Logf("Plan: %s", plan.Summary)
+		return true, "", nil
+	})
+
+	// Run workflow with REAL Claude
+	ctx := context.Background()
+	err = orchestrator.Start(ctx, "test-workflow", "Add simple function", workflow.WorkflowTypeFeature)
+	require.NoError(t, err)
+
+	// Verify results
+	state, err := orchestrator.Status("test-workflow")
+	require.NoError(t, err)
+	assert.Equal(t, workflow.PhaseCompleted, state.CurrentPhase)
 }
 ```
+
+### Key Principles for E2E Tests
+
+1. **Always use real Claude** - No MockClaudeBuilder in E2E tests
+2. **Always use `helpers.RequireClaude(t)`** - Skip when Claude not available
+3. **Keep prompts simple** - Minimize execution time and API costs
+4. **Use generous timeouts** - Real Claude is slow (30s-5min per phase)
+5. **Auto-confirm plans** - Avoid interactive blocking with `SetConfirmFunc`
+6. **Mock CI only** - Real repos don't have CI, but everything else should be real
+7. **Add helpful logging** - Use `t.Logf()` to track progress
+
+### What to Mock vs. What to Use Real
+
+**Use REAL:**
+- Claude CLI execution
+- Git operations
+- File system operations
+- Prompt generation
+- Response parsing
+- State management
+
+**Mock ONLY:**
+- CI checker (temp repos don't have real CI configured)
+
+### Test Timing Expectations
+
+Real Claude tests are SLOW:
+- Planning phase: 30s-2min
+- Implementation phase: 1-5min
+- Refactoring phase: 1-3min
+- **Total per test: 3-10min**
+
+Use simple descriptions to minimize time:
+- Good: "Add a hello function that returns 'hello'"
+- Bad: "Implement a full authentication system with JWT tokens, refresh tokens, and user management"
 
 ### Skip Functions
 
@@ -265,42 +209,60 @@ helpers.RequireGH(t)
 // Skip if gh not authenticated
 helpers.RequireGHAuth(t)
 
-// Skip if claude not available
+// Skip if claude not available (REQUIRED for E2E tests)
 helpers.RequireClaude(t)
 
 // Check claude availability without skipping
 if helpers.IsCLIAvailable() {
-    // claude is available
+	// claude is available
 }
 ```
 
 ### Best Practices
 
 1. **Always use build tags**: Start every e2e test file with `//go:build e2e`
-2. **Use MockClaudeBuilder for CI**: Write tests that can run without Claude API access
-3. **Check prerequisites**: Use `helpers.Require*` functions for real CLI tests
-4. **Table-driven tests**: Use table-driven approach for better organization
-5. **Descriptive names**: Use descriptive test and subtest names
-6. **Independence**: Each test should be independent and not rely on other tests
-7. **Verify arguments**: Use `GetCapturedArgs()` to verify correct CLI arguments
-8. **Test both modes**: Test both streaming and non-streaming execution when relevant
+2. **Use real Claude**: No MockClaudeBuilder in E2E tests
+3. **Check prerequisites**: Always use `helpers.RequireClaude(t)` at the start
+4. **Simple prompts**: Keep descriptions minimal to save time and money
+5. **Verbose logging**: Enable `LogLevelVerbose` to debug issues
+6. **Descriptive names**: Use clear test names that indicate they're real E2E tests
+7. **Independence**: Each test should be independent
+8. **Resource cleanup**: Tests automatically cleanup temp repos and worktrees
 
 ## Troubleshooting
 
 ### Tests are skipped
 
-If tests are being skipped, check that required tools are installed and in PATH:
+If tests are being skipped, check that Claude CLI is installed and in PATH:
 
 ```bash
-# Check git
-git --version
-
-# Check gh
-gh --version
-gh auth status
-
 # Check claude
 claude --version
+
+# If not found, install Claude CLI
+# See https://docs.anthropic.com/en/docs/claude-code
+```
+
+### Authentication errors
+
+If you see authentication errors:
+
+```bash
+# The Claude CLI will prompt for authentication on first use
+# Just run any claude command and follow the prompts
+claude "hello"
+```
+
+### Timeout errors
+
+Real Claude calls can be slow. If tests timeout, increase the timeout:
+
+```bash
+# Using script
+E2E_TIMEOUT=15m ./scripts/run-e2e-tests.sh
+
+# Using go test
+go test -tags=e2e -timeout=15m ./test/e2e/...
 ```
 
 ### Permission errors
@@ -313,18 +275,6 @@ ls -la /tmp
 
 # Set custom temp directory
 export TMPDIR=/path/to/writable/dir
-```
-
-### Timeout errors
-
-If tests timeout, increase the timeout:
-
-```bash
-# Using script
-E2E_TIMEOUT=5m ./scripts/run-e2e-tests.sh
-
-# Using go test
-go test -tags=e2e -timeout=5m ./test/e2e/...
 ```
 
 ### Git configuration issues
@@ -341,19 +291,31 @@ Note: The TempRepo helper automatically configures git user for each test reposi
 
 ## CI Integration
 
-E2E tests run automatically in CI via GitHub Actions. The workflow:
+**E2E tests are NOT run in CI** because they require:
+- Claude CLI authentication
+- Real API access
+- Significant time (3-10min per test)
+- API costs
 
-1. Installs Go
-2. Runs `./scripts/run-e2e-tests.sh`
-3. Uses 1-minute timeout
-4. Skips real Claude CLI tests (runs only mock-based tests)
+These tests are designed for local development and manual verification only.
 
-Mock-based tests provide fast, reliable verification without requiring Claude API credentials.
+Mock-based tests (in `internal/workflow/*_test.go`) run in CI instead and provide fast, reliable verification without requiring Claude.
 
-See `.github/workflows/go.yml` for the CI configuration.
+## Cost Considerations
+
+Each E2E test makes real API calls to Claude, which costs money:
+- Planning phase: ~1 API call
+- Implementation phase: ~1-3 API calls (can retry on CI failures)
+- Refactoring phase: ~1 API call
+
+**Minimize costs by:**
+- Using simple, minimal descriptions
+- Running tests selectively (not the full suite repeatedly)
+- Testing only when you need to verify real Claude integration
 
 ## Related Documentation
 
 - [Go Testing](https://golang.org/pkg/testing/)
 - [Build Tags](https://pkg.go.dev/cmd/go#hdr-Build_constraints)
 - [testify](https://github.com/stretchr/testify)
+- [Claude Code Documentation](https://docs.anthropic.com/en/docs/claude-code)

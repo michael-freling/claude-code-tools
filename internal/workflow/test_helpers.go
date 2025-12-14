@@ -9,6 +9,8 @@ import (
 	"github.com/michael-freling/claude-code-tools/internal/command"
 )
 
+// NewTestOrchestrator creates an orchestrator for E2E testing with a custom CI checker factory.
+// This allows E2E tests to provide a mock CI checker while using real Claude CLI and other components.
 func NewTestOrchestrator(config *Config, ciCheckerFactory func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) CIChecker) (*Orchestrator, error) {
 	if config == nil {
 		return nil, fmt.Errorf("config cannot be nil")
