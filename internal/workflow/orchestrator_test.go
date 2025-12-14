@@ -128,6 +128,11 @@ func (m *MockStateManager) SaveRawOutput(name string, phase Phase, output string
 	return args.Error(0)
 }
 
+func (m *MockStateManager) SavePrompt(name string, phase Phase, attempt int, prompt string) (string, error) {
+	args := m.Called(name, phase, attempt, prompt)
+	return args.String(0), args.Error(1)
+}
+
 // MockPromptGenerator is a mock implementation of PromptGenerator
 type MockPromptGenerator struct {
 	mock.Mock

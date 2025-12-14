@@ -43,7 +43,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.PersistentFlags().DurationVar(&timeoutImplement, "timeout-implementation", 6*time.Hour, "implementation phase timeout")
 	rootCmd.PersistentFlags().DurationVar(&timeoutRefactoring, "timeout-refactoring", 6*time.Hour, "refactoring phase timeout")
 	rootCmd.PersistentFlags().DurationVar(&timeoutPRSplit, "timeout-pr-split", 1*time.Hour, "PR split phase timeout")
-	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose output showing internal operations")
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose output with prompt debugging (prompts saved to .claude/workflow/<name>/prompts/)")
 
 	rootCmd.AddCommand(newStartCmd())
 	rootCmd.AddCommand(newListCmd())

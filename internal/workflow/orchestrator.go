@@ -335,6 +335,10 @@ func (o *Orchestrator) executePlanning(ctx context.Context, state *WorkflowState
 		Timeout:                    o.config.Timeouts.Planning,
 		JSONSchema:                 PlanSchema,
 		DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
+		Phase:                      string(PhasePlanning),
+		Attempt:                    phaseState.Attempts,
+		StateManager:               o.stateManager,
+		WorkflowName:               state.Name,
 	}, spinner.OnProgress)
 
 	if err != nil {
@@ -502,6 +506,10 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 			JSONSchema:                 ImplementationSummarySchema,
 			DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
 			WorkingDirectory:           state.WorktreePath,
+			Phase:                      string(PhaseImplementation),
+			Attempt:                    attempt,
+			StateManager:               o.stateManager,
+			WorkflowName:               state.Name,
 		}, spinner.OnProgress)
 
 		if err != nil {
@@ -668,6 +676,10 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 			JSONSchema:                 RefactoringSummarySchema,
 			DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
 			WorkingDirectory:           state.WorktreePath,
+			Phase:                      string(PhaseRefactoring),
+			Attempt:                    attempt,
+			StateManager:               o.stateManager,
+			WorkflowName:               state.Name,
 		}, spinner.OnProgress)
 
 		if err != nil {
@@ -851,6 +863,10 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 			JSONSchema:                 PRSplitPlanSchema,
 			DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
 			WorkingDirectory:           state.WorktreePath,
+			Phase:                      string(PhasePRSplit),
+			Attempt:                    attempt,
+			StateManager:               o.stateManager,
+			WorkflowName:               state.Name,
 		}, spinner.OnProgress)
 
 		if err != nil {
@@ -1029,6 +1045,10 @@ func (o *Orchestrator) executePRCreation(ctx context.Context, state *WorkflowSta
 			JSONSchema:                 PRCreationResultSchema,
 			DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
 			WorkingDirectory:           workingDir,
+			Phase:                      "CREATE_PR",
+			Attempt:                    attempt,
+			StateManager:               o.stateManager,
+			WorkflowName:               state.Name,
 		}, spinner.OnProgress)
 
 		if err != nil {
