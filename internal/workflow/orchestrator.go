@@ -126,7 +126,18 @@ func (o *Orchestrator) SetConfirmFunc(fn func(plan *Plan) (bool, string, error))
 }
 
 // Start initializes and runs a new workflow
-func (o *Orchestrator) Start(ctx context.Context, name, description string, wfType WorkflowType) error {
+func (o *Orchestrator) Start(ctx context.Context, name, description string, wfType WorkflowType, updatePR *int) error {
+	// Validate PR for update if updatePR is provided
+	if updatePR != nil {
+		prManager := NewPRManagerWithRunners(o.config.BaseDir, o.gitRunner, o.ghRunner)
+		validationResult, err := prManager.ValidatePRForUpdate(ctx, *updatePR)
+		if err != nil {
+			return fmt.Errorf("failed to validate PR #%d for update: %w", *updatePR, err)
+		}
+		o.logger.Verbose("PR #%d validated for update: branch=%s, state=%s, mergeable=%s",
+			validationResult.Number, validationResult.HeadRefName, validationResult.State, validationResult.Mergeable)
+	}
+
 	// Check if a workflow with this name already exists
 	if o.stateManager.WorkflowExists(name) {
 		existingState, err := o.stateManager.LoadState(name)
@@ -146,6 +157,17 @@ func (o *Orchestrator) Start(ctx context.Context, name, description string, wfTy
 
 	state.SplitPR = o.config.SplitPR
 
+	// Store update PR information if provided
+	if updatePR != nil {
+		prManager := NewPRManagerWithRunners(o.config.BaseDir, o.gitRunner, o.ghRunner)
+		validationResult, err := prManager.ValidatePRForUpdate(ctx, *updatePR)
+		if err != nil {
+			return fmt.Errorf("failed to validate PR #%d for update: %w", *updatePR, err)
+		}
+		state.UpdatePR = updatePR
+		state.UpdatePRBranch = validationResult.HeadRefName
+	}
+
 	if err := o.stateManager.SaveState(name, state); err != nil {
 		return fmt.Errorf("failed to save state: %w", err)
 	}
@@ -159,6 +181,17 @@ func (o *Orchestrator) Resume(ctx context.Context, name string) error {
 	state, err := o.stateManager.LoadState(name)
 	if err != nil {
 		return fmt.Errorf("failed to load workflow state: %w", err)
+	}
+
+	// Re-validate PR if in update mode
+	if state.UpdatePR != nil {
+		prManager := NewPRManagerWithRunners(o.config.BaseDir, o.gitRunner, o.ghRunner)
+		validationResult, err := prManager.ValidatePRForUpdate(ctx, *state.UpdatePR)
+		if err != nil {
+			return fmt.Errorf("failed to validate PR #%d for update on resume: %w", *state.UpdatePR, err)
+		}
+		o.logger.Verbose("PR #%d re-validated on resume: branch=%s, state=%s, mergeable=%s",
+			validationResult.Number, validationResult.HeadRefName, validationResult.State, validationResult.Mergeable)
 	}
 
 	if phaseState, ok := state.Phases[state.CurrentPhase]; ok {
@@ -450,17 +483,31 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 	}
 
 	if state.WorktreePath == "" {
-		o.logger.Verbose("Creating git worktree for workflow '%s'", state.Name)
-		worktreePath, err := o.worktreeManager.CreateWorktree(state.Name)
-		if err != nil {
-			return o.failWorkflow(state, fmt.Errorf("failed to create worktree: %w", err))
+		var worktreePath string
+		var err error
+
+		if state.UpdatePR != nil && state.UpdatePRBranch != "" {
+			o.logger.Verbose("Creating git worktree from existing branch '%s' for workflow '%s'", state.UpdatePRBranch, state.Name)
+			worktreePath, err = o.worktreeManager.CreateWorktreeFromExistingBranch(ctx, state.Name, state.UpdatePRBranch)
+			if err != nil {
+				return o.failWorkflow(state, fmt.Errorf("failed to create worktree from existing branch: %w", err))
+			}
+			o.logger.Verbose("Worktree created from existing branch at: %s", worktreePath)
+			fmt.Printf("%s Created worktree from existing branch '%s' at: %s\n", Green("✓"), state.UpdatePRBranch, worktreePath)
+		} else {
+			o.logger.Verbose("Creating git worktree for workflow '%s'", state.Name)
+			worktreePath, err = o.worktreeManager.CreateWorktree(state.Name)
+			if err != nil {
+				return o.failWorkflow(state, fmt.Errorf("failed to create worktree: %w", err))
+			}
+			o.logger.Verbose("Worktree created at: %s", worktreePath)
+			fmt.Printf("%s Created worktree at: %s\n", Green("✓"), worktreePath)
 		}
+
 		state.WorktreePath = worktreePath
-		o.logger.Verbose("Worktree created at: %s", worktreePath)
 		if err := o.stateManager.SaveState(state.Name, state); err != nil {
 			return fmt.Errorf("failed to save state with worktree path: %w", err)
 		}
-		fmt.Printf("%s Created worktree at: %s\n", Green("✓"), worktreePath)
 	}
 
 	plan, err := o.stateManager.LoadPlan(state.Name)
@@ -1006,6 +1053,12 @@ func (o *Orchestrator) getWorkingDir(state *WorkflowState) string {
 // (e.g., no commits on branch). Returns an error if PR creation fails after
 // all retry attempts.
 func (o *Orchestrator) executePRCreation(ctx context.Context, state *WorkflowState) (int, error) {
+	// Skip PR creation if we're in update mode
+	if state.UpdatePR != nil {
+		o.logger.Verbose("Skipping PR creation - in update mode for PR #%d", *state.UpdatePR)
+		return *state.UpdatePR, nil
+	}
+
 	o.logger.Verbose("Starting PR creation sub-routine")
 
 	// Get current branch name

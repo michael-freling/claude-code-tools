@@ -156,3 +156,18 @@ func (mr *MockGhRunnerMockRecorder) RunRerun(ctx, dir, runID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RunRerun", reflect.TypeOf((*MockGhRunner)(nil).RunRerun), ctx, dir, runID)
 }
+
+// ListPRs mocks base method.
+func (m *MockGhRunner) ListPRs(ctx context.Context, dir, branch string) ([]PRInfo, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListPRs", ctx, dir, branch)
+	ret0, _ := ret[0].([]PRInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListPRs indicates an expected call of ListPRs.
+func (mr *MockGhRunnerMockRecorder) ListPRs(ctx, dir, branch any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListPRs", reflect.TypeOf((*MockGhRunner)(nil).ListPRs), ctx, dir, branch)
+}

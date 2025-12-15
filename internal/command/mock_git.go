@@ -152,6 +152,20 @@ func (mr *MockGitRunnerMockRecorder) DeleteRemoteBranch(ctx, dir, branchName any
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteRemoteBranch", reflect.TypeOf((*MockGitRunner)(nil).DeleteRemoteBranch), ctx, dir, branchName)
 }
 
+// FetchBranch mocks base method.
+func (m *MockGitRunner) FetchBranch(ctx context.Context, dir, branch string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FetchBranch", ctx, dir, branch)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// FetchBranch indicates an expected call of FetchBranch.
+func (mr *MockGitRunnerMockRecorder) FetchBranch(ctx, dir, branch any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FetchBranch", reflect.TypeOf((*MockGitRunner)(nil).FetchBranch), ctx, dir, branch)
+}
+
 // GetCommits mocks base method.
 func (m *MockGitRunner) GetCommits(ctx context.Context, dir, base string) ([]Commit, error) {
 	m.ctrl.T.Helper()
@@ -211,6 +225,21 @@ func (mr *MockGitRunnerMockRecorder) Push(ctx, dir, branch any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Push", reflect.TypeOf((*MockGitRunner)(nil).Push), ctx, dir, branch)
 }
 
+// RemoteBranchExists mocks base method.
+func (m *MockGitRunner) RemoteBranchExists(ctx context.Context, dir, remote, branch string) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RemoteBranchExists", ctx, dir, remote, branch)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RemoteBranchExists indicates an expected call of RemoteBranchExists.
+func (mr *MockGitRunnerMockRecorder) RemoteBranchExists(ctx, dir, remote, branch any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoteBranchExists", reflect.TypeOf((*MockGitRunner)(nil).RemoteBranchExists), ctx, dir, remote, branch)
+}
+
 // WorktreeAdd mocks base method.
 func (m *MockGitRunner) WorktreeAdd(ctx context.Context, dir, path, branch string) error {
 	m.ctrl.T.Helper()
@@ -223,6 +252,20 @@ func (m *MockGitRunner) WorktreeAdd(ctx context.Context, dir, path, branch strin
 func (mr *MockGitRunnerMockRecorder) WorktreeAdd(ctx, dir, path, branch any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WorktreeAdd", reflect.TypeOf((*MockGitRunner)(nil).WorktreeAdd), ctx, dir, path, branch)
+}
+
+// WorktreeAddFromBase mocks base method.
+func (m *MockGitRunner) WorktreeAddFromBase(ctx context.Context, dir, path, branch, baseBranch string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WorktreeAddFromBase", ctx, dir, path, branch, baseBranch)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// WorktreeAddFromBase indicates an expected call of WorktreeAddFromBase.
+func (mr *MockGitRunnerMockRecorder) WorktreeAddFromBase(ctx, dir, path, branch, baseBranch any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WorktreeAddFromBase", reflect.TypeOf((*MockGitRunner)(nil).WorktreeAddFromBase), ctx, dir, path, branch, baseBranch)
 }
 
 // WorktreeRemove mocks base method.

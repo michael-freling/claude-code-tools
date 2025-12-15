@@ -265,6 +265,11 @@ func (m *MockWorktreeManager) CreateWorktree(workflowName string) (string, error
 	return args.String(0), args.Error(1)
 }
 
+func (m *MockWorktreeManager) CreateWorktreeFromExistingBranch(ctx context.Context, workflowName string, branchName string) (string, error) {
+	args := m.Called(ctx, workflowName, branchName)
+	return args.String(0), args.Error(1)
+}
+
 func (m *MockWorktreeManager) WorktreeExists(path string) bool {
 	args := m.Called(path)
 	return args.Bool(0)
@@ -1574,7 +1579,7 @@ func TestOrchestrator_Start(t *testing.T) {
 				logger:       NewLogger(LogLevelNormal),
 			}
 
-			err := o.Start(context.Background(), "test-workflow", "test description", WorkflowTypeFeature)
+			err := o.Start(context.Background(), "test-workflow", "test description", WorkflowTypeFeature, nil)
 
 			if tt.wantErr {
 				require.Error(t, err)

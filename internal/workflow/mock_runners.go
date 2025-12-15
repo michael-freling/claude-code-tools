@@ -114,6 +114,21 @@ func (m *MockGitRunner) GetDiffStat(ctx context.Context, dir string, base string
 	return args.String(0), args.Error(1)
 }
 
+func (m *MockGitRunner) FetchBranch(ctx context.Context, dir string, branch string) error {
+	args := m.Called(ctx, dir, branch)
+	return args.Error(0)
+}
+
+func (m *MockGitRunner) RemoteBranchExists(ctx context.Context, dir string, remote string, branch string) (bool, error) {
+	args := m.Called(ctx, dir, remote, branch)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockGitRunner) WorktreeAddFromBase(ctx context.Context, dir string, path string, branch string, baseBranch string) error {
+	args := m.Called(ctx, dir, path, branch, baseBranch)
+	return args.Error(0)
+}
+
 // MockGhRunner is a mock implementation of command.GhRunner
 type MockGhRunner struct {
 	mock.Mock
@@ -160,4 +175,48 @@ func (m *MockGhRunner) RunRerun(ctx context.Context, dir string, runID int64) er
 func (m *MockGhRunner) GetLatestRunID(ctx context.Context, dir string, prNumber int) (int64, error) {
 	args := m.Called(ctx, dir, prNumber)
 	return args.Get(0).(int64), args.Error(1)
+}
+
+func (m *MockGhRunner) ListPRs(ctx context.Context, dir string, branch string) ([]command.PRInfo, error) {
+	args := m.Called(ctx, dir, branch)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]command.PRInfo), args.Error(1)
+}
+
+// MockPRManager is a mock implementation of PRManager
+type MockPRManager struct {
+	mock.Mock
+}
+
+// Ensure MockPRManager implements PRManager
+var _ PRManager = (*MockPRManager)(nil)
+
+func (m *MockPRManager) CreatePR(ctx context.Context, title, body string) (int, error) {
+	args := m.Called(ctx, title, body)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *MockPRManager) GetCurrentBranchPR(ctx context.Context) (int, error) {
+	args := m.Called(ctx)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *MockPRManager) EnsurePR(ctx context.Context, title, body string) (int, error) {
+	args := m.Called(ctx, title, body)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *MockPRManager) PushBranch(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+func (m *MockPRManager) ValidatePRForUpdate(ctx context.Context, prNumber int) (*PRValidationResult, error) {
+	args := m.Called(ctx, prNumber)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*PRValidationResult), args.Error(1)
 }

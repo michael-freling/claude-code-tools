@@ -74,15 +74,25 @@ func createOrchestrator() (*workflow.Orchestrator, error) {
 
 func newStartCmd() *cobra.Command {
 	var workflowType string
+	var updatePR int
 
 	cmd := &cobra.Command{
 		Use:   "start <name> <description>",
 		Short: "Start a new workflow",
-		Long:  `Start a new workflow with the given name and description.`,
-		Args:  cobra.ExactArgs(2),
+		Long: `Start a new workflow with the given name and description.
+
+Examples:
+  workflow start my-feature "Add new feature"
+  workflow start my-feature "Add new feature" --update-pr 123`,
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			description := args[1]
+
+			// Validate mutual exclusivity of --update-pr and --split-pr
+			if updatePR > 0 && splitPR {
+				return fmt.Errorf("cannot use --update-pr and --split-pr together")
+			}
 
 			var wfType workflow.WorkflowType
 			switch workflowType {
@@ -100,7 +110,12 @@ func newStartCmd() *cobra.Command {
 			}
 
 			ctx := context.Background()
-			if err := orchestrator.Start(ctx, name, description, wfType); err != nil {
+			var updatePRPtr *int
+			if updatePR > 0 {
+				updatePRPtr = &updatePR
+			}
+
+			if err := orchestrator.Start(ctx, name, description, wfType, updatePRPtr); err != nil {
 				fmt.Printf("\n%s %s\n", workflow.Red("✗"), err.Error())
 				return err
 			}
@@ -111,6 +126,7 @@ func newStartCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&workflowType, "type", "", "workflow type (feature or fix)")
 	cmd.MarkFlagRequired("type")
+	cmd.Flags().IntVar(&updatePR, "update-pr", 0, "update an existing PR instead of creating a new one (PR number)")
 
 	return cmd
 }

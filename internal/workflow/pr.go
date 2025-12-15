@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -11,6 +12,15 @@ import (
 )
 
 var prNumberRegex = regexp.MustCompile(`/pull/(\d+)(?:[/?#]|$)`)
+
+// PRValidationResult contains comprehensive PR metadata for validation
+type PRValidationResult struct {
+	Number      int
+	State       string // "OPEN", "CLOSED", "MERGED"
+	HeadRefName string // The PR's branch name
+	BaseRefName string // The base branch (usually "main")
+	Mergeable   string // "MERGEABLE", "CONFLICTING", "UNKNOWN"
+}
 
 // PRManager handles PR creation and management
 type PRManager interface {
@@ -22,6 +32,8 @@ type PRManager interface {
 	EnsurePR(ctx context.Context, title, body string) (int, error)
 	// PushBranch pushes the current branch to origin
 	PushBranch(ctx context.Context) error
+	// ValidatePRForUpdate validates that a PR exists, is open, and has no conflicts
+	ValidatePRForUpdate(ctx context.Context, prNumber int) (*PRValidationResult, error)
 }
 
 // prManager implements PRManager interface
@@ -121,6 +133,33 @@ func (p *prManager) PushBranch(ctx context.Context) error {
 	}
 
 	return p.gitRunner.Push(ctx, p.workingDir, branchName)
+}
+
+// ValidatePRForUpdate validates that a PR exists, is open, and has no conflicts
+func (p *prManager) ValidatePRForUpdate(ctx context.Context, prNumber int) (*PRValidationResult, error) {
+	if prNumber <= 0 {
+		return nil, fmt.Errorf("PR number must be positive, got %d", prNumber)
+	}
+
+	jsonOutput, err := p.ghRunner.PRView(ctx, p.workingDir, "number,state,headRefName,baseRefName,mergeable", ".")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get PR info for #%d: %w", prNumber, err)
+	}
+
+	var result PRValidationResult
+	if err := json.Unmarshal([]byte(jsonOutput), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse PR info: %w", err)
+	}
+
+	if result.State != "OPEN" {
+		return nil, fmt.Errorf("PR #%d is %s, cannot update", prNumber, result.State)
+	}
+
+	if result.Mergeable == "CONFLICTING" {
+		return nil, fmt.Errorf("PR #%d has merge conflicts", prNumber)
+	}
+
+	return &result, nil
 }
 
 // extractPRNumberFromURL extracts PR number from a GitHub PR URL
