@@ -27,7 +27,6 @@ type Config struct {
 	MaxFixAttempts             int
 	LogLevel                   LogLevel
 	PersistentFailureThreshold int
-	ForceNewSession            bool
 }
 
 // PhaseTimeouts holds timeout durations for each phase
@@ -372,15 +371,6 @@ func (o *Orchestrator) executePlanning(ctx context.Context, state *WorkflowState
 
 	o.logger.Verbose("Generated planning prompt (%d characters)", len(prompt))
 
-	sessionInfo := o.sessionManager.GetSessionFromState(state)
-	var sessionID string
-	if sessionInfo != nil {
-		sessionID = sessionInfo.SessionID
-		o.logger.Verbose("Resuming session: %s (reuse count: %d)", sessionInfo.SessionID, sessionInfo.ReuseCount)
-	} else {
-		o.logger.Verbose("Starting new session")
-	}
-
 	spinner := NewStreamingSpinnerWithLogger("Analyzing codebase...", o.logger)
 	spinner.Start()
 
@@ -389,8 +379,6 @@ func (o *Orchestrator) executePlanning(ctx context.Context, state *WorkflowState
 		Timeout:                    o.config.Timeouts.Planning,
 		JSONSchema:                 PlanSchema,
 		DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
-		SessionID:                  sessionID,
-		ForceNewSession:            o.config.ForceNewSession,
 		Phase:                      string(PhasePlanning),
 		Attempt:                    phaseState.Attempts,
 		StateManager:               o.stateManager,
@@ -454,13 +442,6 @@ func (o *Orchestrator) executePlanning(ctx context.Context, state *WorkflowState
 	}
 
 	spinner.Success("Plan created")
-
-	// Parse session ID from output and update state
-	newSessionID := o.sessionManager.ParseSessionID(result.RawOutput)
-	if newSessionID != "" {
-		isNew := sessionInfo == nil || sessionInfo.SessionID != newSessionID
-		o.sessionManager.UpdateStateWithSession(state, newSessionID, isNew)
-	}
 
 	return o.transitionPhase(state, PhaseConfirmation)
 }
@@ -543,15 +524,6 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 		fmt.Printf("%s Resuming from CI failure, skipping to CI fix...\n", Yellow("⚠"))
 	}
 
-	sessionInfo := o.sessionManager.GetSessionFromState(state)
-	var sessionID string
-	if sessionInfo != nil {
-		sessionID = sessionInfo.SessionID
-		o.logger.Verbose("Resuming session: %s (reuse count: %d)", sessionInfo.SessionID, sessionInfo.ReuseCount)
-	} else {
-		o.logger.Verbose("Starting new session")
-	}
-
 	for attempt := startAttempt; attempt <= o.config.MaxFixAttempts; attempt++ {
 		phaseState.Attempts = attempt
 
@@ -578,8 +550,6 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 			JSONSchema:                 ImplementationSummarySchema,
 			DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
 			WorkingDirectory:           state.WorktreePath,
-			SessionID:                  sessionID,
-			ForceNewSession:            o.config.ForceNewSession,
 			Phase:                      string(PhaseImplementation),
 			Attempt:                    attempt,
 			StateManager:               o.stateManager,
@@ -628,14 +598,6 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 		}
 
 		spinner.Success("Implementation complete")
-
-		// Parse session ID from output and update state
-		newSessionID := o.sessionManager.ParseSessionID(result.RawOutput)
-		if newSessionID != "" {
-			isNew := sessionInfo == nil || sessionInfo.SessionID != newSessionID
-			o.sessionManager.UpdateStateWithSession(state, newSessionID, isNew)
-			sessionID = newSessionID
-		}
 
 		if err := o.stateManager.SaveState(state.Name, state); err != nil {
 			return fmt.Errorf("failed to save state: %w", err)
@@ -733,15 +695,6 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 		fmt.Printf("%s Resuming from CI failure, skipping to CI fix...\n", Yellow("⚠"))
 	}
 
-	sessionInfo := o.sessionManager.GetSessionFromState(state)
-	var sessionID string
-	if sessionInfo != nil {
-		sessionID = sessionInfo.SessionID
-		o.logger.Verbose("Resuming session: %s (reuse count: %d)", sessionInfo.SessionID, sessionInfo.ReuseCount)
-	} else {
-		o.logger.Verbose("Starting new session")
-	}
-
 	for attempt := startAttempt; attempt <= o.config.MaxFixAttempts; attempt++ {
 		phaseState.Attempts = attempt
 
@@ -768,8 +721,6 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 			JSONSchema:                 RefactoringSummarySchema,
 			DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
 			WorkingDirectory:           state.WorktreePath,
-			SessionID:                  sessionID,
-			ForceNewSession:            o.config.ForceNewSession,
 			Phase:                      string(PhaseRefactoring),
 			Attempt:                    attempt,
 			StateManager:               o.stateManager,
@@ -818,14 +769,6 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 		}
 
 		spinner.Success("Refactoring complete")
-
-		// Parse session ID from output and update state
-		newSessionID := o.sessionManager.ParseSessionID(result.RawOutput)
-		if newSessionID != "" {
-			isNew := sessionInfo == nil || sessionInfo.SessionID != newSessionID
-			o.sessionManager.UpdateStateWithSession(state, newSessionID, isNew)
-			sessionID = newSessionID
-		}
 
 		ciSpinner := NewCISpinner("Waiting for CI to complete")
 		ciSpinner.Start()
@@ -957,21 +900,20 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 			fmt.Printf("\n%s Attempt %d/%d to fix errors\n", Yellow("⚠"), attempt, o.config.MaxFixAttempts)
 		}
 
-		spinner := NewSpinner("Splitting PR into manageable pieces...")
+		spinner := NewStreamingSpinnerWithLogger("Splitting PR into manageable pieces...", o.logger)
 		spinner.Start()
 
-		result, err := o.executor.Execute(ctx, ExecuteConfig{
+		result, err := o.executor.ExecuteStreaming(ctx, ExecuteConfig{
 			Prompt:                     prompt,
 			Timeout:                    o.config.Timeouts.PRSplit,
 			JSONSchema:                 PRSplitPlanSchema,
 			DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
 			WorkingDirectory:           state.WorktreePath,
-			ForceNewSession:            true,
 			Phase:                      string(PhasePRSplit),
 			Attempt:                    attempt,
 			StateManager:               o.stateManager,
 			WorkflowName:               state.Name,
-		})
+		}, spinner.OnProgress)
 
 		if err != nil {
 			spinner.Fail("PR split failed")
@@ -1028,12 +970,6 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 		}
 
 		spinner.Success("PR split plan created")
-
-		// Parse session ID from output and update state (always new since ForceNewSession is true)
-		newSessionID := o.sessionManager.ParseSessionID(result.RawOutput)
-		if newSessionID != "" {
-			o.sessionManager.UpdateStateWithSession(state, newSessionID, true)
-		}
 
 		executionSpinner := NewStreamingSpinnerWithLogger("Creating branches and PRs...", o.logger)
 		executionSpinner.Start()
@@ -1162,15 +1098,6 @@ func (o *Orchestrator) executePRCreation(ctx context.Context, state *WorkflowSta
 		return 0, fmt.Errorf("failed to generate PR creation prompt: %w", err)
 	}
 
-	sessionInfo := o.sessionManager.GetSessionFromState(state)
-	var sessionID string
-	if sessionInfo != nil {
-		sessionID = sessionInfo.SessionID
-		o.logger.Verbose("Resuming session: %s (reuse count: %d)", sessionInfo.SessionID, sessionInfo.ReuseCount)
-	} else {
-		o.logger.Verbose("Starting new session")
-	}
-
 	var lastError string
 	for attempt := 1; attempt <= maxPRCreationAttempts; attempt++ {
 		if attempt > 1 {
@@ -1187,8 +1114,6 @@ func (o *Orchestrator) executePRCreation(ctx context.Context, state *WorkflowSta
 			JSONSchema:                 PRCreationResultSchema,
 			DangerouslySkipPermissions: o.config.DangerouslySkipPermissions,
 			WorkingDirectory:           workingDir,
-			SessionID:                  sessionID,
-			ForceNewSession:            o.config.ForceNewSession,
 			Phase:                      "CREATE_PR",
 			Attempt:                    attempt,
 			StateManager:               o.stateManager,
@@ -1221,14 +1146,6 @@ func (o *Orchestrator) executePRCreation(ctx context.Context, state *WorkflowSta
 			o.logger.Verbose("Failed to unmarshal PR creation result: %v", err)
 			lastError = fmt.Sprintf("failed to unmarshal PR creation result: %v", err)
 			continue
-		}
-
-		// Parse session ID from output and update state
-		newSessionID := o.sessionManager.ParseSessionID(result.RawOutput)
-		if newSessionID != "" {
-			isNew := sessionInfo == nil || sessionInfo.SessionID != newSessionID
-			o.sessionManager.UpdateStateWithSession(state, newSessionID, isNew)
-			sessionID = newSessionID
 		}
 
 		// Handle successful cases with early returns

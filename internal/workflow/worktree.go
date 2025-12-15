@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/michael-freling/claude-code-tools/internal/command"
@@ -70,6 +71,12 @@ func (w *worktreeManager) CreateWorktree(workflowName string) (string, error) {
 		return "", err
 	}
 
+	// Best effort: set up pre-commit hooks (non-fatal)
+	if err := w.setupPreCommitHooks(absWorktreePath); err != nil {
+		// Silently ignore errors - pre-commit setup is optional
+		_ = err
+	}
+
 	return absWorktreePath, nil
 }
 
@@ -106,6 +113,34 @@ func (w *worktreeManager) DeleteWorktree(path string) error {
 	ctx := context.Background()
 	if err := w.gitRunner.WorktreeRemove(ctx, w.baseDir, path); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+// setupPreCommitHooks installs pre-commit hooks in the worktree if pre-commit is available
+func (w *worktreeManager) setupPreCommitHooks(worktreePath string) error {
+	configPath := filepath.Join(worktreePath, ".pre-commit-config.yaml")
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		return nil
+	}
+
+	if _, err := exec.LookPath("pre-commit"); err != nil {
+		return nil
+	}
+
+	ctx := context.Background()
+
+	cmd := exec.CommandContext(ctx, "pre-commit", "install")
+	cmd.Dir = worktreePath
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to run pre-commit install: %w", err)
+	}
+
+	cmd = exec.CommandContext(ctx, "pre-commit", "install", "--hook-type", "pre-push")
+	cmd.Dir = worktreePath
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to run pre-commit install --hook-type pre-push: %w", err)
 	}
 
 	return nil

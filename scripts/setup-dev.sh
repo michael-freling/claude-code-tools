@@ -42,6 +42,10 @@ echo "goimports installed: $(which goimports)"
 echo "Installing pre-commit hooks..."
 pre-commit install
 
+# Install pre-push hooks for e2e tests (idempotent)
+echo "Installing pre-push hooks..."
+pre-commit install --hook-type pre-push
+
 # Run initial validation on all files
 echo "Running initial validation on all files..."
 if pre-commit run --all-files; then
@@ -59,3 +63,4 @@ fi
 echo ""
 echo "Development environment setup complete!"
 echo "Pre-commit hooks will now run automatically before each commit."
+echo "Pre-push hooks (e2e tests) will run automatically before each push."

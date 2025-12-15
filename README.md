@@ -159,6 +159,36 @@ generator agents --template-dir /path/to/templates golang-engineer
 generator commands -t /path/to/templates feature
 ```
 
+## Testing
+
+### Unit Tests
+
+```bash
+# Run all unit tests
+go test ./...
+
+# Run with coverage
+go test -coverprofile=coverage.txt ./...
+go tool cover -func=coverage.txt
+```
+
+### E2E Tests
+
+E2E tests use real git, gh, and claude CLI commands. They are separated using Go build tags.
+
+```bash
+# Run e2e tests using the script (recommended)
+./scripts/run-e2e-tests.sh
+
+# Run e2e tests directly
+go test -tags=e2e ./test/e2e/...
+
+# Run with verbose output
+E2E_VERBOSE=true ./scripts/run-e2e-tests.sh
+```
+
+See [test/e2e/README.md](test/e2e/README.md) for detailed e2e testing documentation.
+
 ## License
 
 MIT

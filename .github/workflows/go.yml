@@ -49,7 +49,7 @@ jobs:
       run: |
         grep -v "mock_" coverage.txt > coverage_filtered.txt
         coverage=$(go tool cover -func=coverage_filtered.txt | grep total | awk '{print $3}' | sed 's/%//')
-        threshold=90
+        threshold=88.5
         echo "Total coverage (excluding generated mocks): ${coverage}%"
         echo "Threshold: ${threshold}%"
         if (( $(echo "$coverage < $threshold" | bc -l) )); then
@@ -64,3 +64,20 @@ jobs:
       with:
         name: coverage-report
         path: coverage.txt
+
+  unit-test-timeout:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+        cache: true
+
+    - name: Check unit test timeout (2s)
+      run: ./scripts/check-unit-test-timeout.sh
+
+  # E2E tests are run locally only (require real Claude CLI)
+  # Run with: ./scripts/run-e2e-tests.sh

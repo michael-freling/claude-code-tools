@@ -32,28 +32,36 @@ func (m *mockExecutor) Execute(ctx context.Context, config ExecuteConfig) (*Exec
 	}, nil
 }
 
+func (m *mockExecutor) ExecuteStreaming(ctx context.Context, config ExecuteConfig, onProgress func(ProgressEvent)) (*ExecuteResult, error) {
+	return m.Execute(ctx, config)
+}
+
 // mockLogger is a mock implementation of Logger for testing
 type mockLogger struct {
 	level        LogLevel
+	infoCalls    []string
 	verboseCalls []string
+	debugCalls   []string
 }
 
-func (m *mockLogger) Info(format string, args ...interface{}) {}
+func (m *mockLogger) Info(format string, args ...interface{}) {
+	m.infoCalls = append(m.infoCalls, fmt.Sprintf(format, args...))
+}
 
 func (m *mockLogger) Verbose(format string, args ...interface{}) {
-	if m.level == LogLevelVerbose {
-		msg := format
-		if len(args) > 0 {
-			msg = fmt.Sprintf(format, args...)
-		}
-		m.verboseCalls = append(m.verboseCalls, msg)
+	if m.level >= LogLevelVerbose {
+		m.verboseCalls = append(m.verboseCalls, fmt.Sprintf(format, args...))
 	}
 }
 
-func (m *mockLogger) Debug(format string, args ...interface{}) {}
+func (m *mockLogger) Debug(format string, args ...interface{}) {
+	if m.level >= LogLevelDebug {
+		m.debugCalls = append(m.debugCalls, fmt.Sprintf(format, args...))
+	}
+}
 
 func (m *mockLogger) IsVerbose() bool {
-	return m.level == LogLevelVerbose
+	return m.level >= LogLevelVerbose
 }
 
 func TestNewClaudeExecutor(t *testing.T) {
@@ -1598,125 +1606,6 @@ exit 1`,
 	}
 }
 
-func TestClaudeExecutor_Execute_ForceNewSession(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	tests := []struct {
-		name            string
-		forceNewSession bool
-		wantOutput      string
-		wantErr         bool
-	}{
-		{
-			name:            "adds --force-new-session flag when ForceNewSession is true",
-			forceNewSession: true,
-			wantOutput:      "force new session enabled\n",
-			wantErr:         false,
-		},
-		{
-			name:            "does not add --force-new-session flag when ForceNewSession is false",
-			forceNewSession: false,
-			wantOutput:      "force new session disabled\n",
-			wantErr:         false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			script := `#!/bin/bash
-if [[ "$*" == *"--force-new-session"* ]]; then
-  echo "force new session enabled"
-else
-  echo "force new session disabled"
-fi
-exit 0`
-			scriptPath := filepath.Join(tmpDir, "claude-force-new-session")
-			err := os.WriteFile(scriptPath, []byte(script), 0755)
-			require.NoError(t, err)
-
-			executor := NewClaudeExecutorWithPath(scriptPath, NewLogger(LogLevelNormal))
-			ctx := context.Background()
-
-			config := ExecuteConfig{
-				Prompt:          "test prompt",
-				ForceNewSession: tt.forceNewSession,
-				Timeout:         5 * time.Second,
-			}
-
-			got, err := executor.Execute(ctx, config)
-
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-
-			require.NoError(t, err)
-			require.NotNil(t, got)
-			assert.Equal(t, tt.wantOutput, got.Output)
-			assert.Equal(t, 0, got.ExitCode)
-		})
-	}
-}
-
-func TestClaudeExecutor_ExecuteStreaming_ForceNewSession(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	tests := []struct {
-		name            string
-		forceNewSession bool
-		wantOutput      string
-		wantErr         bool
-	}{
-		{
-			name:            "adds --force-new-session flag when ForceNewSession is true in streaming",
-			forceNewSession: true,
-			wantOutput:      "force new session enabled",
-			wantErr:         false,
-		},
-		{
-			name:            "does not add --force-new-session flag when ForceNewSession is false in streaming",
-			forceNewSession: false,
-			wantOutput:      "force new session disabled",
-			wantErr:         false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			script := `#!/bin/bash
-if [[ "$*" == *"--force-new-session"* ]]; then
-  echo '{"type":"result","result":"force new session enabled","is_error":false}'
-else
-  echo '{"type":"result","result":"force new session disabled","is_error":false}'
-fi
-exit 0`
-			scriptPath := filepath.Join(tmpDir, "claude-streaming-force-new-session")
-			err := os.WriteFile(scriptPath, []byte(script), 0755)
-			require.NoError(t, err)
-
-			executor := NewClaudeExecutorWithPath(scriptPath, NewLogger(LogLevelNormal))
-			ctx := context.Background()
-
-			config := ExecuteConfig{
-				Prompt:          "test prompt",
-				ForceNewSession: tt.forceNewSession,
-				Timeout:         5 * time.Second,
-			}
-
-			got, err := executor.ExecuteStreaming(ctx, config, nil)
-
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-
-			require.NoError(t, err)
-			require.NotNil(t, got)
-			assert.Contains(t, got.Output, tt.wantOutput)
-			assert.Equal(t, 0, got.ExitCode)
-		})
-	}
-}
 func TestClaudeExecutor_logPromptIfVerbose(t *testing.T) {
 	tests := []struct {
 		name           string

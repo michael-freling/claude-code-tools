@@ -36,3 +36,11 @@ repos:
         language: system
         files: \.go$
         pass_filenames: false
+
+      - id: e2e-tests
+        name: e2e tests
+        entry: scripts/run-e2e-tests.sh
+        language: system
+        files: \.go$
+        pass_filenames: false
+        stages: [pre-push]

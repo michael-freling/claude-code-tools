@@ -13,6 +13,16 @@ import (
 	"github.com/michael-freling/claude-code-tools/internal/command"
 )
 
+const (
+	// promptLogThreshold is the character length below which prompts are logged inline.
+	// Prompts at or above this threshold show a preview with the full content saved to file.
+	promptLogThreshold = 500
+	// promptPreviewFirst is the number of characters shown from the start of long prompts.
+	promptPreviewFirst = 200
+	// promptPreviewLast is the number of characters shown from the end of long prompts.
+	promptPreviewLast = 100
+)
+
 // ClaudeExecutor interface allows mocking of Claude CLI invocation
 type ClaudeExecutor interface {
 	Execute(ctx context.Context, config ExecuteConfig) (*ExecuteResult, error)
@@ -60,8 +70,6 @@ type ExecuteConfig struct {
 	Env                        map[string]string
 	JSONSchema                 string
 	DangerouslySkipPermissions bool
-	SessionID                  string // Session ID to resume (empty for new session)
-	ForceNewSession            bool   // Force creating a new session even if SessionID is set
 	Phase                      string
 	Attempt                    int
 	StateManager               StateManager
@@ -136,28 +144,36 @@ func (e *claudeExecutor) logPromptIfVerbose(config ExecuteConfig, args []string)
 	e.logger.Verbose("Prompt%s:", context)
 
 	// Log CLI command
-	cmdLine := claudePath
+	var cmdLine strings.Builder
+	cmdLine.WriteString(claudePath)
 	for _, arg := range args {
+		cmdLine.WriteString(" ")
 		if strings.Contains(arg, " ") || strings.Contains(arg, "\n") {
-			cmdLine += fmt.Sprintf(" '%s'", strings.ReplaceAll(arg, "'", "\\'"))
+			cmdLine.WriteString("'")
+			cmdLine.WriteString(strings.ReplaceAll(arg, "'", "\\'"))
+			cmdLine.WriteString("'")
 		} else {
-			cmdLine += " " + arg
+			cmdLine.WriteString(arg)
 		}
 	}
-	e.logger.Verbose("  Command: %s", cmdLine)
+	e.logger.Verbose("  Command: %s", cmdLine.String())
 
 	// Log prompt content
 	promptLen := len(config.Prompt)
-	const shortPromptThreshold = 500
-	const previewFirstChars = 200
-	const previewLastChars = 100
 
-	if promptLen < shortPromptThreshold {
+	if promptLen < promptLogThreshold {
 		e.logger.Verbose("  Content: %s", config.Prompt)
 		return
 	}
 
-	preview := config.Prompt[:previewFirstChars] + "..." + config.Prompt[promptLen-previewLastChars:]
+	// Ensure we have enough chars for preview (firstChars + lastChars)
+	minPreviewLen := promptPreviewFirst + promptPreviewLast
+	if promptLen < minPreviewLen {
+		e.logger.Verbose("  Content (%s total): %s", formatNumber(promptLen), config.Prompt)
+		return
+	}
+
+	preview := config.Prompt[:promptPreviewFirst] + "..." + config.Prompt[promptLen-promptPreviewLast:]
 	e.logger.Verbose("  Content (preview, %s total): %s", formatNumber(promptLen), preview)
 
 	// Check prerequisites for saving prompt to file
@@ -167,6 +183,7 @@ func (e *claudeExecutor) logPromptIfVerbose(config ExecuteConfig, args []string)
 	}
 
 	// Save prompt to file for later inspection
+	// Non-critical debug feature - log error but don't fail execution
 	phase := Phase(config.Phase)
 	savedPath, err := config.StateManager.SavePrompt(config.WorkflowName, phase, config.Attempt, config.Prompt)
 	if err != nil {
@@ -200,9 +217,6 @@ func (e *claudeExecutor) Execute(ctx context.Context, config ExecuteConfig) (*Ex
 	}
 	if config.JSONSchema != "" {
 		args = append(args, "--output-format", "json", "--json-schema", config.JSONSchema)
-	}
-	if config.ForceNewSession {
-		args = append(args, "--force-new-session")
 	}
 	args = append(args, config.Prompt)
 
@@ -300,15 +314,6 @@ func (e *claudeExecutor) ExecuteStreaming(ctx context.Context, config ExecuteCon
 	}
 	if config.JSONSchema != "" {
 		args = append(args, "--json-schema", config.JSONSchema)
-	}
-	// Handle session resume vs force new session
-	if config.ForceNewSession {
-		args = append(args, "--force-new-session")
-	} else if config.SessionID != "" {
-		args = append(args, "--resume", config.SessionID)
-		if e.logger != nil {
-			e.logger.Verbose("Resuming Claude session: %s", config.SessionID)
-		}
 	}
 	args = append(args, config.Prompt)
 
