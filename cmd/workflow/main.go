@@ -113,12 +113,12 @@ Examples:
 			}
 
 			ctx := context.Background()
-			var updatePRPtr *int
+			var prNumberToUpdate *int
 			if updatePR > 0 {
-				updatePRPtr = &updatePR
+				prNumberToUpdate = &updatePR
 			}
 
-			if err := orchestrator.Start(ctx, name, description, wfType, updatePRPtr); err != nil {
+			if err := orchestrator.Start(ctx, name, description, wfType, prNumberToUpdate); err != nil {
 				fmt.Printf("\n%s %s\n", workflow.Red("✗"), err.Error())
 				return err
 			}
