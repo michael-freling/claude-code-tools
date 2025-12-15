@@ -54,12 +54,8 @@ func NewWorktreeManagerWithRunners(baseDir string, gitRunner command.GitRunner, 
 	}
 }
 
-// CreateWorktree creates a new git worktree for the workflow
-func (w *worktreeManager) CreateWorktree(workflowName string) (string, error) {
-	if workflowName == "" {
-		return "", fmt.Errorf("workflow name cannot be empty")
-	}
-
+// worktreePath returns the absolute path for a workflow's worktree
+func (w *worktreeManager) worktreePath(workflowName string) (string, error) {
 	worktreesDir := filepath.Join(w.baseDir, "..", "worktrees")
 	worktreePath := filepath.Join(worktreesDir, workflowName)
 
@@ -68,14 +64,39 @@ func (w *worktreeManager) CreateWorktree(workflowName string) (string, error) {
 		return "", fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
+	return absWorktreePath, nil
+}
+
+// ensureWorktreesDir creates the worktrees directory if it doesn't exist
+func (w *worktreeManager) ensureWorktreesDir() error {
+	worktreesDir := filepath.Join(w.baseDir, "..", "worktrees")
+
+	if _, err := os.Stat(worktreesDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(worktreesDir, 0755); err != nil {
+			return fmt.Errorf("failed to create worktrees directory: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// CreateWorktree creates a new git worktree for the workflow
+func (w *worktreeManager) CreateWorktree(workflowName string) (string, error) {
+	if workflowName == "" {
+		return "", fmt.Errorf("workflow name cannot be empty")
+	}
+
+	absWorktreePath, err := w.worktreePath(workflowName)
+	if err != nil {
+		return "", err
+	}
+
 	if w.WorktreeExists(absWorktreePath) {
 		return absWorktreePath, nil
 	}
 
-	if _, err := os.Stat(worktreesDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(worktreesDir, 0755); err != nil {
-			return "", fmt.Errorf("failed to create worktrees directory: %w", err)
-		}
+	if err := w.ensureWorktreesDir(); err != nil {
+		return "", err
 	}
 
 	branchName := fmt.Sprintf("workflow/%s", workflowName)
@@ -107,22 +128,17 @@ func (w *worktreeManager) CreateWorktreeFromExistingBranch(ctx context.Context, 
 		return "", err
 	}
 
-	worktreesDir := filepath.Join(w.baseDir, "..", "worktrees")
-	worktreePath := filepath.Join(worktreesDir, workflowName)
-
-	absWorktreePath, err := filepath.Abs(worktreePath)
+	absWorktreePath, err := w.worktreePath(workflowName)
 	if err != nil {
-		return "", fmt.Errorf("failed to get absolute path: %w", err)
+		return "", err
 	}
 
 	if err := w.checkWorktreeConflict(ctx, branchName); err != nil {
 		return "", err
 	}
 
-	if _, err := os.Stat(worktreesDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(worktreesDir, 0755); err != nil {
-			return "", fmt.Errorf("failed to create worktrees directory: %w", err)
-		}
+	if err := w.ensureWorktreesDir(); err != nil {
+		return "", err
 	}
 
 	remoteBranch := fmt.Sprintf("origin/%s", branchName)
