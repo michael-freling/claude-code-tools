@@ -1,3 +1,11 @@
+CRITICAL: Your response MUST be ONLY valid JSON. Do NOT include any markdown, explanations, analysis, or text outside the JSON object.
+DO NOT include any explanations, analysis, or markdown commentary.
+DO NOT wrap JSON in code blocks (no ```).
+Your entire response must be the raw JSON object starting with { and ending with }.
+
+IMPORTANT: The following context is for your analysis ONLY. DO NOT output any commentary about this context.
+Your ONLY output must be the JSON object following the schema at the end of this prompt.
+
 You need to split the current changes into multiple pull requests for easier review.
 
 ## Change Metrics
@@ -44,7 +52,7 @@ Use when commits touch multiple concerns. Each child PR will include specific fi
 - Best for: Mixed commits that touch multiple features
 - A file should only appear in ONE child PR
 
-## Instructions
+## Task Instructions
 1. Analyze the changes and identify logical groups
 2. Create a parent PR that will track the overall feature
 3. Split changes into child PRs that:
@@ -82,20 +90,20 @@ Ensure each child PR:
 - Unit and integration tests pass
 - The LAST child PR must pass e2e tests
 
-## Output Format
+## Required JSON Response Format
 
-You MUST output valid JSON matching this schema:
+Your entire response must be valid JSON matching this exact schema:
 
 {
-  "strategy": "commits" | "files",
+  "strategy": "commits",
   "parentTitle": "Parent PR: [overall description]",
   "parentDescription": "This PR is split into child PRs for easier review:\n- Child 1: ...\n- Child 2: ...",
   "childPRs": [
     {
       "title": "[Part 1/N] Descriptive title",
       "description": "## Summary\n...\n\n## Changes\n...",
-      "commits": ["abc123", "def456"],  // For commits strategy
-      "files": []                        // Leave empty for commits strategy
+      "commits": ["abc123", "def456"],
+      "files": []
     },
     {
       "title": "[Part 2/N] Another title",
@@ -107,8 +115,26 @@ You MUST output valid JSON matching this schema:
   "summary": "Brief explanation of why this split makes sense"
 }
 
-For "files" strategy, use files array instead:
+For "files" strategy, use files array instead of commits:
+
 {
-  "commits": [],
-  "files": ["path/to/file1.go", "path/to/file2.go"]
+  "strategy": "files",
+  "parentTitle": "Parent PR: [overall description]",
+  "parentDescription": "This PR is split into child PRs for easier review:\n- Child 1: ...\n- Child 2: ...",
+  "childPRs": [
+    {
+      "title": "[Part 1/N] Descriptive title",
+      "description": "## Summary\n...\n\n## Changes\n...",
+      "commits": [],
+      "files": ["path/to/file1.go", "path/to/file2.go"]
+    }
+  ],
+  "summary": "Brief explanation of why this split makes sense"
 }
+
+CRITICAL FINAL REMINDER:
+- Output ONLY the raw JSON object
+- NO markdown code blocks (no ```)
+- NO explanatory text before or after the JSON
+- NO conversational responses
+- Your response must start with { and end with }

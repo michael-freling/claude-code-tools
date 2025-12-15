@@ -688,3 +688,84 @@ func TestOutputParser_unmarshalJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestOutputParser_isTextOnlyResponse(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{
+			name: "detects text with markdown headers and multiple lines",
+			output: `# Summary
+
+This is a text-only response that explains the task.
+It has multiple lines and paragraphs.
+
+## Details
+
+More information here.`,
+			want: true,
+		},
+		{
+			name: "detects pure sentences without JSON",
+			output: `This is a comprehensive analysis of the feature request.
+The implementation would require several components to work together.
+Each component has its own set of dependencies and requirements.
+Additional details are provided here.`,
+			want: true,
+		},
+		{
+			name:   "returns false for text containing opening brace",
+			output: "This text has a { character in it.\nIt should not be detected as text-only.",
+			want:   false,
+		},
+		{
+			name:   "returns false for text containing opening bracket",
+			output: "This text has a [ character in it.\nIt should not be detected as text-only.",
+			want:   false,
+		},
+		{
+			name:   "returns false for short text",
+			output: "Short text.",
+			want:   false,
+		},
+		{
+			name:   "returns false for empty text",
+			output: "",
+			want:   false,
+		},
+		{
+			name:   "returns false for minimal text with few lines",
+			output: "Line 1\nLine 2",
+			want:   false,
+		},
+		{
+			name: "returns false for text without sentences or headers",
+			output: `word1
+word2
+word3
+word4`,
+			want: false,
+		},
+		{
+			name: "detects text with periods and multiple lines but no JSON",
+			output: `First sentence here.
+Second sentence continues.
+Third line with more text.
+Fourth line completes the response.`,
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewOutputParser()
+			p, ok := parser.(*outputParser)
+			require.True(t, ok)
+
+			got := p.isTextOnlyResponse(tt.output)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

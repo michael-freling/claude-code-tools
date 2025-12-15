@@ -331,7 +331,7 @@ func TestPromptGenerator_GeneratePRSplitPrompt(t *testing.T) {
 				"Add authentication",
 				"def456",
 				"Add middleware",
-				"Output Format",
+				"Required JSON Response Format",
 			},
 		},
 		{

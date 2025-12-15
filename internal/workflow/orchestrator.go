@@ -863,7 +863,7 @@ func (o *Orchestrator) executeRefactoring(ctx context.Context, state *WorkflowSt
 	return o.transitionPhase(state, PhaseCompleted)
 }
 
-// executePRSplit runs the PR split phase with error-checking loop
+// executePRSplit runs the PR split phase with error-checking loop.
 func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState) error {
 	fmt.Printf("\n%s\n", Bold(FormatPhase(PhasePRSplit, 5)))
 	fmt.Println(strings.Repeat("-", len(FormatPhase(PhasePRSplit, 5))))
@@ -912,10 +912,10 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 			fmt.Printf("\n%s Attempt %d/%d to fix errors\n", Yellow("⚠"), attempt, o.config.MaxFixAttempts)
 		}
 
-		spinner := NewStreamingSpinnerWithLogger("Splitting PR into manageable pieces...", o.logger)
+		spinner := NewSpinner("Splitting PR into manageable pieces...")
 		spinner.Start()
 
-		result, err := o.executor.ExecuteStreaming(ctx, ExecuteConfig{
+		result, err := o.executor.Execute(ctx, ExecuteConfig{
 			Prompt:                     prompt,
 			Timeout:                    o.config.Timeouts.PRSplit,
 			JSONSchema:                 PRSplitPlanSchema,
@@ -927,7 +927,7 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 			WorkflowName:               state.Name,
 			SessionID:                  sessionID,
 			ForceNewSession:            o.config.ForceNewSession,
-		}, spinner.OnProgress)
+		})
 
 		if err != nil {
 			spinner.Fail("PR split failed")
