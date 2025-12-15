@@ -89,6 +89,7 @@ type Orchestrator struct {
 	splitManager    PRSplitManager
 	ciClassifier    *CIFailureClassifier
 	sessionManager  *SessionManager
+	prManager       PRManager
 
 	// For testing - if nil, creates real checker
 	ciCheckerFactory func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) CIChecker
@@ -124,6 +125,7 @@ func NewOrchestratorWithConfig(config *Config) (*Orchestrator, error) {
 	gitRunner := command.NewGitRunner(cmdRunner)
 	splitManager := NewPRSplitManager(gitRunner, ghRunner)
 	sessionManager := NewSessionManager(logger)
+	prManager := NewPRManagerWithRunners(config.BaseDir, gitRunner, ghRunner)
 
 	return &Orchestrator{
 		stateManager:    stateManager,
@@ -139,6 +141,7 @@ func NewOrchestratorWithConfig(config *Config) (*Orchestrator, error) {
 		splitManager:    splitManager,
 		ciClassifier:    NewCIFailureClassifier(),
 		sessionManager:  sessionManager,
+		prManager:       prManager,
 	}, nil
 }
 
@@ -149,17 +152,6 @@ func (o *Orchestrator) SetConfirmFunc(fn func(plan *Plan) (bool, string, error))
 
 // Start initializes and runs a new workflow
 func (o *Orchestrator) Start(ctx context.Context, name, description string, wfType WorkflowType, updatePR *int) error {
-	// Validate PR for update if updatePR is provided
-	if updatePR != nil {
-		prManager := NewPRManagerWithRunners(o.config.BaseDir, o.gitRunner, o.ghRunner)
-		validationResult, err := prManager.ValidatePRForUpdate(ctx, *updatePR)
-		if err != nil {
-			return fmt.Errorf("failed to validate PR #%d for update: %w", *updatePR, err)
-		}
-		o.logger.Verbose("PR #%d validated for update: branch=%s, state=%s, mergeable=%s",
-			validationResult.Number, validationResult.HeadRefName, validationResult.State, validationResult.Mergeable)
-	}
-
 	// Check if a workflow with this name already exists
 	if o.stateManager.WorkflowExists(name) {
 		existingState, err := o.stateManager.LoadState(name)
@@ -181,11 +173,12 @@ func (o *Orchestrator) Start(ctx context.Context, name, description string, wfTy
 
 	// Store update PR information if provided
 	if updatePR != nil {
-		prManager := NewPRManagerWithRunners(o.config.BaseDir, o.gitRunner, o.ghRunner)
-		validationResult, err := prManager.ValidatePRForUpdate(ctx, *updatePR)
+		validationResult, err := o.prManager.ValidatePRForUpdate(ctx, *updatePR)
 		if err != nil {
 			return fmt.Errorf("failed to validate PR #%d for update: %w", *updatePR, err)
 		}
+		o.logger.Verbose("PR #%d validated for update: branch=%s, state=%s, mergeable=%s",
+			validationResult.Number, validationResult.HeadRefName, validationResult.State, validationResult.Mergeable)
 		state.UpdatePR = updatePR
 		state.UpdatePRBranch = validationResult.HeadRefName
 	}
@@ -207,8 +200,7 @@ func (o *Orchestrator) Resume(ctx context.Context, name string) error {
 
 	// Re-validate PR if in update mode
 	if state.UpdatePR != nil {
-		prManager := NewPRManagerWithRunners(o.config.BaseDir, o.gitRunner, o.ghRunner)
-		validationResult, err := prManager.ValidatePRForUpdate(ctx, *state.UpdatePR)
+		validationResult, err := o.prManager.ValidatePRForUpdate(ctx, *state.UpdatePR)
 		if err != nil {
 			return fmt.Errorf("failed to validate PR #%d for update on resume: %w", *state.UpdatePR, err)
 		}
