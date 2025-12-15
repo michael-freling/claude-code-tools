@@ -1406,12 +1406,13 @@ func TestOrchestrator_executePhase(t *testing.T) {
 				}, nil)
 				pg.On("GeneratePRSplitPrompt", mock.Anything, mock.Anything).Return("pr split prompt", nil)
 				exec.On("Execute", mock.Anything, mock.Anything).Return(&ExecuteResult{
-					Output:   "```json\n{\"strategy\":\"commits\",\"parentTitle\":\"Parent\",\"parentDescription\":\"Desc\",\"summary\":\"Split\",\"childPRs\":[]}\n```",
+					Output:   "```json\n{\"strategy\":\"commits\",\"parentTitle\":\"Parent\",\"parentDescription\":\"Desc\",\"summary\":\"Split\",\"childPRs\":[{\"title\":\"Child PR\",\"description\":\"Desc\"}]}\n```",
 					ExitCode: 0,
 				}, nil)
-				op.On("ExtractJSON", mock.Anything).Return("{\"strategy\":\"commits\",\"parentTitle\":\"Parent\",\"parentDescription\":\"Desc\",\"summary\":\"Split\",\"childPRs\":[]}", nil)
-				op.On("ParsePRSplitPlan", mock.Anything).Return(&PRSplitPlan{Strategy: SplitByCommits, ParentTitle: "Parent", ParentDesc: "Desc", Summary: "Split", ChildPRs: []ChildPRPlan{}}, nil)
+				op.On("ExtractJSON", mock.Anything).Return("{\"strategy\":\"commits\",\"parentTitle\":\"Parent\",\"parentDescription\":\"Desc\",\"summary\":\"Split\",\"childPRs\":[{\"title\":\"Child PR\",\"description\":\"Desc\"}]}", nil)
+				op.On("ParsePRSplitPlan", mock.Anything).Return(&PRSplitPlan{Strategy: SplitByCommits, ParentTitle: "Parent", ParentDesc: "Desc", Summary: "Split", ChildPRs: []ChildPRPlan{{Title: "Child PR", Description: "Desc"}}}, nil)
 				sm.On("SavePhaseOutput", "test-workflow", PhasePRSplit, mock.Anything).Return(nil)
+				ci.On("WaitForCIWithProgress", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&CIResult{Passed: true, Status: "success"}, nil)
 			},
 			wantErr: false,
 		},
@@ -1433,7 +1434,7 @@ func TestOrchestrator_executePhase(t *testing.T) {
 			if tt.phase == PhasePRSplit {
 				mockSplitMgr.On("ExecuteSplit", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&PRSplitResult{
 					ParentPR: PRInfo{Number: 1, Title: "Parent"},
-					ChildPRs: []PRInfo{},
+					ChildPRs: []PRInfo{{Number: 2, Title: "Child PR"}},
 					Summary:  "Split",
 				}, nil)
 			}
@@ -2842,11 +2843,11 @@ func TestOrchestrator_executePRSplit(t *testing.T) {
 				}, nil)
 				pg.On("GeneratePRSplitPrompt", mock.Anything, mock.Anything).Return("pr-split prompt", nil)
 				exec.On("Execute", mock.Anything, mock.Anything).Return(&ExecuteResult{
-					Output:   "```json\n{\"strategy\":\"commits\",\"parentTitle\":\"Parent\",\"parentDescription\":\"Desc\",\"summary\":\"split complete\",\"childPRs\":[]}\n```",
+					Output:   "```json\n{\"strategy\":\"commits\",\"parentTitle\":\"Parent\",\"parentDescription\":\"Desc\",\"summary\":\"split complete\",\"childPRs\":[{\"title\":\"Child PR\",\"description\":\"Desc\"}]}\n```",
 					ExitCode: 0,
 				}, nil)
-				op.On("ExtractJSON", mock.Anything).Return("{\"strategy\":\"commits\",\"parentTitle\":\"Parent\",\"parentDescription\":\"Desc\",\"summary\":\"split complete\",\"childPRs\":[]}", nil)
-				op.On("ParsePRSplitPlan", mock.Anything).Return(&PRSplitPlan{Strategy: SplitByCommits, ParentTitle: "Parent", ParentDesc: "Desc", Summary: "split complete", ChildPRs: []ChildPRPlan{}}, nil)
+				op.On("ExtractJSON", mock.Anything).Return("{\"strategy\":\"commits\",\"parentTitle\":\"Parent\",\"parentDescription\":\"Desc\",\"summary\":\"split complete\",\"childPRs\":[{\"title\":\"Child PR\",\"description\":\"Desc\"}]}", nil)
+				op.On("ParsePRSplitPlan", mock.Anything).Return(&PRSplitPlan{Strategy: SplitByCommits, ParentTitle: "Parent", ParentDesc: "Desc", Summary: "split complete", ChildPRs: []ChildPRPlan{{Title: "Child PR", Description: "Desc"}}}, nil)
 				sm.On("SavePhaseOutput", "test-workflow", PhasePRSplit, mock.Anything).Return(nil)
 			},
 			wantErr:       false,
@@ -2876,7 +2877,7 @@ func TestOrchestrator_executePRSplit(t *testing.T) {
 			if tt.name == "successfully splits PR" {
 				mockSplitMgr.On("ExecuteSplit", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&PRSplitResult{
 					ParentPR: PRInfo{Number: 1, Title: "Parent"},
-					ChildPRs: []PRInfo{},
+					ChildPRs: []PRInfo{{Number: 2, Title: "Child PR"}},
 					Summary:  "split complete",
 				}, nil)
 			}
@@ -2891,6 +2892,14 @@ func TestOrchestrator_executePRSplit(t *testing.T) {
 				splitManager:    mockSplitMgr,
 				config:          DefaultConfig("/tmp/workflows"),
 				logger:          NewLogger(LogLevelNormal),
+				ciCheckerFactory: func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) CIChecker {
+					mockCI := new(MockCIChecker)
+					mockCI.On("WaitForCIWithProgress", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&CIResult{
+						Passed: true,
+						Status: "success",
+					}, nil)
+					return mockCI
+				},
 			}
 
 			metrics := &PRMetrics{
@@ -5201,6 +5210,313 @@ func TestOrchestrator_executePRSplit_PromptTooLong(t *testing.T) {
 			mockGR.AssertExpectations(t)
 		})
 	}
+}
+
+func TestOrchestrator_executePRSplit_EmptyChildPRsRetry(t *testing.T) {
+	tests := []struct {
+		name            string
+		setupMocks      func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockOutputParser, *MockGitRunner)
+		wantErr         bool
+		wantPhase       Phase
+		wantFeedbackLen int
+		wantAttempts    int
+	}{
+		{
+			name: "retries on empty childPRs and succeeds on second attempt",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, gr *MockGitRunner) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil).Times(3)
+				gr.On("GetCurrentBranch", mock.Anything, "/tmp/worktree").Return("test-branch", nil)
+				gr.On("GetCommits", mock.Anything, "/tmp/worktree", "main").Return([]command.Commit{
+					{Hash: "abc123", Subject: "feat: add feature"},
+				}, nil)
+
+				// First attempt: GeneratePRSplitPrompt
+				pg.On("GeneratePRSplitPrompt", mock.Anything, mock.Anything).Return("pr split prompt", nil).Once()
+
+				// First execution returns empty childPRs
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.Prompt == "pr split prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`,
+					ExitCode: 0,
+				}, nil).Once()
+
+				// First extraction succeeds
+				op.On("ExtractJSON", `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`).
+					Return(`{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`, nil).Once()
+
+				// First parse fails with empty childPRs error
+				op.On("ParsePRSplitPlan", `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`).
+					Return((*PRSplitPlan)(nil), fmt.Errorf("%w: %w", ErrEmptyChildPRs, ErrParseJSON)).Once()
+
+				// SaveRawOutput is called after parse failure
+				sm.On("SaveRawOutput", "test-workflow", PhasePRSplit, `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`).Return(nil).Once()
+				sm.On("WorkflowDir", "test-workflow").Return("/tmp/workflows/test-workflow")
+
+				// Second attempt: GenerateFixCIPrompt
+				pg.On("GenerateFixCIPrompt", feedbackEmptyChildPRs).Return("fix prompt", nil).Once()
+
+				// Second execution returns valid childPRs
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+					return config.Prompt == "fix prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[{"title":"Child PR","description":"Desc"}]}`,
+					ExitCode: 0,
+				}, nil).Once()
+
+				// Second extraction succeeds
+				op.On("ExtractJSON", `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[{"title":"Child PR","description":"Desc"}]}`).
+					Return(`{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[{"title":"Child PR","description":"Desc"}]}`, nil).Once()
+
+				// Second parse succeeds
+				op.On("ParsePRSplitPlan", `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[{"title":"Child PR","description":"Desc"}]}`).
+					Return(&PRSplitPlan{
+						Strategy:    SplitByCommits,
+						ParentTitle: "Parent",
+						ParentDesc:  "Desc",
+						Summary:     "Split",
+						ChildPRs:    []ChildPRPlan{{Title: "Child PR", Description: "Desc"}},
+					}, nil).Once()
+
+				sm.On("SavePhaseOutput", "test-workflow", PhasePRSplit, mock.Anything).Return(nil)
+			},
+			wantErr:         false,
+			wantPhase:       PhaseCompleted,
+			wantFeedbackLen: 1,
+			wantAttempts:    2,
+		},
+		{
+			name: "fails after max attempts with empty childPRs",
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser, gr *MockGitRunner) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				gr.On("GetCurrentBranch", mock.Anything, "/tmp/worktree").Return("test-branch", nil)
+				gr.On("GetCommits", mock.Anything, "/tmp/worktree", "main").Return([]command.Commit{
+					{Hash: "abc123", Subject: "feat: add feature"},
+				}, nil)
+
+				// First attempt
+				pg.On("GeneratePRSplitPrompt", mock.Anything, mock.Anything).Return("pr split prompt", nil).Once()
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
+					Output:   `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`,
+					ExitCode: 0,
+				}, nil).Times(2)
+
+				op.On("ExtractJSON", mock.Anything).Return(`{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`, nil).Times(2)
+				op.On("ParsePRSplitPlan", mock.Anything).Return((*PRSplitPlan)(nil), fmt.Errorf("%w: %w", ErrEmptyChildPRs, ErrParseJSON)).Times(2)
+
+				sm.On("SaveRawOutput", "test-workflow", PhasePRSplit, mock.Anything).Return(nil).Times(2)
+				sm.On("WorkflowDir", "test-workflow").Return("/tmp/workflows/test-workflow")
+
+				// Second attempt
+				pg.On("GenerateFixCIPrompt", mock.Anything).Return("fix prompt", nil).Once()
+			},
+			wantErr:         true,
+			wantPhase:       PhaseFailed,
+			wantFeedbackLen: 2,
+			wantAttempts:    2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSM := new(MockStateManager)
+			mockExec := new(MockClaudeExecutor)
+			mockPG := new(MockPromptGenerator)
+			mockOP := new(MockOutputParser)
+			mockGR := new(MockGitRunner)
+			mockSplitMgr := new(MockPRSplitManager)
+
+			tt.setupMocks(mockSM, mockExec, mockPG, mockOP, mockGR)
+
+			if tt.name == "retries on empty childPRs and succeeds on second attempt" {
+				mockSplitMgr.On("ExecuteSplit", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&PRSplitResult{
+					ParentPR: PRInfo{Number: 1, Title: "Parent"},
+					ChildPRs: []PRInfo{{Number: 2, Title: "Child PR"}},
+					Summary:  "Split",
+				}, nil)
+			}
+
+			config := DefaultConfig("/tmp/workflows")
+			config.MaxFixAttempts = 2
+
+			o := &Orchestrator{
+				stateManager:    mockSM,
+				executor:        mockExec,
+				promptGenerator: mockPG,
+				parser:          mockOP,
+				gitRunner:       mockGR,
+				splitManager:    mockSplitMgr,
+				config:          config,
+				logger:          NewLogger(LogLevelNormal),
+				ciCheckerFactory: func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) CIChecker {
+					mockCI := new(MockCIChecker)
+					mockCI.On("WaitForCIWithProgress", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&CIResult{
+						Passed: true,
+						Status: "success",
+					}, nil)
+					return mockCI
+				},
+			}
+
+			state := &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test description",
+				CurrentPhase: PhasePRSplit,
+				WorktreePath: "/tmp/worktree",
+				Phases: map[Phase]*PhaseState{
+					PhasePRSplit: {
+						Status:  StatusInProgress,
+						Metrics: &PRMetrics{LinesChanged: 100, FilesChanged: 10},
+					},
+				},
+			}
+
+			err := o.executePRSplit(context.Background(), state)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "empty childPRs error")
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, tt.wantPhase, state.CurrentPhase)
+			assert.Equal(t, tt.wantAttempts, state.Phases[PhasePRSplit].Attempts)
+			assert.Len(t, state.Phases[PhasePRSplit].Feedback, tt.wantFeedbackLen)
+			if tt.wantFeedbackLen > 0 {
+				assert.Contains(t, state.Phases[PhasePRSplit].Feedback[0], "empty childPRs array")
+			}
+
+			mockSM.AssertExpectations(t)
+			mockExec.AssertExpectations(t)
+			mockPG.AssertExpectations(t)
+			mockOP.AssertExpectations(t)
+			mockGR.AssertExpectations(t)
+		})
+	}
+}
+
+func TestOrchestrator_ParsePRSplitPlan_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		jsonStr string
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "accepts exactly one child PR",
+			jsonStr: `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[{"title":"Child PR","description":"Desc"}]}`,
+			wantErr: false,
+		},
+		{
+			name:    "rejects empty childPRs array",
+			jsonStr: `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`,
+			wantErr: true,
+			errMsg:  "plan must have at least one child PR",
+		},
+		{
+			name:    "accepts multiple child PRs",
+			jsonStr: `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[{"title":"Child 1","description":"Desc 1"},{"title":"Child 2","description":"Desc 2"}]}`,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewOutputParser()
+			plan, err := parser.ParsePRSplitPlan(tt.jsonStr)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+				assert.Nil(t, plan)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, plan)
+				assert.NotEmpty(t, plan.ChildPRs)
+			}
+		})
+	}
+}
+
+func TestOrchestrator_executePRSplit_FeedbackMessage(t *testing.T) {
+	mockSM := new(MockStateManager)
+	mockExec := new(MockClaudeExecutor)
+	mockPG := new(MockPromptGenerator)
+	mockOP := new(MockOutputParser)
+	mockGR := new(MockGitRunner)
+
+	mockSM.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+	mockGR.On("GetCurrentBranch", mock.Anything, "/tmp/worktree").Return("test-branch", nil)
+	mockGR.On("GetCommits", mock.Anything, "/tmp/worktree", "main").Return([]command.Commit{
+		{Hash: "abc123", Subject: "feat: add feature"},
+	}, nil)
+
+	mockPG.On("GeneratePRSplitPrompt", mock.Anything, mock.Anything).Return("pr split prompt", nil).Once()
+	mockExec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
+		Output:   `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`,
+		ExitCode: 0,
+	}, nil).Once()
+
+	mockOP.On("ExtractJSON", mock.Anything).Return(`{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`, nil).Once()
+	mockOP.On("ParsePRSplitPlan", mock.Anything).Return((*PRSplitPlan)(nil), fmt.Errorf("%w: %w", ErrEmptyChildPRs, ErrParseJSON)).Once()
+
+	mockSM.On("SaveRawOutput", "test-workflow", PhasePRSplit, mock.Anything).Return(nil).Once()
+	mockSM.On("WorkflowDir", "test-workflow").Return("/tmp/workflows/test-workflow")
+
+	mockPG.On("GenerateFixCIPrompt", mock.Anything).Return("fix prompt", nil).Once()
+	mockExec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
+		Output:   `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`,
+		ExitCode: 0,
+	}, nil).Once()
+
+	mockOP.On("ExtractJSON", mock.Anything).Return(`{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`, nil).Once()
+	mockOP.On("ParsePRSplitPlan", mock.Anything).Return((*PRSplitPlan)(nil), fmt.Errorf("%w: %w", ErrEmptyChildPRs, ErrParseJSON)).Once()
+	mockSM.On("SaveRawOutput", "test-workflow", PhasePRSplit, mock.Anything).Return(nil).Once()
+
+	config := DefaultConfig("/tmp/workflows")
+	config.MaxFixAttempts = 2
+
+	o := &Orchestrator{
+		stateManager:    mockSM,
+		executor:        mockExec,
+		promptGenerator: mockPG,
+		parser:          mockOP,
+		gitRunner:       mockGR,
+		config:          config,
+		logger:          NewLogger(LogLevelNormal),
+	}
+
+	state := &WorkflowState{
+		Name:         "test-workflow",
+		Type:         WorkflowTypeFeature,
+		Description:  "test description",
+		CurrentPhase: PhasePRSplit,
+		WorktreePath: "/tmp/worktree",
+		Phases: map[Phase]*PhaseState{
+			PhasePRSplit: {
+				Status:  StatusInProgress,
+				Metrics: &PRMetrics{LinesChanged: 100, FilesChanged: 10},
+			},
+		},
+	}
+
+	err := o.executePRSplit(context.Background(), state)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty childPRs error")
+
+	assert.Len(t, state.Phases[PhasePRSplit].Feedback, 2)
+	assert.Contains(t, state.Phases[PhasePRSplit].Feedback[0], "Your plan has an empty childPRs array")
+	assert.Contains(t, state.Phases[PhasePRSplit].Feedback[0], "You MUST create at least one child PR")
+	assert.Contains(t, state.Phases[PhasePRSplit].Feedback[0], "If the changes are too small to split, create a single child PR containing all the changes")
+
+	mockSM.AssertExpectations(t)
+	mockExec.AssertExpectations(t)
+	mockPG.AssertExpectations(t)
+	mockOP.AssertExpectations(t)
+	mockGR.AssertExpectations(t)
 }
 
 func TestOrchestrator_executePRCreation_PromptTooLong(t *testing.T) {

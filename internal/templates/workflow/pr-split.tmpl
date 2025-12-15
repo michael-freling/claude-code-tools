@@ -61,6 +61,18 @@ Use when commits touch multiple concerns. Each child PR will include specific fi
    - Can be merged sequentially
    - Each address a specific aspect of the change
 
+## CRITICAL REQUIREMENTS
+
+IMPORTANT: The following requirements are MANDATORY and must be followed:
+
+1. The plan MUST include at least ONE child PR in the childPRs array
+2. NEVER return an empty childPRs array
+3. If the changes are too small to logically split into multiple PRs:
+   - Create a SINGLE child PR containing all the changes
+   - Use strategy "commits" and include all commit hashes
+   - Title it "[Part 1/1] <descriptive title>"
+   - This is the correct approach rather than returning empty childPRs
+
 ## Guidelines for Splitting
 - Each child PR should be independently reviewable
 - Child PRs are chained: Child 2 is based on Child 1, Child 3 on Child 2, etc.
@@ -94,6 +106,8 @@ Ensure each child PR:
 
 Your entire response must be valid JSON matching this exact schema:
 
+IMPORTANT: The childPRs array MUST contain at least ONE child PR. Never return an empty array.
+
 {
   "strategy": "commits",
   "parentTitle": "Parent PR: [overall description]",
@@ -115,8 +129,9 @@ Your entire response must be valid JSON matching this exact schema:
   "summary": "Brief explanation of why this split makes sense"
 }
 
-For "files" strategy, use files array instead of commits:
+Minimum requirement: childPRs array MUST have at least 1 element.
 
+For "files" strategy, use files array instead of commits:
 {
   "strategy": "files",
   "parentTitle": "Parent PR: [overall description]",

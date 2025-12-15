@@ -332,6 +332,10 @@ func TestPromptGenerator_GeneratePRSplitPrompt(t *testing.T) {
 				"def456",
 				"Add middleware",
 				"Required JSON Response Format",
+				"CRITICAL REQUIREMENTS",
+				"NEVER return an empty childPRs array",
+				"childPRs array MUST contain at least ONE child PR",
+				"childPRs array MUST have at least 1 element",
 			},
 		},
 		{
@@ -373,6 +377,23 @@ func TestPromptGenerator_GeneratePRSplitPrompt(t *testing.T) {
 				"file2.go",
 				"ghi789",
 				"Add new files",
+			},
+		},
+		{
+			name: "prompt includes fallback guidance for small changes",
+			metrics: &PRMetrics{
+				LinesChanged: 50,
+				FilesChanged: 2,
+			},
+			commits: []command.Commit{
+				{Hash: "abc123", Subject: "Small fix"},
+			},
+			wantErr: false,
+			wantContain: []string{
+				"If the changes are too small to logically split into multiple PRs",
+				"Create a SINGLE child PR containing all the changes",
+				"[Part 1/1]",
+				"This is the correct approach rather than returning empty childPRs",
 			},
 		},
 	}

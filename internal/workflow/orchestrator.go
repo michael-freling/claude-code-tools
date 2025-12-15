@@ -14,6 +14,10 @@ import (
 	"github.com/michael-freling/claude-code-tools/internal/command"
 )
 
+const (
+	feedbackEmptyChildPRs = "Your plan has an empty childPRs array. You MUST create at least one child PR. If the changes are too small to split, create a single child PR containing all the changes."
+)
+
 // Config holds configuration for the orchestrator
 type Config struct {
 	BaseDir                    string
@@ -960,6 +964,26 @@ func (o *Orchestrator) executePRSplit(ctx context.Context, state *WorkflowState)
 			} else {
 				fmt.Printf("%s Raw output saved to: %s/phases/pr_split_raw.txt\n", Yellow("Debug:"), o.stateManager.WorkflowDir(state.Name))
 			}
+
+			// Check if this is the empty childPRs error
+			if errors.Is(err, ErrEmptyChildPRs) {
+				// Save feedback and continue retry loop
+				phaseState.Feedback = append(phaseState.Feedback, feedbackEmptyChildPRs)
+				if saveErr := o.stateManager.SaveState(state.Name, state); saveErr != nil {
+					return fmt.Errorf("failed to save state: %w", saveErr)
+				}
+
+				// Check if we've exhausted max attempts
+				if attempt == o.config.MaxFixAttempts {
+					return o.failWorkflow(state, fmt.Errorf("exceeded maximum fix attempts (%d) with empty childPRs error. Last output saved to %s/phases/pr_split_raw.txt", o.config.MaxFixAttempts, o.stateManager.WorkflowDir(state.Name)))
+				}
+
+				// Continue to next attempt
+				lastError = feedbackEmptyChildPRs
+				continue
+			}
+
+			// For other parse errors, fail immediately
 			return o.failWorkflow(state, fmt.Errorf("failed to parse PR split plan: %w", err))
 		}
 

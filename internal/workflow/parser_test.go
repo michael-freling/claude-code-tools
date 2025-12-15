@@ -442,6 +442,18 @@ func TestOutputParser_ParsePRSplitPlan(t *testing.T) {
 			errContains: "missing required field",
 		},
 		{
+			name: "returns error for empty childPRs array",
+			jsonStr: `{
+				"strategy": "commits",
+				"parentTitle": "Parent PR Title",
+				"parentDescription": "Parent PR Description",
+				"childPRs": [],
+				"summary": "Test summary"
+			}`,
+			wantErr:     true,
+			errContains: "plan must have at least one child PR",
+		},
+		{
 			name:        "returns error for empty object",
 			jsonStr:     "{}",
 			wantErr:     true,
