@@ -2039,19 +2039,23 @@ func TestOrchestrator_List(t *testing.T) {
 func TestOrchestrator_Clean(t *testing.T) {
 	tests := []struct {
 		name       string
-		setupMocks func(*MockStateManager)
+		setupMocks func(*MockStateManager, *MockWorktreeManager)
 		want       []string
 		wantErr    bool
 	}{
 		{
 			name: "successfully cleans completed workflows",
-			setupMocks: func(sm *MockStateManager) {
+			setupMocks: func(sm *MockStateManager, wm *MockWorktreeManager) {
 				workflows := []WorkflowInfo{
 					{Name: "workflow-1", Status: "completed"},
 					{Name: "workflow-2", Status: "in_progress"},
 					{Name: "workflow-3", Status: "completed"},
 				}
 				sm.On("ListWorkflows").Return(workflows, nil)
+				sm.On("LoadState", "workflow-1").Return(&WorkflowState{WorktreePath: "/tmp/worktrees/workflow-1"}, nil)
+				sm.On("LoadState", "workflow-3").Return(&WorkflowState{WorktreePath: "/tmp/worktrees/workflow-3"}, nil)
+				wm.On("DeleteWorktree", "/tmp/worktrees/workflow-1").Return(nil)
+				wm.On("DeleteWorktree", "/tmp/worktrees/workflow-3").Return(nil)
 				sm.On("DeleteWorkflow", "workflow-1").Return(nil)
 				sm.On("DeleteWorkflow", "workflow-3").Return(nil)
 			},
@@ -2060,7 +2064,7 @@ func TestOrchestrator_Clean(t *testing.T) {
 		},
 		{
 			name: "returns error when ListWorkflows fails",
-			setupMocks: func(sm *MockStateManager) {
+			setupMocks: func(sm *MockStateManager, wm *MockWorktreeManager) {
 				sm.On("ListWorkflows").Return([]WorkflowInfo(nil), errors.New("list failed"))
 			},
 			want:    nil,
@@ -2068,16 +2072,47 @@ func TestOrchestrator_Clean(t *testing.T) {
 		},
 		{
 			name: "continues on delete error and deletes other workflows",
-			setupMocks: func(sm *MockStateManager) {
+			setupMocks: func(sm *MockStateManager, wm *MockWorktreeManager) {
 				workflows := []WorkflowInfo{
 					{Name: "workflow-1", Status: "completed"},
 					{Name: "workflow-2", Status: "completed"},
 				}
 				sm.On("ListWorkflows").Return(workflows, nil)
+				sm.On("LoadState", "workflow-1").Return(&WorkflowState{WorktreePath: "/tmp/worktrees/workflow-1"}, nil)
+				sm.On("LoadState", "workflow-2").Return(&WorkflowState{WorktreePath: "/tmp/worktrees/workflow-2"}, nil)
+				wm.On("DeleteWorktree", "/tmp/worktrees/workflow-1").Return(nil)
+				wm.On("DeleteWorktree", "/tmp/worktrees/workflow-2").Return(nil)
 				sm.On("DeleteWorkflow", "workflow-1").Return(errors.New("delete failed"))
 				sm.On("DeleteWorkflow", "workflow-2").Return(nil)
 			},
 			want:    []string{"workflow-2"},
+			wantErr: false,
+		},
+		{
+			name: "continues when LoadState fails",
+			setupMocks: func(sm *MockStateManager, wm *MockWorktreeManager) {
+				workflows := []WorkflowInfo{
+					{Name: "workflow-1", Status: "completed"},
+				}
+				sm.On("ListWorkflows").Return(workflows, nil)
+				sm.On("LoadState", "workflow-1").Return(nil, errors.New("load state failed"))
+				sm.On("DeleteWorkflow", "workflow-1").Return(nil)
+			},
+			want:    []string{"workflow-1"},
+			wantErr: false,
+		},
+		{
+			name: "continues when DeleteWorktree fails",
+			setupMocks: func(sm *MockStateManager, wm *MockWorktreeManager) {
+				workflows := []WorkflowInfo{
+					{Name: "workflow-1", Status: "completed"},
+				}
+				sm.On("ListWorkflows").Return(workflows, nil)
+				sm.On("LoadState", "workflow-1").Return(&WorkflowState{WorktreePath: "/tmp/worktrees/workflow-1"}, nil)
+				wm.On("DeleteWorktree", "/tmp/worktrees/workflow-1").Return(errors.New("delete worktree failed"))
+				sm.On("DeleteWorkflow", "workflow-1").Return(nil)
+			},
+			want:    []string{"workflow-1"},
 			wantErr: false,
 		},
 	}
@@ -2085,12 +2120,14 @@ func TestOrchestrator_Clean(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockSM := new(MockStateManager)
-			tt.setupMocks(mockSM)
+			mockWM := new(MockWorktreeManager)
+			tt.setupMocks(mockSM, mockWM)
 
 			o := &Orchestrator{
-				ciClassifier: NewCIFailureClassifier(),
-				stateManager: mockSM,
-				logger:       NewLogger(LogLevelNormal),
+				ciClassifier:    NewCIFailureClassifier(),
+				stateManager:    mockSM,
+				worktreeManager: mockWM,
+				logger:          NewLogger(LogLevelNormal),
 			}
 
 			got, err := o.Clean()
@@ -2103,6 +2140,7 @@ func TestOrchestrator_Clean(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 			mockSM.AssertExpectations(t)
+			mockWM.AssertExpectations(t)
 		})
 	}
 }
@@ -3136,34 +3174,56 @@ func TestOrchestrator_Status(t *testing.T) {
 func TestOrchestrator_Delete(t *testing.T) {
 	tests := []struct {
 		name       string
-		setupMocks func(*MockStateManager)
+		setupMocks func(*MockStateManager, *MockWorktreeManager)
 		wantErr    bool
 	}{
 		{
 			name: "successfully deletes workflow",
-			setupMocks: func(sm *MockStateManager) {
+			setupMocks: func(sm *MockStateManager, wm *MockWorktreeManager) {
+				sm.On("LoadState", "test-workflow").Return(&WorkflowState{WorktreePath: "/tmp/worktrees/test-workflow"}, nil)
+				wm.On("DeleteWorktree", "/tmp/worktrees/test-workflow").Return(nil)
 				sm.On("DeleteWorkflow", "test-workflow").Return(nil)
 			},
 			wantErr: false,
 		},
 		{
 			name: "fails when workflow not found",
-			setupMocks: func(sm *MockStateManager) {
+			setupMocks: func(sm *MockStateManager, wm *MockWorktreeManager) {
+				sm.On("LoadState", "test-workflow").Return(nil, ErrWorkflowNotFound)
 				sm.On("DeleteWorkflow", "test-workflow").Return(ErrWorkflowNotFound)
 			},
 			wantErr: true,
+		},
+		{
+			name: "continues when LoadState fails",
+			setupMocks: func(sm *MockStateManager, wm *MockWorktreeManager) {
+				sm.On("LoadState", "test-workflow").Return(nil, errors.New("load state failed"))
+				sm.On("DeleteWorkflow", "test-workflow").Return(nil)
+			},
+			wantErr: false,
+		},
+		{
+			name: "continues when DeleteWorktree fails",
+			setupMocks: func(sm *MockStateManager, wm *MockWorktreeManager) {
+				sm.On("LoadState", "test-workflow").Return(&WorkflowState{WorktreePath: "/tmp/worktrees/test-workflow"}, nil)
+				wm.On("DeleteWorktree", "/tmp/worktrees/test-workflow").Return(errors.New("delete worktree failed"))
+				sm.On("DeleteWorkflow", "test-workflow").Return(nil)
+			},
+			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockSM := new(MockStateManager)
-			tt.setupMocks(mockSM)
+			mockWM := new(MockWorktreeManager)
+			tt.setupMocks(mockSM, mockWM)
 
 			o := &Orchestrator{
-				ciClassifier: NewCIFailureClassifier(),
-				stateManager: mockSM,
-				logger:       NewLogger(LogLevelNormal),
+				ciClassifier:    NewCIFailureClassifier(),
+				stateManager:    mockSM,
+				worktreeManager: mockWM,
+				logger:          NewLogger(LogLevelNormal),
 			}
 
 			err := o.Delete("test-workflow")
@@ -3175,6 +3235,7 @@ func TestOrchestrator_Delete(t *testing.T) {
 
 			require.NoError(t, err)
 			mockSM.AssertExpectations(t)
+			mockWM.AssertExpectations(t)
 		})
 	}
 }
