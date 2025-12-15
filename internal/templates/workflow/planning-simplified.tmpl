@@ -1,0 +1,42 @@
+You are analyzing a codebase to create an implementation plan.
+
+## Task
+Type: {{.Type}}
+Description: {{.Description}}
+{{if .Feedback}}
+Previous feedback: {{range .Feedback}}{{.}} {{end}}
+{{end}}
+
+## Instructions
+1. Use Task tool with subagent_type "Explore" to analyze codebase
+2. Use Task tool with subagent_type "software-architect" to design approach
+3. Output plan as JSON
+
+## Output Format
+{
+  "summary": "One paragraph summary",
+  "contextType": "{{.Type}}",
+  "architecture": {
+    "overview": "High-level approach",
+    "components": ["key", "components"]
+  },
+  "phases": [
+    {
+      "name": "Phase name",
+      "description": "What this accomplishes",
+      "estimatedFiles": 5,
+      "estimatedLines": 100
+    }
+  ],
+  "workStreams": [
+    {
+      "name": "Work stream name",
+      "tasks": ["task 1", "task 2"],
+      "dependsOn": []
+    }
+  ],
+  "risks": ["risk 1"],
+  "complexity": "small|medium|large",
+  "estimatedTotalLines": 300,
+  "estimatedTotalFiles": 10
+}

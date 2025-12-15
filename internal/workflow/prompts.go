@@ -26,6 +26,10 @@ type PromptGenerator interface {
 	GeneratePRSplitPrompt(metrics *PRMetrics, commits []command.Commit) (string, error)
 	GenerateFixCIPrompt(failures string) (string, error)
 	GenerateCreatePRPrompt(ctx *PRCreationContext) (string, error)
+	GenerateSimplifiedPlanningPrompt(req FeatureRequest, attempt int) (string, error)
+	GenerateSimplifiedImplementationPrompt(ctx *WorkflowContext, workStream WorkStream, attempt int) (string, error)
+	GenerateSimplifiedRefactoringPrompt(ctx *WorkflowContext, attempt int) (string, error)
+	GenerateSimplifiedPRSplitPrompt(ctx *WorkflowContext, attempt int) (string, error)
 }
 
 type promptGenerator struct {
@@ -53,6 +57,10 @@ func (p *promptGenerator) loadTemplates() error {
 		"pr-split.tmpl",
 		"fix-ci.tmpl",
 		"create-pr.tmpl",
+		"planning-simplified.tmpl",
+		"implementation-simplified.tmpl",
+		"refactoring-simplified.tmpl",
+		"pr-split-simplified.tmpl",
 	}
 
 	for _, name := range templateNames {
@@ -203,6 +211,132 @@ func (p *promptGenerator) GenerateCreatePRPrompt(ctx *PRCreationContext) (string
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, ctx); err != nil {
 		return "", fmt.Errorf("failed to execute create-pr template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+func (p *promptGenerator) GenerateSimplifiedPlanningPrompt(req FeatureRequest, attempt int) (string, error) {
+	tmpl, ok := p.templates["planning-simplified.tmpl"]
+	if !ok {
+		return "", fmt.Errorf("planning-simplified template not loaded")
+	}
+
+	data := struct {
+		Type        WorkflowType
+		Description string
+		Feedback    []string
+	}{
+		Type:        req.Type,
+		Description: req.Description,
+		Feedback:    req.Feedback,
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("failed to execute planning-simplified template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+func (p *promptGenerator) GenerateSimplifiedImplementationPrompt(ctx *WorkflowContext, workStream WorkStream, attempt int) (string, error) {
+	if ctx == nil || ctx.Plan == nil {
+		return "", fmt.Errorf("context or plan cannot be nil")
+	}
+
+	tmpl, ok := p.templates["implementation-simplified.tmpl"]
+	if !ok {
+		return "", fmt.Errorf("implementation-simplified template not loaded")
+	}
+
+	var tasks []string
+	if len(workStream.Tasks) > 0 {
+		tasksToKeep := 5
+		if attempt > 2 {
+			tasksToKeep = 3
+		}
+
+		startIdx := 0
+		if len(workStream.Tasks) > tasksToKeep {
+			startIdx = len(workStream.Tasks) - tasksToKeep
+		}
+		tasks = workStream.Tasks[startIdx:]
+	}
+
+	data := struct {
+		Plan  *Plan
+		Tasks []string
+	}{
+		Plan:  ctx.Plan,
+		Tasks: tasks,
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("failed to execute implementation-simplified template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+func (p *promptGenerator) GenerateSimplifiedRefactoringPrompt(ctx *WorkflowContext, attempt int) (string, error) {
+	if ctx == nil || ctx.Plan == nil {
+		return "", fmt.Errorf("context or plan cannot be nil")
+	}
+
+	tmpl, ok := p.templates["refactoring-simplified.tmpl"]
+	if !ok {
+		return "", fmt.Errorf("refactoring-simplified template not loaded")
+	}
+
+	data := struct {
+		Plan *Plan
+	}{
+		Plan: ctx.Plan,
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("failed to execute refactoring-simplified template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+func (p *promptGenerator) GenerateSimplifiedPRSplitPrompt(ctx *WorkflowContext, attempt int) (string, error) {
+	if ctx == nil || ctx.Metrics == nil {
+		return "", fmt.Errorf("context or metrics cannot be nil")
+	}
+
+	tmpl, ok := p.templates["pr-split-simplified.tmpl"]
+	if !ok {
+		return "", fmt.Errorf("pr-split-simplified template not loaded")
+	}
+
+	commits := ctx.Commits
+	if commits == nil {
+		commits = []Commit{}
+	}
+
+	commitsToKeep := 10
+	startIdx := 0
+	if len(commits) > commitsToKeep {
+		startIdx = len(commits) - commitsToKeep
+	}
+	truncatedCommits := commits[startIdx:]
+
+	data := struct {
+		Metrics *PRMetrics
+		Commits []Commit
+	}{
+		Metrics: ctx.Metrics,
+		Commits: truncatedCommits,
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("failed to execute pr-split-simplified template: %w", err)
 	}
 
 	return buf.String(), nil

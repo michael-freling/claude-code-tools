@@ -168,6 +168,26 @@ func (m *MockPromptGenerator) GenerateCreatePRPrompt(ctx *PRCreationContext) (st
 	return args.String(0), args.Error(1)
 }
 
+func (m *MockPromptGenerator) GenerateSimplifiedPlanningPrompt(req FeatureRequest, attempt int) (string, error) {
+	args := m.Called(req, attempt)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockPromptGenerator) GenerateSimplifiedImplementationPrompt(ctx *WorkflowContext, workStream WorkStream, attempt int) (string, error) {
+	args := m.Called(ctx, workStream, attempt)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockPromptGenerator) GenerateSimplifiedRefactoringPrompt(ctx *WorkflowContext, attempt int) (string, error) {
+	args := m.Called(ctx, attempt)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockPromptGenerator) GenerateSimplifiedPRSplitPrompt(ctx *WorkflowContext, attempt int) (string, error) {
+	args := m.Called(ctx, attempt)
+	return args.String(0), args.Error(1)
+}
+
 // MockCIChecker is a mock implementation of CIChecker
 type MockCIChecker struct {
 	mock.Mock
@@ -5578,6 +5598,531 @@ func TestOrchestrator_executePRCreation_PromptTooLong(t *testing.T) {
 			mockExec.AssertExpectations(t)
 			mockPG.AssertExpectations(t)
 			mockGR.AssertExpectations(t)
+		})
+	}
+}
+
+func TestOrchestrator_ExecutePlanning_MaxTurns(t *testing.T) {
+	tests := []struct {
+		name         string
+		maxTurns     int
+		wantMaxTurns int
+	}{
+		{
+			name:         "passes MaxTurns from config to executor",
+			maxTurns:     50,
+			wantMaxTurns: 50,
+		},
+		{
+			name:         "passes zero MaxTurns",
+			maxTurns:     0,
+			wantMaxTurns: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSM := new(MockStateManager)
+			mockExec := new(MockClaudeExecutor)
+			mockPG := new(MockPromptGenerator)
+			mockOP := new(MockOutputParser)
+
+			mockSM.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+			mockPG.On("GeneratePlanningPrompt", WorkflowTypeFeature, "test", []string(nil)).Return("prompt", nil)
+
+			mockExec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(cfg ExecuteConfig) bool {
+				return cfg.MaxTurns == tt.wantMaxTurns
+			}), mock.Anything).Return(&ExecuteResult{
+				Output:   `{"summary": "test"}`,
+				ExitCode: 0,
+			}, nil)
+
+			mockOP.On("ExtractJSON", mock.Anything).Return(`{"summary": "test"}`, nil)
+			mockOP.On("ParsePlan", mock.Anything).Return(&Plan{Summary: "test"}, nil)
+			mockSM.On("SavePlan", "test-workflow", mock.Anything).Return(nil)
+			mockSM.On("SavePlanMarkdown", "test-workflow", mock.Anything).Return(nil)
+			mockSM.On("SavePhaseOutput", "test-workflow", PhasePlanning, mock.Anything).Return(nil)
+
+			config := DefaultConfig("/tmp/test")
+			config.MaxTurns = PhaseMaxTurns{"planning": tt.maxTurns}
+
+			o := &Orchestrator{
+				stateManager:    mockSM,
+				executor:        mockExec,
+				promptGenerator: mockPG,
+				parser:          mockOP,
+				config:          config,
+				logger:          NewLogger(LogLevelNormal),
+			}
+
+			state := &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test",
+				CurrentPhase: PhasePlanning,
+				Phases: map[Phase]*PhaseState{
+					PhasePlanning:       {Status: StatusInProgress},
+					PhaseConfirmation:   {Status: StatusPending},
+					PhaseImplementation: {Status: StatusPending},
+					PhaseRefactoring:    {Status: StatusPending},
+					PhasePRSplit:        {Status: StatusPending},
+				},
+			}
+
+			err := o.executePlanning(context.Background(), state)
+
+			require.NoError(t, err)
+			mockExec.AssertExpectations(t)
+		})
+	}
+}
+
+func TestOrchestrator_ExecutePlanning_SimplifiedPromptOnRetry(t *testing.T) {
+	tests := []struct {
+		name             string
+		attempts         int
+		feedback         []string
+		expectSimplified bool
+		setupMocks       func(*MockStateManager, *MockClaudeExecutor, *MockPromptGenerator, *MockOutputParser)
+		wantErr          bool
+		wantCurrentPhase Phase
+		checkFeedback    func(t *testing.T, state *WorkflowState)
+	}{
+		{
+			name:             "uses simplified prompt on retry after ErrPromptTooLong",
+			attempts:         2,
+			feedback:         []string{"Your previous response was too long and exceeded the prompt limit. Please provide a more concise response with less verbose output."},
+			expectSimplified: true,
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				pg.On("GenerateSimplifiedPlanningPrompt", mock.MatchedBy(func(req FeatureRequest) bool {
+					return req.Type == WorkflowTypeFeature && req.Description == "test"
+				}), 3).Return("simplified prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(cfg ExecuteConfig) bool {
+					return cfg.Prompt == "simplified prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"summary": "test"}`,
+					ExitCode: 0,
+				}, nil)
+				op.On("ExtractJSON", mock.Anything).Return(`{"summary": "test"}`, nil)
+				op.On("ParsePlan", mock.Anything).Return(&Plan{Summary: "test"}, nil)
+				sm.On("SavePlan", "test-workflow", mock.Anything).Return(nil)
+				sm.On("SavePlanMarkdown", "test-workflow", mock.Anything).Return(nil)
+				sm.On("SavePhaseOutput", "test-workflow", PhasePlanning, mock.Anything).Return(nil)
+			},
+			wantErr:          false,
+			wantCurrentPhase: PhaseConfirmation,
+		},
+		{
+			name:             "uses regular prompt when no prompt limit feedback",
+			attempts:         2,
+			feedback:         []string{"Some other feedback"},
+			expectSimplified: false,
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				pg.On("GeneratePlanningPrompt", WorkflowTypeFeature, "test", mock.Anything).Return("regular prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(cfg ExecuteConfig) bool {
+					return cfg.Prompt == "regular prompt"
+				}), mock.Anything).Return(&ExecuteResult{
+					Output:   `{"summary": "test"}`,
+					ExitCode: 0,
+				}, nil)
+				op.On("ExtractJSON", mock.Anything).Return(`{"summary": "test"}`, nil)
+				op.On("ParsePlan", mock.Anything).Return(&Plan{Summary: "test"}, nil)
+				sm.On("SavePlan", "test-workflow", mock.Anything).Return(nil)
+				sm.On("SavePlanMarkdown", "test-workflow", mock.Anything).Return(nil)
+				sm.On("SavePhaseOutput", "test-workflow", PhasePlanning, mock.Anything).Return(nil)
+			},
+			wantErr:          false,
+			wantCurrentPhase: PhaseConfirmation,
+		},
+		{
+			name:             "handles ErrPromptTooLong and adds feedback",
+			attempts:         1,
+			feedback:         nil,
+			expectSimplified: false,
+			setupMocks: func(sm *MockStateManager, exec *MockClaudeExecutor, pg *MockPromptGenerator, op *MockOutputParser) {
+				sm.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+				pg.On("GeneratePlanningPrompt", WorkflowTypeFeature, "test", []string(nil)).Return("prompt", nil)
+				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
+					ExitCode: 1,
+					Error:    ErrPromptTooLong,
+				}, ErrPromptTooLong)
+			},
+			wantErr:          false,
+			wantCurrentPhase: PhasePlanning,
+			checkFeedback: func(t *testing.T, state *WorkflowState) {
+				phaseState := state.Phases[PhasePlanning]
+				require.NotNil(t, phaseState)
+				require.Len(t, phaseState.Feedback, 1)
+				assert.Contains(t, phaseState.Feedback[0], "prompt limit")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSM := new(MockStateManager)
+			mockExec := new(MockClaudeExecutor)
+			mockPG := new(MockPromptGenerator)
+			mockOP := new(MockOutputParser)
+
+			tt.setupMocks(mockSM, mockExec, mockPG, mockOP)
+
+			o := &Orchestrator{
+				stateManager:    mockSM,
+				executor:        mockExec,
+				promptGenerator: mockPG,
+				parser:          mockOP,
+				config:          DefaultConfig("/tmp/test"),
+				logger:          NewLogger(LogLevelNormal),
+			}
+
+			state := &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test",
+				CurrentPhase: PhasePlanning,
+				Phases: map[Phase]*PhaseState{
+					PhasePlanning: {
+						Status:   StatusInProgress,
+						Attempts: tt.attempts,
+						Feedback: tt.feedback,
+					},
+					PhaseConfirmation:   {Status: StatusPending},
+					PhaseImplementation: {Status: StatusPending},
+					PhaseRefactoring:    {Status: StatusPending},
+					PhasePRSplit:        {Status: StatusPending},
+				},
+			}
+
+			err := o.executePlanning(context.Background(), state)
+
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, tt.wantCurrentPhase, state.CurrentPhase)
+
+			if tt.checkFeedback != nil {
+				tt.checkFeedback(t, state)
+			}
+
+			mockExec.AssertExpectations(t)
+			mockPG.AssertExpectations(t)
+		})
+	}
+}
+
+func TestOrchestrator_ExecuteImplementation_MaxTurns(t *testing.T) {
+	tests := []struct {
+		name         string
+		maxTurns     int
+		wantMaxTurns int
+	}{
+		{
+			name:         "passes MaxTurns from config to executor",
+			maxTurns:     100,
+			wantMaxTurns: 100,
+		},
+		{
+			name:         "passes zero MaxTurns",
+			maxTurns:     0,
+			wantMaxTurns: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSM := new(MockStateManager)
+			mockExec := new(MockClaudeExecutor)
+			mockPG := new(MockPromptGenerator)
+			mockOP := new(MockOutputParser)
+			mockCI := new(MockCIChecker)
+
+			plan := &Plan{
+				Summary:     "Test",
+				ContextType: "feature",
+				Architecture: Architecture{
+					Overview: "Test",
+				},
+			}
+
+			mockSM.On("LoadPlan", "test-workflow").Return(plan, nil)
+			mockSM.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+			mockPG.On("GenerateImplementationPrompt", plan).Return("prompt", nil)
+
+			mockExec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(cfg ExecuteConfig) bool {
+				return cfg.MaxTurns == tt.wantMaxTurns
+			}), mock.Anything).Return(&ExecuteResult{
+				Output:   `{"filesChanged": ["test.go"], "linesAdded": 10, "linesRemoved": 5, "testsAdded": 3, "summary": "done"}`,
+				ExitCode: 0,
+			}, nil)
+
+			mockOP.On("ExtractJSON", mock.Anything).Return(`{"filesChanged": ["test.go"], "linesAdded": 10, "linesRemoved": 5, "testsAdded": 3, "summary": "done"}`, nil)
+			mockOP.On("ParseImplementationSummary", mock.Anything).Return(&ImplementationSummary{
+				FilesChanged: []string{"test.go"},
+				LinesAdded:   10,
+				LinesRemoved: 5,
+				TestsAdded:   3,
+				Summary:      "done",
+			}, nil)
+			mockSM.On("SavePhaseOutput", "test-workflow", PhaseImplementation, mock.Anything).Return(nil)
+
+			mockCI.On("WaitForCIWithProgress", mock.Anything, 0, mock.Anything, mock.Anything, mock.Anything).Return(&CIResult{
+				Passed: true,
+				Status: "success",
+			}, nil)
+
+			tmpDir := t.TempDir()
+
+			config := DefaultConfig("/tmp/test")
+			config.MaxTurns = PhaseMaxTurns{"implementation": tt.maxTurns}
+
+			cmdRunner := command.NewRunner()
+			o := &Orchestrator{
+				stateManager:    mockSM,
+				executor:        mockExec,
+				promptGenerator: mockPG,
+				parser:          mockOP,
+				config:          config,
+				logger:          NewLogger(LogLevelNormal),
+				gitRunner:       command.NewGitRunner(cmdRunner),
+				ciCheckerFactory: func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) CIChecker {
+					return mockCI
+				},
+			}
+
+			state := &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test",
+				CurrentPhase: PhaseImplementation,
+				WorktreePath: tmpDir,
+				Phases: map[Phase]*PhaseState{
+					PhasePlanning:       {Status: StatusCompleted},
+					PhaseConfirmation:   {Status: StatusCompleted},
+					PhaseImplementation: {Status: StatusInProgress},
+					PhaseRefactoring:    {Status: StatusPending},
+					PhasePRSplit:        {Status: StatusPending},
+				},
+			}
+
+			err := o.executeImplementation(context.Background(), state)
+
+			require.NoError(t, err)
+			mockExec.AssertExpectations(t)
+		})
+	}
+}
+
+func TestOrchestrator_ExecuteRefactoring_MaxTurns(t *testing.T) {
+	tests := []struct {
+		name         string
+		maxTurns     int
+		wantMaxTurns int
+	}{
+		{
+			name:         "passes MaxTurns from config to executor",
+			maxTurns:     80,
+			wantMaxTurns: 80,
+		},
+		{
+			name:         "passes zero MaxTurns",
+			maxTurns:     0,
+			wantMaxTurns: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSM := new(MockStateManager)
+			mockExec := new(MockClaudeExecutor)
+			mockPG := new(MockPromptGenerator)
+			mockOP := new(MockOutputParser)
+			mockCI := new(MockCIChecker)
+
+			plan := &Plan{
+				Summary:     "Test",
+				ContextType: "feature",
+				Architecture: Architecture{
+					Overview: "Test",
+				},
+			}
+
+			mockSM.On("LoadPlan", "test-workflow").Return(plan, nil)
+			mockSM.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+			mockPG.On("GenerateRefactoringPrompt", plan).Return("prompt", nil)
+
+			mockExec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(cfg ExecuteConfig) bool {
+				return cfg.MaxTurns == tt.wantMaxTurns
+			}), mock.Anything).Return(&ExecuteResult{
+				Output:   `{"filesChanged": ["test.go"], "improvementsMade": ["refactored"], "summary": "done"}`,
+				ExitCode: 0,
+			}, nil)
+
+			mockOP.On("ExtractJSON", mock.Anything).Return(`{"filesChanged": ["test.go"], "improvementsMade": ["refactored"], "summary": "done"}`, nil)
+			mockOP.On("ParseRefactoringSummary", mock.Anything).Return(&RefactoringSummary{
+				FilesChanged:     []string{"test.go"},
+				ImprovementsMade: []string{"refactored"},
+				Summary:          "done",
+			}, nil)
+			mockSM.On("SavePhaseOutput", "test-workflow", PhaseRefactoring, mock.Anything).Return(nil)
+
+			mockCI.On("WaitForCIWithProgress", mock.Anything, 0, mock.Anything, mock.Anything, mock.Anything).Return(&CIResult{
+				Passed: true,
+				Status: "success",
+			}, nil)
+
+			tmpDir := t.TempDir()
+
+			config := DefaultConfig("/tmp/test")
+			config.MaxTurns = PhaseMaxTurns{"refactoring": tt.maxTurns}
+
+			cmdRunner := command.NewRunner()
+			o := &Orchestrator{
+				stateManager:    mockSM,
+				executor:        mockExec,
+				promptGenerator: mockPG,
+				parser:          mockOP,
+				config:          config,
+				logger:          NewLogger(LogLevelNormal),
+				gitRunner:       command.NewGitRunner(cmdRunner),
+				ciCheckerFactory: func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) CIChecker {
+					return mockCI
+				},
+			}
+
+			state := &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test",
+				CurrentPhase: PhaseRefactoring,
+				WorktreePath: tmpDir,
+				Phases: map[Phase]*PhaseState{
+					PhasePlanning:       {Status: StatusCompleted},
+					PhaseConfirmation:   {Status: StatusCompleted},
+					PhaseImplementation: {Status: StatusCompleted},
+					PhaseRefactoring:    {Status: StatusInProgress},
+					PhasePRSplit:        {Status: StatusPending},
+				},
+			}
+
+			err := o.executeRefactoring(context.Background(), state)
+
+			require.NoError(t, err)
+			mockExec.AssertExpectations(t)
+		})
+	}
+}
+
+func TestOrchestrator_ExecutePRSplit_MaxTurns(t *testing.T) {
+	tests := []struct {
+		name         string
+		maxTurns     int
+		wantMaxTurns int
+	}{
+		{
+			name:         "passes MaxTurns from config to executor",
+			maxTurns:     30,
+			wantMaxTurns: 30,
+		},
+		{
+			name:         "passes zero MaxTurns",
+			maxTurns:     0,
+			wantMaxTurns: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSM := new(MockStateManager)
+			mockExec := new(MockClaudeExecutor)
+			mockPG := new(MockPromptGenerator)
+			mockOP := new(MockOutputParser)
+			mockGR := new(MockGitRunner)
+			mockSplitMgr := new(MockPRSplitManager)
+
+			metrics := &PRMetrics{
+				LinesChanged: 100,
+				FilesChanged: 5,
+			}
+			commits := []command.Commit{
+				{Hash: "abc123", Subject: "test"},
+			}
+
+			mockSM.On("SaveState", "test-workflow", mock.Anything).Return(nil)
+			mockGR.On("GetCurrentBranch", mock.Anything, mock.Anything).Return("feature-branch", nil)
+			mockGR.On("GetCommits", mock.Anything, mock.Anything, "main").Return(commits, nil)
+			mockPG.On("GeneratePRSplitPrompt", mock.Anything, commits).Return("prompt", nil)
+
+			mockExec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(cfg ExecuteConfig) bool {
+				return cfg.MaxTurns == tt.wantMaxTurns
+			}), mock.Anything).Return(&ExecuteResult{
+				Output:   `{"strategy": "commits", "parentTitle": "test", "parentDescription": "desc", "summary": "done", "childPRs": [{"title": "test", "description": "desc"}]}`,
+				ExitCode: 0,
+			}, nil)
+
+			mockOP.On("ExtractJSON", mock.Anything).Return(`{"strategy": "commits", "parentTitle": "test", "parentDescription": "desc", "summary": "done", "childPRs": [{"title": "test", "description": "desc"}]}`, nil)
+			mockOP.On("ParsePRSplitPlan", mock.Anything).Return(&PRSplitPlan{
+				Strategy:    SplitByCommits,
+				ParentTitle: "test",
+				ParentDesc:  "desc",
+				Summary:     "done",
+				ChildPRs:    []ChildPRPlan{{Title: "test", Description: "desc"}},
+			}, nil)
+
+			mockSplitMgr.On("ExecuteSplit", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+				Return(&PRSplitResult{
+					ParentPR: PRInfo{Number: 1, Title: "test"},
+					ChildPRs: []PRInfo{{Number: 2, Title: "test"}},
+				}, nil)
+
+			mockSM.On("SavePhaseOutput", "test-workflow", PhasePRSplit, mock.Anything).Return(nil)
+
+			config := DefaultConfig("/tmp/test")
+			config.MaxTurns = PhaseMaxTurns{"pr-split": tt.maxTurns}
+
+			o := &Orchestrator{
+				stateManager:    mockSM,
+				executor:        mockExec,
+				promptGenerator: mockPG,
+				parser:          mockOP,
+				config:          config,
+				logger:          NewLogger(LogLevelNormal),
+				gitRunner:       mockGR,
+				splitManager:    mockSplitMgr,
+				ciCheckerFactory: func(workingDir string, checkInterval time.Duration, commandTimeout time.Duration) CIChecker {
+					mockCI := new(MockCIChecker)
+					mockCI.On("WaitForCIWithProgress", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&CIResult{
+						Passed: true,
+						Status: "success",
+					}, nil)
+					return mockCI
+				},
+			}
+
+			state := &WorkflowState{
+				Name:         "test-workflow",
+				Type:         WorkflowTypeFeature,
+				Description:  "test",
+				CurrentPhase: PhasePRSplit,
+				WorktreePath: "/tmp/test",
+				Phases: map[Phase]*PhaseState{
+					PhasePlanning:       {Status: StatusCompleted},
+					PhaseConfirmation:   {Status: StatusCompleted},
+					PhaseImplementation: {Status: StatusCompleted},
+					PhaseRefactoring:    {Status: StatusCompleted},
+					PhasePRSplit:        {Status: StatusInProgress, Metrics: metrics},
+				},
+			}
+
+			err := o.executePRSplit(context.Background(), state)
+
+			require.NoError(t, err)
+			mockExec.AssertExpectations(t)
 		})
 	}
 }

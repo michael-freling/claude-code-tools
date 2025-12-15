@@ -1,0 +1,31 @@
+You are refactoring code according to the following plan:
+
+## Summary
+{{.Plan.Summary}}
+
+## Architecture Overview
+{{.Plan.Architecture.Overview}}
+
+## Instructions
+1. Use Task tool to delegate review to reviewer subagents (golang-code-reviewer or typescript-code-reviewer)
+2. Use Task tool to delegate refactoring to engineer subagents (golang-engineer or typescript-engineer)
+3. Improve code organization, error handling, test coverage, and documentation
+4. Ensure all tests pass after refactoring
+5. Commit after review approval
+
+## Focus
+- Reduce code duplication
+- Improve naming and clarity
+- Enhance error messages
+- Remove dead code
+- Ensure consistent style
+
+## Output Format
+{
+  "filesChanged": ["file1.go", "file2.go"],
+  "improvementsMade": [
+    "Improved error handling in X",
+    "Refactored Y for readability"
+  ],
+  "summary": "Brief summary"
+}

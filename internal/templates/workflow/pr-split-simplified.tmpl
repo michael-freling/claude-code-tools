@@ -1,0 +1,41 @@
+CRITICAL: Your response MUST be ONLY valid JSON. Do NOT include any markdown, explanations, or text outside the JSON object.
+
+Split changes into multiple pull requests for easier review.
+
+## Metrics
+Lines: {{.Metrics.LinesChanged}}, Files: {{.Metrics.FilesChanged}}
+
+## Recent Commits
+{{range .Commits}}
+- {{.Hash}} - {{.Subject}}
+{{end}}
+
+## Instructions
+1. Choose strategy: "commits" (cherry-pick commits) or "files" (specific files)
+2. Create parent PR to track overall feature
+3. Split into child PRs that are independently reviewable
+4. MUST include at least ONE child PR (never empty childPRs array)
+
+## Split Guidelines
+- Child PRs are chained: Child 2 based on Child 1, etc.
+- Order by dependency: foundational changes first
+- Group by logical boundaries or domain
+- All commits/files must be accounted for
+
+## Required JSON Format
+{
+  "strategy": "commits",
+  "parentTitle": "Parent PR: [description]",
+  "parentDescription": "Split into:\n- Child 1: ...\n- Child 2: ...",
+  "childPRs": [
+    {
+      "title": "[Part 1/N] Title",
+      "description": "## Summary\n...\n\n## Changes\n...",
+      "commits": ["abc123"],
+      "files": []
+    }
+  ],
+  "summary": "Why this split makes sense"
+}
+
+REMINDER: Output ONLY JSON. childPRs array MUST have at least 1 element.

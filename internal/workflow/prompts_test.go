@@ -979,13 +979,17 @@ func TestPromptGenerator_LoadTemplates_ErrorHandling(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			assert.Len(t, pg.templates, 6)
+			assert.Len(t, pg.templates, 10)
 			assert.NotNil(t, pg.templates["planning.tmpl"])
 			assert.NotNil(t, pg.templates["implementation.tmpl"])
 			assert.NotNil(t, pg.templates["refactoring.tmpl"])
 			assert.NotNil(t, pg.templates["pr-split.tmpl"])
 			assert.NotNil(t, pg.templates["fix-ci.tmpl"])
 			assert.NotNil(t, pg.templates["create-pr.tmpl"])
+			assert.NotNil(t, pg.templates["planning-simplified.tmpl"])
+			assert.NotNil(t, pg.templates["implementation-simplified.tmpl"])
+			assert.NotNil(t, pg.templates["refactoring-simplified.tmpl"])
+			assert.NotNil(t, pg.templates["pr-split-simplified.tmpl"])
 		})
 	}
 }
@@ -1308,6 +1312,488 @@ func TestPromptGenerator_GenerateCreatePRPrompt_TemplateExecutionError(t *testin
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.errContains)
 			assert.Empty(t, got)
+		})
+	}
+}
+
+func TestPromptGenerator_GenerateSimplifiedPlanningPrompt(t *testing.T) {
+	tests := []struct {
+		name        string
+		req         FeatureRequest
+		attempt     int
+		wantErr     bool
+		wantContain []string
+	}{
+		{
+			name: "generates simplified planning prompt for feature workflow",
+			req: FeatureRequest{
+				Type:        WorkflowTypeFeature,
+				Description: "add authentication",
+				Feedback:    nil,
+			},
+			attempt: 1,
+			wantErr: false,
+			wantContain: []string{
+				"Type: feature",
+				"Description: add authentication",
+			},
+		},
+		{
+			name: "generates simplified planning prompt for fix workflow",
+			req: FeatureRequest{
+				Type:        WorkflowTypeFix,
+				Description: "fix login bug",
+				Feedback:    nil,
+			},
+			attempt: 2,
+			wantErr: false,
+			wantContain: []string{
+				"Type: fix",
+				"Description: fix login bug",
+			},
+		},
+		{
+			name: "generates simplified planning prompt with feedback",
+			req: FeatureRequest{
+				Type:        WorkflowTypeFeature,
+				Description: "add feature",
+				Feedback:    []string{"use refresh tokens", "add logout"},
+			},
+			attempt: 1,
+			wantErr: false,
+			wantContain: []string{
+				"Type: feature",
+				"Description: add feature",
+				"use refresh tokens",
+				"add logout",
+			},
+		},
+		{
+			name: "generates simplified planning prompt on retry",
+			req: FeatureRequest{
+				Type:        WorkflowTypeFeature,
+				Description: "test feature",
+				Feedback:    nil,
+			},
+			attempt: 3,
+			wantErr: false,
+			wantContain: []string{
+				"Type: feature",
+				"Description: test feature",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pg, err := NewPromptGenerator()
+			require.NoError(t, err)
+
+			got, err := pg.GenerateSimplifiedPlanningPrompt(tt.req, tt.attempt)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotEmpty(t, got)
+
+			regularPrompt, err := pg.GeneratePlanningPrompt(tt.req.Type, tt.req.Description, tt.req.Feedback)
+			require.NoError(t, err)
+			assert.Less(t, len(got), len(regularPrompt), "simplified prompt should be smaller than regular prompt")
+
+			for _, want := range tt.wantContain {
+				assert.Contains(t, got, want)
+			}
+		})
+	}
+}
+
+func TestPromptGenerator_GenerateSimplifiedImplementationPrompt(t *testing.T) {
+	tests := []struct {
+		name        string
+		ctx         *WorkflowContext
+		workStream  WorkStream
+		attempt     int
+		wantErr     bool
+		wantContain []string
+		checkTasks  func(t *testing.T, prompt string, originalTasks []string, attempt int)
+	}{
+		{
+			name: "generates simplified implementation prompt with task truncation for attempt 2",
+			ctx: &WorkflowContext{
+				Plan: &Plan{
+					Summary:     "Add authentication",
+					ContextType: "feature",
+					Architecture: Architecture{
+						Overview:   "JWT auth",
+						Components: []string{"auth service"},
+					},
+				},
+			},
+			workStream: WorkStream{
+				Name: "Backend",
+				Tasks: []string{
+					"task 1",
+					"task 2",
+					"task 3",
+					"task 4",
+					"task 5",
+					"task 6",
+					"task 7",
+				},
+			},
+			attempt: 2,
+			wantErr: false,
+			wantContain: []string{
+				"Add authentication",
+				"JWT auth",
+			},
+			checkTasks: func(t *testing.T, prompt string, originalTasks []string, attempt int) {
+				assert.Contains(t, prompt, "task 3")
+				assert.Contains(t, prompt, "task 4")
+				assert.Contains(t, prompt, "task 5")
+				assert.Contains(t, prompt, "task 6")
+				assert.Contains(t, prompt, "task 7")
+				assert.NotContains(t, prompt, "task 1")
+				assert.NotContains(t, prompt, "task 2")
+			},
+		},
+		{
+			name: "generates simplified implementation prompt with task truncation for attempt 3+",
+			ctx: &WorkflowContext{
+				Plan: &Plan{
+					Summary:     "Add feature",
+					ContextType: "feature",
+					Architecture: Architecture{
+						Overview:   "Test",
+						Components: []string{"component"},
+					},
+				},
+			},
+			workStream: WorkStream{
+				Name: "Backend",
+				Tasks: []string{
+					"task 1",
+					"task 2",
+					"task 3",
+					"task 4",
+					"task 5",
+				},
+			},
+			attempt: 3,
+			wantErr: false,
+			wantContain: []string{
+				"Add feature",
+			},
+			checkTasks: func(t *testing.T, prompt string, originalTasks []string, attempt int) {
+				assert.Contains(t, prompt, "task 3")
+				assert.Contains(t, prompt, "task 4")
+				assert.Contains(t, prompt, "task 5")
+				assert.NotContains(t, prompt, "task 1")
+				assert.NotContains(t, prompt, "task 2")
+			},
+		},
+		{
+			name: "generates simplified implementation prompt with few tasks keeps all",
+			ctx: &WorkflowContext{
+				Plan: &Plan{
+					Summary:     "Simple feature",
+					ContextType: "feature",
+					Architecture: Architecture{
+						Overview:   "Simple",
+						Components: []string{"comp"},
+					},
+				},
+			},
+			workStream: WorkStream{
+				Name:  "Backend",
+				Tasks: []string{"task 1", "task 2"},
+			},
+			attempt: 2,
+			wantErr: false,
+			wantContain: []string{
+				"Simple feature",
+			},
+			checkTasks: func(t *testing.T, prompt string, originalTasks []string, attempt int) {
+				assert.Contains(t, prompt, "task 1")
+				assert.Contains(t, prompt, "task 2")
+			},
+		},
+		{
+			name: "returns error when context is nil",
+			ctx:  nil,
+			workStream: WorkStream{
+				Name:  "Backend",
+				Tasks: []string{"task"},
+			},
+			attempt:     1,
+			wantErr:     true,
+			wantContain: nil,
+		},
+		{
+			name: "returns error when plan is nil",
+			ctx: &WorkflowContext{
+				Plan: nil,
+			},
+			workStream: WorkStream{
+				Name:  "Backend",
+				Tasks: []string{"task"},
+			},
+			attempt:     1,
+			wantErr:     true,
+			wantContain: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pg, err := NewPromptGenerator()
+			require.NoError(t, err)
+
+			got, err := pg.GenerateSimplifiedImplementationPrompt(tt.ctx, tt.workStream, tt.attempt)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotEmpty(t, got)
+
+			if tt.ctx != nil && tt.ctx.Plan != nil {
+				regularPrompt, err := pg.GenerateImplementationPrompt(tt.ctx.Plan)
+				require.NoError(t, err)
+				assert.Less(t, len(got), len(regularPrompt), "simplified prompt should be smaller than regular prompt")
+			}
+
+			for _, want := range tt.wantContain {
+				assert.Contains(t, got, want)
+			}
+
+			if tt.checkTasks != nil {
+				tt.checkTasks(t, got, tt.workStream.Tasks, tt.attempt)
+			}
+		})
+	}
+}
+
+func TestPromptGenerator_GenerateSimplifiedRefactoringPrompt(t *testing.T) {
+	tests := []struct {
+		name        string
+		ctx         *WorkflowContext
+		attempt     int
+		wantErr     bool
+		wantContain []string
+	}{
+		{
+			name: "generates simplified refactoring prompt",
+			ctx: &WorkflowContext{
+				Plan: &Plan{
+					Summary:     "Add authentication",
+					ContextType: "feature",
+					Architecture: Architecture{
+						Overview:   "JWT-based auth",
+						Components: []string{"auth service", "middleware"},
+					},
+				},
+			},
+			attempt: 1,
+			wantErr: false,
+			wantContain: []string{
+				"Add authentication",
+				"JWT-based auth",
+			},
+		},
+		{
+			name: "generates simplified refactoring prompt on retry",
+			ctx: &WorkflowContext{
+				Plan: &Plan{
+					Summary:     "Fix bug",
+					ContextType: "fix",
+					Architecture: Architecture{
+						Overview:   "Bug fix",
+						Components: []string{"component"},
+					},
+				},
+			},
+			attempt: 3,
+			wantErr: false,
+			wantContain: []string{
+				"Fix bug",
+				"Bug fix",
+			},
+		},
+		{
+			name:    "returns error when context is nil",
+			ctx:     nil,
+			attempt: 1,
+			wantErr: true,
+		},
+		{
+			name: "returns error when plan is nil",
+			ctx: &WorkflowContext{
+				Plan: nil,
+			},
+			attempt: 1,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pg, err := NewPromptGenerator()
+			require.NoError(t, err)
+
+			got, err := pg.GenerateSimplifiedRefactoringPrompt(tt.ctx, tt.attempt)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotEmpty(t, got)
+
+			if tt.ctx != nil && tt.ctx.Plan != nil {
+				regularPrompt, err := pg.GenerateRefactoringPrompt(tt.ctx.Plan)
+				require.NoError(t, err)
+				assert.Less(t, len(got), len(regularPrompt), "simplified prompt should be smaller than regular prompt")
+			}
+
+			for _, want := range tt.wantContain {
+				assert.Contains(t, got, want)
+			}
+		})
+	}
+}
+
+func TestPromptGenerator_GenerateSimplifiedPRSplitPrompt(t *testing.T) {
+	tests := []struct {
+		name          string
+		ctx           *WorkflowContext
+		attempt       int
+		wantErr       bool
+		wantContain   []string
+		checkTruncate func(t *testing.T, prompt string, originalCommits []Commit)
+	}{
+		{
+			name: "generates simplified PR split prompt with commit truncation",
+			ctx: &WorkflowContext{
+				Metrics: &PRMetrics{
+					LinesChanged:  500,
+					FilesChanged:  15,
+					FilesAdded:    []string{"file1.go", "file2.go"},
+					FilesModified: []string{"main.go"},
+				},
+				Commits: []Commit{
+					{Hash: "commit1", Subject: "first commit"},
+					{Hash: "commit2", Subject: "second commit"},
+					{Hash: "commit3", Subject: "third commit"},
+					{Hash: "commit4", Subject: "fourth commit"},
+					{Hash: "commit5", Subject: "fifth commit"},
+					{Hash: "commit6", Subject: "sixth commit"},
+					{Hash: "commit7", Subject: "seventh commit"},
+					{Hash: "commit8", Subject: "eighth commit"},
+					{Hash: "commit9", Subject: "ninth commit"},
+					{Hash: "commit10", Subject: "tenth commit"},
+					{Hash: "commit11", Subject: "eleventh commit"},
+					{Hash: "commit12", Subject: "twelfth commit"},
+				},
+			},
+			attempt: 2,
+			wantErr: false,
+			wantContain: []string{
+				"Lines: 500",
+				"Files: 15",
+			},
+			checkTruncate: func(t *testing.T, prompt string, originalCommits []Commit) {
+				assert.Contains(t, prompt, "- commit3 -")
+				assert.Contains(t, prompt, "- commit12 -")
+				assert.NotContains(t, prompt, "- commit1 -")
+				assert.NotContains(t, prompt, "- commit2 -")
+			},
+		},
+		{
+			name: "generates simplified PR split prompt with few commits keeps all",
+			ctx: &WorkflowContext{
+				Metrics: &PRMetrics{
+					LinesChanged: 100,
+					FilesChanged: 5,
+				},
+				Commits: []Commit{
+					{Hash: "abc123", Subject: "commit 1"},
+					{Hash: "def456", Subject: "commit 2"},
+					{Hash: "ghi789", Subject: "commit 3"},
+				},
+			},
+			attempt: 1,
+			wantErr: false,
+			wantContain: []string{
+				"Lines: 100",
+				"Files: 5",
+			},
+			checkTruncate: func(t *testing.T, prompt string, originalCommits []Commit) {
+				assert.Contains(t, prompt, "abc123")
+				assert.Contains(t, prompt, "def456")
+				assert.Contains(t, prompt, "ghi789")
+			},
+		},
+		{
+			name: "generates simplified PR split prompt with nil commits",
+			ctx: &WorkflowContext{
+				Metrics: &PRMetrics{
+					LinesChanged: 50,
+					FilesChanged: 2,
+				},
+				Commits: nil,
+			},
+			attempt: 1,
+			wantErr: false,
+			wantContain: []string{
+				"Lines: 50",
+				"Files: 2",
+			},
+		},
+		{
+			name:    "returns error when context is nil",
+			ctx:     nil,
+			attempt: 1,
+			wantErr: true,
+		},
+		{
+			name: "returns error when metrics is nil",
+			ctx: &WorkflowContext{
+				Metrics: nil,
+			},
+			attempt: 1,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pg, err := NewPromptGenerator()
+			require.NoError(t, err)
+
+			got, err := pg.GenerateSimplifiedPRSplitPrompt(tt.ctx, tt.attempt)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotEmpty(t, got)
+
+			for _, want := range tt.wantContain {
+				assert.Contains(t, got, want)
+			}
+
+			if tt.checkTruncate != nil && tt.ctx != nil {
+				tt.checkTruncate(t, got, tt.ctx.Commits)
+			}
 		})
 	}
 }

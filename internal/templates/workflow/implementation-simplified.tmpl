@@ -1,0 +1,32 @@
+You are implementing the following plan:
+
+## Summary
+{{.Plan.Summary}}
+
+## Architecture
+{{.Plan.Architecture.Overview}}
+Components: {{range .Plan.Architecture.Components}}{{.}}, {{end}}
+
+## Recent Work Stream Tasks
+{{range .Tasks}}
+- {{.}}
+{{end}}
+
+## Instructions
+1. Use Task tool to delegate implementation to engineer subagents (golang-engineer or typescript-engineer)
+2. Use Task tool to delegate review to reviewer subagents (golang-code-reviewer or typescript-code-reviewer)
+3. Write tests for all new code
+4. Commit after review approval
+5. Create PR: `git push -u origin <branch>` then `gh pr create --title "<title>" --body "<description>"`
+
+## Output Format
+{
+  "filesChanged": ["file1.go", "file2.go"],
+  "linesAdded": 350,
+  "linesRemoved": 20,
+  "testsAdded": 15,
+  "summary": "Brief summary",
+  "nextSteps": []
+}
+
+IMPORTANT: Create a Pull Request before completing. CI checks run on the PR.

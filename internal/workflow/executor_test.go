@@ -1606,6 +1606,134 @@ exit 1`,
 	}
 }
 
+func TestClaudeExecutor_Execute_MaxTurns(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tests := []struct {
+		name       string
+		maxTurns   int
+		wantOutput string
+		wantErr    bool
+	}{
+		{
+			name:       "adds --max-turns flag when MaxTurns is set",
+			maxTurns:   50,
+			wantOutput: "max turns 50\n",
+			wantErr:    false,
+		},
+		{
+			name:       "does not add --max-turns flag when MaxTurns is zero",
+			maxTurns:   0,
+			wantOutput: "max turns not set\n",
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			script := `#!/bin/bash
+if [[ "$*" == *"--max-turns"* ]]; then
+  if [[ "$*" == *"--max-turns 50"* ]]; then
+    echo "max turns 50"
+  else
+    echo "max turns set"
+  fi
+else
+  echo "max turns not set"
+fi
+exit 0`
+			scriptPath := filepath.Join(tmpDir, "claude-max-turns")
+			err := os.WriteFile(scriptPath, []byte(script), 0755)
+			require.NoError(t, err)
+
+			executor := NewClaudeExecutorWithPath(scriptPath, NewLogger(LogLevelNormal))
+			ctx := context.Background()
+
+			config := ExecuteConfig{
+				Prompt:   "test prompt",
+				MaxTurns: tt.maxTurns,
+				Timeout:  5 * time.Second,
+			}
+
+			got, err := executor.Execute(ctx, config)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Equal(t, tt.wantOutput, got.Output)
+			assert.Equal(t, 0, got.ExitCode)
+		})
+	}
+}
+
+func TestClaudeExecutor_ExecuteStreaming_MaxTurns(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tests := []struct {
+		name       string
+		maxTurns   int
+		wantOutput string
+		wantErr    bool
+	}{
+		{
+			name:       "adds --max-turns flag when MaxTurns is set in streaming",
+			maxTurns:   50,
+			wantOutput: "max turns 50",
+			wantErr:    false,
+		},
+		{
+			name:       "does not add --max-turns flag when MaxTurns is zero in streaming",
+			maxTurns:   0,
+			wantOutput: "max turns not set",
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			script := `#!/bin/bash
+if [[ "$*" == *"--max-turns"* ]]; then
+  if [[ "$*" == *"--max-turns 50"* ]]; then
+    echo '{"type":"result","result":"max turns 50","is_error":false}'
+  else
+    echo '{"type":"result","result":"max turns set","is_error":false}'
+  fi
+else
+  echo '{"type":"result","result":"max turns not set","is_error":false}'
+fi
+exit 0`
+			scriptPath := filepath.Join(tmpDir, "claude-streaming-max-turns")
+			err := os.WriteFile(scriptPath, []byte(script), 0755)
+			require.NoError(t, err)
+
+			executor := NewClaudeExecutorWithPath(scriptPath, NewLogger(LogLevelNormal))
+			ctx := context.Background()
+
+			config := ExecuteConfig{
+				Prompt:   "test prompt",
+				MaxTurns: tt.maxTurns,
+				Timeout:  5 * time.Second,
+			}
+
+			got, err := executor.ExecuteStreaming(ctx, config, nil)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Contains(t, got.Output, tt.wantOutput)
+			assert.Equal(t, 0, got.ExitCode)
+		})
+	}
+}
+
 func TestClaudeExecutor_logPromptIfVerbose(t *testing.T) {
 	tests := []struct {
 		name           string
