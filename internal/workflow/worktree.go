@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/michael-freling/claude-code-tools/internal/command"
 )
@@ -13,6 +14,7 @@ import (
 // WorktreeManager handles git worktree operations
 type WorktreeManager interface {
 	CreateWorktree(workflowName string) (string, error)
+	CreateWorktreeFromExistingBranch(ctx context.Context, workflowName string, branchName string) (string, error)
 	WorktreeExists(path string) bool
 	DeleteWorktree(path string) error
 }
@@ -21,6 +23,7 @@ type WorktreeManager interface {
 type worktreeManager struct {
 	baseDir   string
 	gitRunner command.GitRunner
+	cmdRunner command.Runner
 }
 
 // NewWorktreeManager creates a new worktree manager
@@ -29,6 +32,7 @@ func NewWorktreeManager(baseDir string) WorktreeManager {
 	return &worktreeManager{
 		baseDir:   baseDir,
 		gitRunner: command.NewGitRunner(cmdRunner),
+		cmdRunner: cmdRunner,
 	}
 }
 
@@ -37,6 +41,16 @@ func NewWorktreeManagerWithRunner(baseDir string, gitRunner command.GitRunner) W
 	return &worktreeManager{
 		baseDir:   baseDir,
 		gitRunner: gitRunner,
+		cmdRunner: command.NewRunner(),
+	}
+}
+
+// NewWorktreeManagerWithRunners creates a new worktree manager with custom runners
+func NewWorktreeManagerWithRunners(baseDir string, gitRunner command.GitRunner, cmdRunner command.Runner) WorktreeManager {
+	return &worktreeManager{
+		baseDir:   baseDir,
+		gitRunner: gitRunner,
+		cmdRunner: cmdRunner,
 	}
 }
 
@@ -78,6 +92,69 @@ func (w *worktreeManager) CreateWorktree(workflowName string) (string, error) {
 	}
 
 	return absWorktreePath, nil
+}
+
+// CreateWorktreeFromExistingBranch creates a worktree from an existing remote branch
+func (w *worktreeManager) CreateWorktreeFromExistingBranch(ctx context.Context, workflowName string, branchName string) (string, error) {
+	if workflowName == "" {
+		return "", fmt.Errorf("workflow name cannot be empty")
+	}
+	if branchName == "" {
+		return "", fmt.Errorf("branch name cannot be empty")
+	}
+
+	if err := w.gitRunner.FetchBranch(ctx, w.baseDir, branchName); err != nil {
+		return "", err
+	}
+
+	worktreesDir := filepath.Join(w.baseDir, "..", "worktrees")
+	worktreePath := filepath.Join(worktreesDir, workflowName)
+
+	absWorktreePath, err := filepath.Abs(worktreePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	if err := w.checkWorktreeConflict(ctx, branchName); err != nil {
+		return "", err
+	}
+
+	if _, err := os.Stat(worktreesDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(worktreesDir, 0755); err != nil {
+			return "", fmt.Errorf("failed to create worktrees directory: %w", err)
+		}
+	}
+
+	remoteBranch := fmt.Sprintf("origin/%s", branchName)
+	if err := w.gitRunner.WorktreeAddFromBase(ctx, w.baseDir, absWorktreePath, branchName, remoteBranch); err != nil {
+		return "", err
+	}
+
+	if err := w.setupPreCommitHooks(absWorktreePath); err != nil {
+		_ = err
+	}
+
+	return absWorktreePath, nil
+}
+
+// checkWorktreeConflict checks if a worktree already exists for the given branch
+func (w *worktreeManager) checkWorktreeConflict(ctx context.Context, branchName string) error {
+	stdout, _, err := w.cmdRunner.RunInDir(ctx, w.baseDir, "git", "worktree", "list", "--porcelain")
+	if err != nil {
+		return fmt.Errorf("failed to list worktrees: %w", err)
+	}
+
+	lines := strings.Split(stdout, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "branch ") {
+			existingBranch := strings.TrimPrefix(line, "branch refs/heads/")
+			if existingBranch == branchName {
+				return fmt.Errorf("worktree already exists for branch %s", branchName)
+			}
+		}
+	}
+
+	return nil
 }
 
 // WorktreeExists checks if a worktree exists at the given path

@@ -50,6 +50,8 @@ type WorkflowState struct {
 	SessionID         *string               `json:"sessionID,omitempty"`
 	SessionCreatedAt  *time.Time            `json:"sessionCreatedAt,omitempty"`
 	SessionReuseCount int                   `json:"sessionReuseCount,omitempty"`
+	UpdatePR          *int                  `json:"updatePR,omitempty"`       // nil = create mode, set = update mode
+	UpdatePRBranch    string                `json:"updatePRBranch,omitempty"` // The branch name of the PR being updated
 }
 
 // PhaseState represents the state of a single phase

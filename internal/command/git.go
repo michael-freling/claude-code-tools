@@ -42,6 +42,12 @@ type GitRunner interface {
 	CommitAll(ctx context.Context, dir string, message string) error
 	// GetDiffStat returns the diff stat output for the given base branch
 	GetDiffStat(ctx context.Context, dir string, base string) (string, error)
+	// FetchBranch fetches a specific branch from origin
+	FetchBranch(ctx context.Context, dir string, branch string) error
+	// RemoteBranchExists checks if a remote branch exists
+	RemoteBranchExists(ctx context.Context, dir string, remote string, branch string) (bool, error)
+	// WorktreeAddFromBase creates a worktree from a specific base branch
+	WorktreeAddFromBase(ctx context.Context, dir string, path string, branch string, baseBranch string) error
 }
 
 type gitRunner struct {
@@ -287,4 +293,58 @@ func (g *gitRunner) GetDiffStat(ctx context.Context, dir string, base string) (s
 	}
 
 	return stdout, nil
+}
+
+// FetchBranch fetches a specific branch from origin
+func (g *gitRunner) FetchBranch(ctx context.Context, dir string, branch string) error {
+	if branch == "" {
+		return fmt.Errorf("branch name cannot be empty")
+	}
+
+	_, stderr, err := g.runner.RunInDir(ctx, dir, "git", "fetch", "origin", branch)
+	if err != nil {
+		return fmt.Errorf("failed to fetch branch %s: %w (stderr: %s)", branch, err, stderr)
+	}
+
+	return nil
+}
+
+// RemoteBranchExists checks if a remote branch exists
+func (g *gitRunner) RemoteBranchExists(ctx context.Context, dir string, remote string, branch string) (bool, error) {
+	if remote == "" {
+		return false, fmt.Errorf("remote name cannot be empty")
+	}
+	if branch == "" {
+		return false, fmt.Errorf("branch name cannot be empty")
+	}
+
+	stdout, stderr, err := g.runner.RunInDir(ctx, dir, "git", "ls-remote", "--heads", remote, branch)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if remote branch %s/%s exists: %w (stderr: %s)", remote, branch, err, stderr)
+	}
+
+	return strings.TrimSpace(stdout) != "", nil
+}
+
+// WorktreeAddFromBase creates a worktree from a specific base branch
+func (g *gitRunner) WorktreeAddFromBase(ctx context.Context, dir string, path string, branch string, baseBranch string) error {
+	if path == "" {
+		return fmt.Errorf("worktree path cannot be empty")
+	}
+	if branch == "" {
+		return fmt.Errorf("branch name cannot be empty")
+	}
+	if baseBranch == "" {
+		return fmt.Errorf("base branch cannot be empty")
+	}
+
+	_, stderr, err := g.runner.RunInDir(ctx, dir, "git", "worktree", "add", "-b", branch, path, baseBranch)
+	if err != nil {
+		if strings.Contains(stderr, "already exists") {
+			return fmt.Errorf("branch %s already exists", branch)
+		}
+		return fmt.Errorf("failed to create worktree at %s from %s: %w (stderr: %s)", path, baseBranch, err, stderr)
+	}
+
+	return nil
 }

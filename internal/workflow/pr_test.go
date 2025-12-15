@@ -520,3 +520,140 @@ func TestPRManager_PushBranch(t *testing.T) {
 		})
 	}
 }
+
+func TestPRManager_ValidatePRForUpdate(t *testing.T) {
+	tests := []struct {
+		name        string
+		prNumber    int
+		setupMock   func(*MockGhRunner)
+		want        *PRValidationResult
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "validates open and mergeable PR successfully",
+			prNumber: 123,
+			setupMock: func(m *MockGhRunner) {
+				m.On("PRView", mock.Anything, "/test/repo", "number,state,headRefName,baseRefName,mergeable", ".").
+					Return(`{"number":123,"state":"OPEN","headRefName":"feature-branch","baseRefName":"main","mergeable":"MERGEABLE"}`, nil)
+			},
+			want: &PRValidationResult{
+				Number:      123,
+				State:       "OPEN",
+				HeadRefName: "feature-branch",
+				BaseRefName: "main",
+				Mergeable:   "MERGEABLE",
+			},
+		},
+		{
+			name:     "validates open PR with unknown mergeable status",
+			prNumber: 456,
+			setupMock: func(m *MockGhRunner) {
+				m.On("PRView", mock.Anything, "/test/repo", "number,state,headRefName,baseRefName,mergeable", ".").
+					Return(`{"number":456,"state":"OPEN","headRefName":"bugfix","baseRefName":"main","mergeable":"UNKNOWN"}`, nil)
+			},
+			want: &PRValidationResult{
+				Number:      456,
+				State:       "OPEN",
+				HeadRefName: "bugfix",
+				BaseRefName: "main",
+				Mergeable:   "UNKNOWN",
+			},
+		},
+		{
+			name:     "fails when PR number is zero",
+			prNumber: 0,
+			setupMock: func(m *MockGhRunner) {
+			},
+			wantErr:     true,
+			errContains: "PR number must be positive",
+		},
+		{
+			name:     "fails when PR number is negative",
+			prNumber: -1,
+			setupMock: func(m *MockGhRunner) {
+			},
+			wantErr:     true,
+			errContains: "PR number must be positive",
+		},
+		{
+			name:     "fails when gh command fails",
+			prNumber: 123,
+			setupMock: func(m *MockGhRunner) {
+				m.On("PRView", mock.Anything, "/test/repo", "number,state,headRefName,baseRefName,mergeable", ".").
+					Return("", fmt.Errorf("PR not found"))
+			},
+			wantErr:     true,
+			errContains: "failed to get PR info for #123",
+		},
+		{
+			name:     "fails when JSON parsing fails",
+			prNumber: 123,
+			setupMock: func(m *MockGhRunner) {
+				m.On("PRView", mock.Anything, "/test/repo", "number,state,headRefName,baseRefName,mergeable", ".").
+					Return(`{invalid json}`, nil)
+			},
+			wantErr:     true,
+			errContains: "failed to parse PR info",
+		},
+		{
+			name:     "fails when PR is closed",
+			prNumber: 123,
+			setupMock: func(m *MockGhRunner) {
+				m.On("PRView", mock.Anything, "/test/repo", "number,state,headRefName,baseRefName,mergeable", ".").
+					Return(`{"number":123,"state":"CLOSED","headRefName":"feature","baseRefName":"main","mergeable":"MERGEABLE"}`, nil)
+			},
+			wantErr:     true,
+			errContains: "PR #123 is CLOSED, cannot update",
+		},
+		{
+			name:     "fails when PR is merged",
+			prNumber: 456,
+			setupMock: func(m *MockGhRunner) {
+				m.On("PRView", mock.Anything, "/test/repo", "number,state,headRefName,baseRefName,mergeable", ".").
+					Return(`{"number":456,"state":"MERGED","headRefName":"feature","baseRefName":"main","mergeable":"MERGEABLE"}`, nil)
+			},
+			wantErr:     true,
+			errContains: "PR #456 is MERGED, cannot update",
+		},
+		{
+			name:     "fails when PR has conflicts",
+			prNumber: 789,
+			setupMock: func(m *MockGhRunner) {
+				m.On("PRView", mock.Anything, "/test/repo", "number,state,headRefName,baseRefName,mergeable", ".").
+					Return(`{"number":789,"state":"OPEN","headRefName":"feature","baseRefName":"main","mergeable":"CONFLICTING"}`, nil)
+			},
+			wantErr:     true,
+			errContains: "PR #789 has merge conflicts",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGhRunner := new(MockGhRunner)
+			tt.setupMock(mockGhRunner)
+
+			manager := NewPRManagerWithRunners("/test/repo", &MockGitRunner{}, mockGhRunner)
+			ctx := context.Background()
+
+			got, err := manager.ValidatePRForUpdate(ctx, tt.prNumber)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				assert.Nil(t, got)
+				mockGhRunner.AssertExpectations(t)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Equal(t, tt.want.Number, got.Number)
+			assert.Equal(t, tt.want.State, got.State)
+			assert.Equal(t, tt.want.HeadRefName, got.HeadRefName)
+			assert.Equal(t, tt.want.BaseRefName, got.BaseRefName)
+			assert.Equal(t, tt.want.Mergeable, got.Mergeable)
+			mockGhRunner.AssertExpectations(t)
+		})
+	}
+}

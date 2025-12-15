@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -634,6 +635,173 @@ func TestWorktreeManager_DeleteWorktree_WithMocks(t *testing.T) {
 
 			require.NoError(t, err)
 			mockGitRunner.AssertExpectations(t)
+		})
+	}
+}
+
+func TestWorktreeManager_CreateWorktreeFromExistingBranch(t *testing.T) {
+	tests := []struct {
+		name         string
+		workflowName string
+		branchName   string
+		setupMock    func(*MockGitRunner, *MockCommandRunner)
+		setupFS      func(t *testing.T) (baseDir string, cleanup func())
+		wantErr      bool
+		errContains  string
+	}{
+		{
+			name:         "fails with empty workflow name",
+			workflowName: "",
+			branchName:   "feature-branch",
+			setupMock:    func(mg *MockGitRunner, mc *MockCommandRunner) {},
+			setupFS: func(t *testing.T) (string, func()) {
+				tmpDir, err := os.MkdirTemp("", "worktree-test-*")
+				require.NoError(t, err)
+				return tmpDir, func() { os.RemoveAll(tmpDir) }
+			},
+			wantErr:     true,
+			errContains: "workflow name cannot be empty",
+		},
+		{
+			name:         "fails with empty branch name",
+			workflowName: "test-workflow",
+			branchName:   "",
+			setupMock:    func(mg *MockGitRunner, mc *MockCommandRunner) {},
+			setupFS: func(t *testing.T) (string, func()) {
+				tmpDir, err := os.MkdirTemp("", "worktree-test-*")
+				require.NoError(t, err)
+				return tmpDir, func() { os.RemoveAll(tmpDir) }
+			},
+			wantErr:     true,
+			errContains: "branch name cannot be empty",
+		},
+		{
+			name:         "fails when fetch fails",
+			workflowName: "test-workflow",
+			branchName:   "feature-branch",
+			setupMock: func(mg *MockGitRunner, mc *MockCommandRunner) {
+				mg.On("FetchBranch", mock.Anything, mock.Anything, "feature-branch").
+					Return(fmt.Errorf("failed to fetch branch feature-branch"))
+			},
+			setupFS: func(t *testing.T) (string, func()) {
+				tmpDir, err := os.MkdirTemp("", "worktree-test-*")
+				require.NoError(t, err)
+				return tmpDir, func() { os.RemoveAll(tmpDir) }
+			},
+			wantErr:     true,
+			errContains: "failed to fetch branch",
+		},
+		{
+			name:         "fails when worktree already exists for branch",
+			workflowName: "test-workflow",
+			branchName:   "feature-branch",
+			setupMock: func(mg *MockGitRunner, mc *MockCommandRunner) {
+				mg.On("FetchBranch", mock.Anything, mock.Anything, "feature-branch").Return(nil)
+				mc.On("RunInDir", mock.Anything, mock.Anything, "git", "worktree", "list", "--porcelain").
+					Return("worktree /path/to/worktree\nbranch refs/heads/feature-branch\n", "", nil)
+			},
+			setupFS: func(t *testing.T) (string, func()) {
+				tmpDir, err := os.MkdirTemp("", "worktree-test-*")
+				require.NoError(t, err)
+				return tmpDir, func() { os.RemoveAll(tmpDir) }
+			},
+			wantErr:     true,
+			errContains: "worktree already exists for branch feature-branch",
+		},
+		{
+			name:         "creates worktree successfully",
+			workflowName: "test-workflow",
+			branchName:   "feature-branch",
+			setupMock: func(mg *MockGitRunner, mc *MockCommandRunner) {
+				mg.On("FetchBranch", mock.Anything, mock.Anything, "feature-branch").Return(nil)
+				mc.On("RunInDir", mock.Anything, mock.Anything, "git", "worktree", "list", "--porcelain").
+					Return("worktree /path/to/other\nbranch refs/heads/other-branch\n", "", nil)
+				mg.On("WorktreeAddFromBase", mock.Anything, mock.Anything, mock.MatchedBy(func(path string) bool {
+					return filepath.Base(path) == "test-workflow"
+				}), "feature-branch", "origin/feature-branch").Return(nil)
+			},
+			setupFS: func(t *testing.T) (string, func()) {
+				tmpDir, err := os.MkdirTemp("", "worktree-test-*")
+				require.NoError(t, err)
+				worktreesDir := filepath.Join(tmpDir, "worktrees")
+				err = os.MkdirAll(worktreesDir, 0755)
+				require.NoError(t, err)
+				return tmpDir, func() { os.RemoveAll(tmpDir) }
+			},
+			wantErr: false,
+		},
+		{
+			name:         "creates worktrees directory when it doesn't exist",
+			workflowName: "test-workflow",
+			branchName:   "feature-branch",
+			setupMock: func(mg *MockGitRunner, mc *MockCommandRunner) {
+				mg.On("FetchBranch", mock.Anything, mock.Anything, "feature-branch").Return(nil)
+				mc.On("RunInDir", mock.Anything, mock.Anything, "git", "worktree", "list", "--porcelain").
+					Return("", "", nil)
+				mg.On("WorktreeAddFromBase", mock.Anything, mock.Anything, mock.MatchedBy(func(path string) bool {
+					return filepath.Base(path) == "test-workflow"
+				}), "feature-branch", "origin/feature-branch").Return(nil)
+			},
+			setupFS: func(t *testing.T) (string, func()) {
+				tmpDir, err := os.MkdirTemp("", "worktree-test-*")
+				require.NoError(t, err)
+				return tmpDir, func() { os.RemoveAll(tmpDir) }
+			},
+			wantErr: false,
+		},
+		{
+			name:         "fails when WorktreeAddFromBase fails",
+			workflowName: "test-workflow",
+			branchName:   "feature-branch",
+			setupMock: func(mg *MockGitRunner, mc *MockCommandRunner) {
+				mg.On("FetchBranch", mock.Anything, mock.Anything, "feature-branch").Return(nil)
+				mc.On("RunInDir", mock.Anything, mock.Anything, "git", "worktree", "list", "--porcelain").
+					Return("", "", nil)
+				mg.On("WorktreeAddFromBase", mock.Anything, mock.Anything, mock.MatchedBy(func(path string) bool {
+					return filepath.Base(path) == "test-workflow"
+				}), "feature-branch", "origin/feature-branch").
+					Return(fmt.Errorf("failed to create worktree"))
+			},
+			setupFS: func(t *testing.T) (string, func()) {
+				tmpDir, err := os.MkdirTemp("", "worktree-test-*")
+				require.NoError(t, err)
+				worktreesDir := filepath.Join(tmpDir, "worktrees")
+				err = os.MkdirAll(worktreesDir, 0755)
+				require.NoError(t, err)
+				return tmpDir, func() { os.RemoveAll(tmpDir) }
+			},
+			wantErr:     true,
+			errContains: "failed to create worktree",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGitRunner := new(MockGitRunner)
+			mockCmdRunner := new(MockCommandRunner)
+			tt.setupMock(mockGitRunner, mockCmdRunner)
+
+			baseDir, cleanup := tt.setupFS(t)
+			defer cleanup()
+
+			manager := NewWorktreeManagerWithRunners(filepath.Join(baseDir, "repo"), mockGitRunner, mockCmdRunner)
+
+			ctx := context.Background()
+			got, err := manager.CreateWorktreeFromExistingBranch(ctx, tt.workflowName, tt.branchName)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				assert.Empty(t, got)
+				mockGitRunner.AssertExpectations(t)
+				mockCmdRunner.AssertExpectations(t)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Contains(t, got, tt.workflowName)
+			mockGitRunner.AssertExpectations(t)
+			mockCmdRunner.AssertExpectations(t)
 		})
 	}
 }

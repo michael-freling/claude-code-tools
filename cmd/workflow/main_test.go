@@ -2335,3 +2335,113 @@ func TestCleanCmd_ConfirmationPromptCancelled(t *testing.T) {
 		})
 	}
 }
+
+func TestStartCmd_UpdatePRFlag(t *testing.T) {
+	cmd := newStartCmd()
+
+	updatePRFlag := cmd.Flags().Lookup("update-pr")
+	require.NotNil(t, updatePRFlag)
+	assert.Equal(t, "int", updatePRFlag.Value.Type())
+	assert.Equal(t, "0", updatePRFlag.DefValue)
+	assert.Equal(t, "update an existing PR instead of creating a new one (PR number)", updatePRFlag.Usage)
+}
+
+func TestStartCmd_UpdatePRAndSplitPRMutualExclusivity(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "both update-pr and split-pr set should fail",
+			args:    []string{"start", "test-workflow", "test description", "--type", "feature", "--update-pr", "123", "--split-pr"},
+			wantErr: true,
+			errMsg:  "cannot use --update-pr and --split-pr together",
+		},
+		{
+			name:    "only update-pr set should succeed with orchestrator call",
+			args:    []string{"start", "test-workflow", "test description", "--type", "feature", "--update-pr", "123"},
+			wantErr: true,
+		},
+		{
+			name:    "only split-pr set should succeed with orchestrator call",
+			args:    []string{"start", "test-workflow", "test description", "--type", "feature", "--split-pr"},
+			wantErr: true,
+		},
+		{
+			name:    "neither flag set should succeed with orchestrator call",
+			args:    []string{"start", "test-workflow", "test description", "--type", "feature"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rootCmd := newRootCmd()
+			rootCmd.SetArgs(tt.args)
+
+			buf := new(bytes.Buffer)
+			rootCmd.SetOut(buf)
+			rootCmd.SetErr(buf)
+
+			err := rootCmd.Execute()
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestStartCmd_UpdatePRFlagValue(t *testing.T) {
+	tests := []struct {
+		name         string
+		updatePRFlag string
+		wantValue    string
+	}{
+		{
+			name:         "default value is 0",
+			updatePRFlag: "",
+			wantValue:    "0",
+		},
+		{
+			name:         "valid PR number",
+			updatePRFlag: "123",
+			wantValue:    "123",
+		},
+		{
+			name:         "another valid PR number",
+			updatePRFlag: "999",
+			wantValue:    "999",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newStartCmd()
+			updatePRFlag := cmd.Flags().Lookup("update-pr")
+			require.NotNil(t, updatePRFlag)
+
+			if tt.updatePRFlag != "" {
+				err := updatePRFlag.Value.Set(tt.updatePRFlag)
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, tt.wantValue, updatePRFlag.Value.String())
+		})
+	}
+}
+
+func TestStartCmd_HelpTextWithExamples(t *testing.T) {
+	cmd := newStartCmd()
+
+	assert.Contains(t, cmd.Long, "Examples:")
+	assert.Contains(t, cmd.Long, "workflow start my-feature \"Add new feature\"")
+	assert.Contains(t, cmd.Long, "workflow start my-feature \"Add new feature\" --update-pr 123")
+}

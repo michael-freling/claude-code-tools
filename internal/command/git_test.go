@@ -1089,3 +1089,298 @@ func TestGitRunner_GetDiffStat(t *testing.T) {
 		})
 	}
 }
+
+func TestGitRunner_FetchBranch(t *testing.T) {
+	tests := []struct {
+		name        string
+		dir         string
+		branch      string
+		setupMock   func(*MockRunner)
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:   "fetches branch successfully",
+			dir:    "/test/repo",
+			branch: "feature-branch",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "git", "fetch", "origin", "feature-branch").
+					Return("", "", nil)
+			},
+			wantErr: false,
+		},
+		{
+			name:        "fails when branch name is empty",
+			dir:         "/test/repo",
+			branch:      "",
+			setupMock:   func(m *MockRunner) {},
+			wantErr:     true,
+			errContains: "branch name cannot be empty",
+		},
+		{
+			name:   "fails when git fetch fails",
+			dir:    "/test/repo",
+			branch: "feature-branch",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "git", "fetch", "origin", "feature-branch").
+					Return("", "fatal: couldn't find remote ref feature-branch", fmt.Errorf("exit status 128"))
+			},
+			wantErr:     true,
+			errContains: "failed to fetch branch feature-branch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockRunner := NewMockRunner(ctrl)
+			tt.setupMock(mockRunner)
+
+			gitRunner := NewGitRunner(mockRunner)
+			ctx := context.Background()
+
+			err := gitRunner.FetchBranch(ctx, tt.dir, tt.branch)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestGitRunner_RemoteBranchExists(t *testing.T) {
+	tests := []struct {
+		name        string
+		dir         string
+		remote      string
+		branch      string
+		setupMock   func(*MockRunner)
+		want        bool
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:   "returns true when remote branch exists",
+			dir:    "/test/repo",
+			remote: "origin",
+			branch: "feature-branch",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "git", "ls-remote", "--heads", "origin", "feature-branch").
+					Return("abc123\trefs/heads/feature-branch\n", "", nil)
+			},
+			want:    true,
+			wantErr: false,
+		},
+		{
+			name:   "returns false when remote branch does not exist",
+			dir:    "/test/repo",
+			remote: "origin",
+			branch: "nonexistent-branch",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "git", "ls-remote", "--heads", "origin", "nonexistent-branch").
+					Return("", "", nil)
+			},
+			want:    false,
+			wantErr: false,
+		},
+		{
+			name:   "returns false when output is whitespace only",
+			dir:    "/test/repo",
+			remote: "origin",
+			branch: "test-branch",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "git", "ls-remote", "--heads", "origin", "test-branch").
+					Return("   \n", "", nil)
+			},
+			want:    false,
+			wantErr: false,
+		},
+		{
+			name:        "fails when remote name is empty",
+			dir:         "/test/repo",
+			remote:      "",
+			branch:      "feature-branch",
+			setupMock:   func(m *MockRunner) {},
+			wantErr:     true,
+			errContains: "remote name cannot be empty",
+		},
+		{
+			name:        "fails when branch name is empty",
+			dir:         "/test/repo",
+			remote:      "origin",
+			branch:      "",
+			setupMock:   func(m *MockRunner) {},
+			wantErr:     true,
+			errContains: "branch name cannot be empty",
+		},
+		{
+			name:   "fails when git ls-remote fails",
+			dir:    "/test/repo",
+			remote: "origin",
+			branch: "feature-branch",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "git", "ls-remote", "--heads", "origin", "feature-branch").
+					Return("", "fatal: 'origin' does not appear to be a git repository", fmt.Errorf("exit status 128"))
+			},
+			wantErr:     true,
+			errContains: "failed to check if remote branch origin/feature-branch exists",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockRunner := NewMockRunner(ctrl)
+			tt.setupMock(mockRunner)
+
+			gitRunner := NewGitRunner(mockRunner)
+			ctx := context.Background()
+
+			got, err := gitRunner.RemoteBranchExists(ctx, tt.dir, tt.remote, tt.branch)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestGitRunner_WorktreeAddFromBase(t *testing.T) {
+	tests := []struct {
+		name        string
+		dir         string
+		path        string
+		branch      string
+		baseBranch  string
+		setupMock   func(*MockRunner)
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:       "creates worktree from base branch successfully",
+			dir:        "/test/repo",
+			path:       "/test/worktree",
+			branch:     "feature-branch",
+			baseBranch: "origin/main",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "git", "worktree", "add", "-b", "feature-branch", "/test/worktree", "origin/main").
+					Return("", "", nil)
+			},
+			wantErr: false,
+		},
+		{
+			name:       "creates worktree from local base branch successfully",
+			dir:        "/test/repo",
+			path:       "/test/worktree",
+			branch:     "new-feature",
+			baseBranch: "develop",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "git", "worktree", "add", "-b", "new-feature", "/test/worktree", "develop").
+					Return("", "", nil)
+			},
+			wantErr: false,
+		},
+		{
+			name:        "fails when path is empty",
+			dir:         "/test/repo",
+			path:        "",
+			branch:      "feature-branch",
+			baseBranch:  "origin/main",
+			setupMock:   func(m *MockRunner) {},
+			wantErr:     true,
+			errContains: "worktree path cannot be empty",
+		},
+		{
+			name:        "fails when branch is empty",
+			dir:         "/test/repo",
+			path:        "/test/worktree",
+			branch:      "",
+			baseBranch:  "origin/main",
+			setupMock:   func(m *MockRunner) {},
+			wantErr:     true,
+			errContains: "branch name cannot be empty",
+		},
+		{
+			name:        "fails when base branch is empty",
+			dir:         "/test/repo",
+			path:        "/test/worktree",
+			branch:      "feature-branch",
+			baseBranch:  "",
+			setupMock:   func(m *MockRunner) {},
+			wantErr:     true,
+			errContains: "base branch cannot be empty",
+		},
+		{
+			name:       "fails when branch already exists",
+			dir:        "/test/repo",
+			path:       "/test/worktree",
+			branch:     "existing-branch",
+			baseBranch: "origin/main",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "git", "worktree", "add", "-b", "existing-branch", "/test/worktree", "origin/main").
+					Return("", "fatal: A branch named 'existing-branch' already exists", fmt.Errorf("exit status 128"))
+			},
+			wantErr:     true,
+			errContains: "branch existing-branch already exists",
+		},
+		{
+			name:       "fails when git worktree add fails with other error",
+			dir:        "/test/repo",
+			path:       "/test/worktree",
+			branch:     "feature-branch",
+			baseBranch: "origin/main",
+			setupMock: func(m *MockRunner) {
+				m.EXPECT().
+					RunInDir(gomock.Any(), "/test/repo", "git", "worktree", "add", "-b", "feature-branch", "/test/worktree", "origin/main").
+					Return("", "fatal: invalid reference: origin/main", fmt.Errorf("exit status 128"))
+			},
+			wantErr:     true,
+			errContains: "failed to create worktree at /test/worktree from origin/main",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockRunner := NewMockRunner(ctrl)
+			tt.setupMock(mockRunner)
+
+			gitRunner := NewGitRunner(mockRunner)
+			ctx := context.Background()
+
+			err := gitRunner.WorktreeAddFromBase(ctx, tt.dir, tt.path, tt.branch, tt.baseBranch)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
+}
