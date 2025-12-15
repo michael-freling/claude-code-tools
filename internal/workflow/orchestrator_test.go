@@ -5319,10 +5319,10 @@ func TestOrchestrator_executePRSplit_EmptyChildPRsRetry(t *testing.T) {
 				// First attempt: GeneratePRSplitPrompt
 				pg.On("GeneratePRSplitPrompt", mock.Anything, mock.Anything).Return("pr split prompt", nil).Once()
 
-				// First execution returns empty childPRs
-				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+				// First execution returns empty childPRs (executePRSplit uses Execute, not ExecuteStreaming)
+				exec.On("Execute", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
 					return config.Prompt == "pr split prompt"
-				}), mock.Anything).Return(&ExecuteResult{
+				})).Return(&ExecuteResult{
 					Output:   `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`,
 					ExitCode: 0,
 				}, nil).Once()
@@ -5342,10 +5342,10 @@ func TestOrchestrator_executePRSplit_EmptyChildPRsRetry(t *testing.T) {
 				// Second attempt: GenerateFixCIPrompt
 				pg.On("GenerateFixCIPrompt", feedbackEmptyChildPRs).Return("fix prompt", nil).Once()
 
-				// Second execution returns valid childPRs
-				exec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
+				// Second execution returns valid childPRs (executePRSplit uses Execute, not ExecuteStreaming)
+				exec.On("Execute", mock.Anything, mock.MatchedBy(func(config ExecuteConfig) bool {
 					return config.Prompt == "fix prompt"
-				}), mock.Anything).Return(&ExecuteResult{
+				})).Return(&ExecuteResult{
 					Output:   `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[{"title":"Child PR","description":"Desc"}]}`,
 					ExitCode: 0,
 				}, nil).Once()
@@ -5380,9 +5380,9 @@ func TestOrchestrator_executePRSplit_EmptyChildPRsRetry(t *testing.T) {
 					{Hash: "abc123", Subject: "feat: add feature"},
 				}, nil)
 
-				// First attempt
+				// First attempt (executePRSplit uses Execute, not ExecuteStreaming)
 				pg.On("GeneratePRSplitPrompt", mock.Anything, mock.Anything).Return("pr split prompt", nil).Once()
-				exec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
+				exec.On("Execute", mock.Anything, mock.Anything).Return(&ExecuteResult{
 					Output:   `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`,
 					ExitCode: 0,
 				}, nil).Times(2)
@@ -5539,8 +5539,9 @@ func TestOrchestrator_executePRSplit_FeedbackMessage(t *testing.T) {
 		{Hash: "abc123", Subject: "feat: add feature"},
 	}, nil)
 
+	// executePRSplit uses Execute, not ExecuteStreaming
 	mockPG.On("GeneratePRSplitPrompt", mock.Anything, mock.Anything).Return("pr split prompt", nil).Once()
-	mockExec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
+	mockExec.On("Execute", mock.Anything, mock.Anything).Return(&ExecuteResult{
 		Output:   `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`,
 		ExitCode: 0,
 	}, nil).Once()
@@ -5551,8 +5552,9 @@ func TestOrchestrator_executePRSplit_FeedbackMessage(t *testing.T) {
 	mockSM.On("SaveRawOutput", "test-workflow", PhasePRSplit, mock.Anything).Return(nil).Once()
 	mockSM.On("WorkflowDir", "test-workflow").Return("/tmp/workflows/test-workflow")
 
+	// executePRSplit uses Execute, not ExecuteStreaming
 	mockPG.On("GenerateFixCIPrompt", mock.Anything).Return("fix prompt", nil).Once()
-	mockExec.On("ExecuteStreaming", mock.Anything, mock.Anything, mock.Anything).Return(&ExecuteResult{
+	mockExec.On("Execute", mock.Anything, mock.Anything).Return(&ExecuteResult{
 		Output:   `{"strategy":"commits","parentTitle":"Parent","parentDescription":"Desc","summary":"Split","childPRs":[]}`,
 		ExitCode: 0,
 	}, nil).Once()
@@ -6124,9 +6126,10 @@ func TestOrchestrator_ExecutePRSplit_MaxTurns(t *testing.T) {
 			mockGR.On("GetCommits", mock.Anything, mock.Anything, "main").Return(commits, nil)
 			mockPG.On("GeneratePRSplitPrompt", mock.Anything, commits).Return("prompt", nil)
 
-			mockExec.On("ExecuteStreaming", mock.Anything, mock.MatchedBy(func(cfg ExecuteConfig) bool {
+			// executePRSplit uses Execute, not ExecuteStreaming
+			mockExec.On("Execute", mock.Anything, mock.MatchedBy(func(cfg ExecuteConfig) bool {
 				return cfg.MaxTurns == tt.wantMaxTurns
-			}), mock.Anything).Return(&ExecuteResult{
+			})).Return(&ExecuteResult{
 				Output:   `{"strategy": "commits", "parentTitle": "test", "parentDescription": "desc", "summary": "done", "childPRs": [{"title": "test", "description": "desc"}]}`,
 				ExitCode: 0,
 			}, nil)
