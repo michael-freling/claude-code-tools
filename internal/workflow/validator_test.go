@@ -778,7 +778,7 @@ func TestCalculateSkippedPhases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := calculateSkippedPhases(tt.current, tt.target)
+			got := CalculateSkippedPhases(tt.current, tt.target)
 			assert.Equal(t, tt.want, got)
 		})
 	}

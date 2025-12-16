@@ -145,6 +145,10 @@ func (o *Orchestrator) SetConfirmFunc(fn func(plan *Plan) (bool, string, error))
 
 // handleSkipToPhase validates and performs a skip to a target phase
 func (o *Orchestrator) handleSkipToPhase(state *WorkflowState, targetPhase Phase, forceBackward bool, externalPlanPath string) error {
+	if state == nil {
+		return fmt.Errorf("state cannot be nil")
+	}
+
 	validator := NewSkipValidator(o.stateManager, o.config.BaseDir)
 	if err := validator.ValidateSkip(state, targetPhase, forceBackward, externalPlanPath); err != nil {
 		return err
@@ -168,7 +172,7 @@ func (o *Orchestrator) handleSkipToPhase(state *WorkflowState, targetPhase Phase
 		state.ExternalPlanUsed = true
 	}
 
-	skippedPhases := calculateSkippedPhases(state.CurrentPhase, targetPhase)
+	skippedPhases := CalculateSkippedPhases(state.CurrentPhase, targetPhase)
 	MarkPhasesSkipped(state, skippedPhases)
 
 	reason := fmt.Sprintf("Skipped from %s to %s", state.CurrentPhase, targetPhase)

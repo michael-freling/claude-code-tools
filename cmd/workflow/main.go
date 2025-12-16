@@ -23,6 +23,15 @@ var (
 	forceBackward              bool
 )
 
+// validPhases maps lowercase phase names to Phase constants
+var validPhases = map[string]workflow.Phase{
+	"planning":       workflow.PhasePlanning,
+	"confirmation":   workflow.PhaseConfirmation,
+	"implementation": workflow.PhaseImplementation,
+	"refactoring":    workflow.PhaseRefactoring,
+	"pr-split":       workflow.PhasePRSplit,
+}
+
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
 		os.Exit(1)
@@ -102,13 +111,6 @@ Examples:
 			// Validate skip-to flag and convert to Phase
 			var skipToPhase workflow.Phase
 			if skipTo != "" {
-				validPhases := map[string]workflow.Phase{
-					"planning":       workflow.PhasePlanning,
-					"confirmation":   workflow.PhaseConfirmation,
-					"implementation": workflow.PhaseImplementation,
-					"refactoring":    workflow.PhaseRefactoring,
-					"pr-split":       workflow.PhasePRSplit,
-				}
 				phase, ok := validPhases[skipTo]
 				if !ok {
 					return fmt.Errorf("invalid --skip-to value: %s (must be one of: planning, confirmation, implementation, refactoring, pr-split)", skipTo)
@@ -283,13 +285,6 @@ Examples:
 			// Validate skip-to flag and convert to Phase
 			var skipToPhase workflow.Phase
 			if skipTo != "" {
-				validPhases := map[string]workflow.Phase{
-					"planning":       workflow.PhasePlanning,
-					"confirmation":   workflow.PhaseConfirmation,
-					"implementation": workflow.PhaseImplementation,
-					"refactoring":    workflow.PhaseRefactoring,
-					"pr-split":       workflow.PhasePRSplit,
-				}
 				phase, ok := validPhases[skipTo]
 				if !ok {
 					return fmt.Errorf("invalid --skip-to value: %s (must be one of: planning, confirmation, implementation, refactoring, pr-split)", skipTo)

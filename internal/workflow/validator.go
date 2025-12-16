@@ -189,8 +189,8 @@ func getPhaseOrder(phase Phase) int {
 	}
 }
 
-// calculateSkippedPhases returns the phases that would be skipped going from current to target
-func calculateSkippedPhases(current, target Phase) []Phase {
+// CalculateSkippedPhases returns the phases that would be skipped going from current to target
+func CalculateSkippedPhases(current, target Phase) []Phase {
 	currentOrder := getPhaseOrder(current)
 	targetOrder := getPhaseOrder(target)
 
