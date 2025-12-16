@@ -124,6 +124,30 @@ func (m *MockStateManager) SetTimeProvider(tp TimeProvider) {
 	m.Called(tp)
 }
 
+func (m *MockStateManager) RecordPhaseTransition(state *WorkflowState, from, to Phase, transitionType, reason string) {
+	m.Called(state, from, to, transitionType, reason)
+	// Actually perform the operation for tests that expect state mutations
+	transition := PhaseTransition{
+		FromPhase:      from,
+		ToPhase:        to,
+		TransitionType: transitionType,
+		Timestamp:      time.Now(),
+		Reason:         reason,
+	}
+	state.PhaseHistory = append(state.PhaseHistory, transition)
+}
+
+func (m *MockStateManager) MarkPhasesSkipped(state *WorkflowState, phases []Phase) {
+	m.Called(state, phases)
+	// Actually perform the operation for tests that expect state mutations
+	for _, phase := range phases {
+		state.SkippedPhases = append(state.SkippedPhases, phase)
+		if phaseState, ok := state.Phases[phase]; ok {
+			phaseState.Status = StatusSkipped
+		}
+	}
+}
+
 func (m *MockStateManager) SaveRawOutput(name string, phase Phase, output string) error {
 	args := m.Called(name, phase, output)
 	return args.Error(0)
@@ -5350,6 +5374,8 @@ func TestOrchestrator_handleSkipToPhase(t *testing.T) {
 				sm.On("WorkflowDir", "test-workflow").Return("/tmp/workflow")
 				sm.On("SavePlan", "test-workflow", mock.AnythingOfType("*workflow.Plan")).Return(nil)
 				sm.On("SavePlanMarkdown", "test-workflow", mock.AnythingOfType("string")).Return(nil)
+				sm.On("MarkPhasesSkipped", mock.AnythingOfType("*workflow.WorkflowState"), mock.AnythingOfType("[]workflow.Phase")).Return()
+				sm.On("RecordPhaseTransition", mock.AnythingOfType("*workflow.WorkflowState"), mock.AnythingOfType("workflow.Phase"), mock.AnythingOfType("workflow.Phase"), mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return()
 			},
 			wantErr: false,
 			validateState: func(t *testing.T, state *WorkflowState) {
@@ -5376,6 +5402,8 @@ func TestOrchestrator_handleSkipToPhase(t *testing.T) {
 				sm.On("WorkflowDir", "test-workflow").Return("/tmp/workflow")
 				sm.On("SavePlan", "test-workflow", mock.AnythingOfType("*workflow.Plan")).Return(nil)
 				sm.On("SavePlanMarkdown", "test-workflow", mock.AnythingOfType("string")).Return(nil)
+				sm.On("MarkPhasesSkipped", mock.AnythingOfType("*workflow.WorkflowState"), mock.AnythingOfType("[]workflow.Phase")).Return()
+				sm.On("RecordPhaseTransition", mock.AnythingOfType("*workflow.WorkflowState"), mock.AnythingOfType("workflow.Phase"), mock.AnythingOfType("workflow.Phase"), mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return()
 			},
 			wantErr: false,
 			validateState: func(t *testing.T, state *WorkflowState) {
@@ -5436,6 +5464,8 @@ func TestOrchestrator_handleSkipToPhase(t *testing.T) {
 			},
 			setupMocks: func(sm *MockStateManager, planPath string) {
 				// Planning has no prerequisites, so no mocks needed
+				sm.On("MarkPhasesSkipped", mock.AnythingOfType("*workflow.WorkflowState"), mock.AnythingOfType("[]workflow.Phase")).Return()
+				sm.On("RecordPhaseTransition", mock.AnythingOfType("*workflow.WorkflowState"), mock.AnythingOfType("workflow.Phase"), mock.AnythingOfType("workflow.Phase"), mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return()
 			},
 			wantErr: false,
 			validateState: func(t *testing.T, state *WorkflowState) {

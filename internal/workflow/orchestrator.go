@@ -223,13 +223,13 @@ func (o *Orchestrator) handleSkipToPhase(state *WorkflowState, targetPhase Phase
 	}
 
 	skippedPhases := CalculateSkippedPhases(state.CurrentPhase, targetPhase)
-	MarkPhasesSkipped(state, skippedPhases)
+	o.stateManager.MarkPhasesSkipped(state, skippedPhases)
 
 	reason := fmt.Sprintf("Skipped from %s to %s", state.CurrentPhase, targetPhase)
 	if externalPlanPath != "" {
 		reason += " with external plan"
 	}
-	RecordPhaseTransition(state, state.CurrentPhase, targetPhase, "skip", reason)
+	o.stateManager.RecordPhaseTransition(state, state.CurrentPhase, targetPhase, "skip", reason)
 
 	state.CurrentPhase = targetPhase
 	if phaseState, ok := state.Phases[targetPhase]; ok {

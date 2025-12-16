@@ -56,6 +56,10 @@ type StateManager interface {
 	ListWorkflows() ([]WorkflowInfo, error)
 	DeleteWorkflow(name string) error
 
+	// State helper operations
+	RecordPhaseTransition(state *WorkflowState, from, to Phase, transitionType, reason string)
+	MarkPhasesSkipped(state *WorkflowState, phases []Phase)
+
 	// Time provider for testing
 	SetTimeProvider(tp TimeProvider)
 }
@@ -523,23 +527,29 @@ func MigrateState(state *WorkflowState) {
 }
 
 // RecordPhaseTransition appends a new PhaseTransition to PhaseHistory
-func RecordPhaseTransition(state *WorkflowState, from, to Phase, transitionType, reason string) {
+func (s *fileStateManager) RecordPhaseTransition(state *WorkflowState, from, to Phase, transitionType, reason string) {
 	transition := PhaseTransition{
 		FromPhase:      from,
 		ToPhase:        to,
 		TransitionType: transitionType,
-		Timestamp:      time.Now(),
+		Timestamp:      s.timeProvider(),
 		Reason:         reason,
 	}
 	state.PhaseHistory = append(state.PhaseHistory, transition)
 }
 
 // MarkPhasesSkipped adds phases to SkippedPhases and marks each phase's status as StatusSkipped
-func MarkPhasesSkipped(state *WorkflowState, phases []Phase) {
+func (s *fileStateManager) MarkPhasesSkipped(state *WorkflowState, phases []Phase) {
 	for _, phase := range phases {
 		state.SkippedPhases = append(state.SkippedPhases, phase)
 		if phaseState, ok := state.Phases[phase]; ok {
 			phaseState.Status = StatusSkipped
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: Phase %s does not exist in state.Phases, initializing as skipped\n", phase)
+			state.Phases[phase] = &PhaseState{
+				Status:   StatusSkipped,
+				Attempts: 0,
+			}
 		}
 	}
 }

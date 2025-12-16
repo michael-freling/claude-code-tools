@@ -1765,11 +1765,17 @@ func TestRecordPhaseTransition(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			sm := NewStateManager(tmpDir)
+
+			fixedTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+			sm.SetTimeProvider(func() time.Time { return fixedTime })
+
 			state := &WorkflowState{
 				PhaseHistory: tt.initialHistory,
 			}
 
-			RecordPhaseTransition(state, tt.from, tt.to, tt.transitionType, tt.reason)
+			sm.RecordPhaseTransition(state, tt.from, tt.to, tt.transitionType, tt.reason)
 
 			require.Len(t, state.PhaseHistory, tt.wantLen)
 
@@ -1778,7 +1784,7 @@ func TestRecordPhaseTransition(t *testing.T) {
 			assert.Equal(t, tt.to, lastTransition.ToPhase)
 			assert.Equal(t, tt.transitionType, lastTransition.TransitionType)
 			assert.Equal(t, tt.reason, lastTransition.Reason)
-			assert.NotZero(t, lastTransition.Timestamp)
+			assert.Equal(t, fixedTime, lastTransition.Timestamp)
 		})
 	}
 }
@@ -1817,6 +1823,9 @@ func TestMarkPhasesSkipped(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			sm := NewStateManager(tmpDir)
+
 			state := &WorkflowState{
 				SkippedPhases: []Phase{},
 				Phases: map[Phase]*PhaseState{
@@ -1828,7 +1837,7 @@ func TestMarkPhasesSkipped(t *testing.T) {
 				},
 			}
 
-			MarkPhasesSkipped(state, tt.phases)
+			sm.MarkPhasesSkipped(state, tt.phases)
 
 			assert.Equal(t, tt.wantSkipped, state.SkippedPhases)
 
@@ -1840,6 +1849,9 @@ func TestMarkPhasesSkipped(t *testing.T) {
 }
 
 func TestMarkPhasesSkipped_WithNonExistentPhase(t *testing.T) {
+	tmpDir := t.TempDir()
+	sm := NewStateManager(tmpDir)
+
 	state := &WorkflowState{
 		SkippedPhases: []Phase{},
 		Phases: map[Phase]*PhaseState{
@@ -1847,9 +1859,12 @@ func TestMarkPhasesSkipped_WithNonExistentPhase(t *testing.T) {
 		},
 	}
 
-	MarkPhasesSkipped(state, []Phase{PhaseRefactoring})
+	sm.MarkPhasesSkipped(state, []Phase{PhaseRefactoring})
 
 	assert.Equal(t, []Phase{PhaseRefactoring}, state.SkippedPhases)
+	require.NotNil(t, state.Phases[PhaseRefactoring])
+	assert.Equal(t, StatusSkipped, state.Phases[PhaseRefactoring].Status)
+	assert.Equal(t, 0, state.Phases[PhaseRefactoring].Attempts)
 }
 
 func TestInitState_InitializesNewFields(t *testing.T) {
