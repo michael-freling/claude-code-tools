@@ -23,7 +23,6 @@ var (
 	forceBackward              bool
 )
 
-// validPhases maps lowercase phase names to Phase constants
 var validPhases = map[string]workflow.Phase{
 	"planning":       workflow.PhasePlanning,
 	"confirmation":   workflow.PhaseConfirmation,
@@ -83,6 +82,52 @@ func createOrchestrator() (*workflow.Orchestrator, error) {
 	return workflow.NewOrchestratorWithConfig(config)
 }
 
+func parseSkipToPhase(skipTo string) (workflow.Phase, error) {
+	if skipTo == "" {
+		return "", nil
+	}
+
+	phase, ok := validPhases[skipTo]
+	if !ok {
+		return "", fmt.Errorf("invalid flag combination: --skip-to value '%s' is not valid (must be one of: planning, confirmation, implementation, refactoring, pr-split)", skipTo)
+	}
+	return phase, nil
+}
+
+func validateStartFlags(skipTo, withPlan string, updatePR int, forceBackward bool) error {
+	if updatePR > 0 && splitPR {
+		return fmt.Errorf("invalid flag combination: cannot use --update-pr and --split-pr together")
+	}
+
+	if withPlan != "" && skipTo == "" {
+		return fmt.Errorf("invalid flag combination: --with-plan requires --skip-to to be specified")
+	}
+
+	if withPlan != "" && skipTo == "planning" {
+		return fmt.Errorf("invalid flag combination: --with-plan cannot be used when skipping to planning phase (plan is generated during planning)")
+	}
+
+	if withPlan != "" {
+		if _, err := os.Stat(withPlan); os.IsNotExist(err) {
+			return fmt.Errorf("invalid flag combination: plan file does not exist: %s", withPlan)
+		}
+	}
+
+	if forceBackward && skipTo == "" {
+		return fmt.Errorf("invalid flag combination: --force-backward requires --skip-to to be specified")
+	}
+
+	return nil
+}
+
+func validateResumeFlags(skipTo string, forceBackward bool) error {
+	if forceBackward && skipTo == "" {
+		return fmt.Errorf("invalid flag combination: --force-backward requires --skip-to to be specified")
+	}
+
+	return nil
+}
+
 func newStartCmd() *cobra.Command {
 	var workflowType string
 	var updatePR int
@@ -103,36 +148,13 @@ Examples:
 			name := args[0]
 			description := args[1]
 
-			// Validate mutual exclusivity of --update-pr and --split-pr
-			if updatePR > 0 && splitPR {
-				return fmt.Errorf("cannot use --update-pr and --split-pr together")
+			if err := validateStartFlags(skipTo, withPlan, updatePR, forceBackward); err != nil {
+				return err
 			}
 
-			// Validate skip-to flag and convert to Phase
-			var skipToPhase workflow.Phase
-			if skipTo != "" {
-				phase, ok := validPhases[skipTo]
-				if !ok {
-					return fmt.Errorf("invalid --skip-to value: %s (must be one of: planning, confirmation, implementation, refactoring, pr-split)", skipTo)
-				}
-				skipToPhase = phase
-			}
-
-			// Validate with-plan requires skip-to
-			if withPlan != "" && skipTo == "" {
-				return fmt.Errorf("--with-plan requires --skip-to to be specified")
-			}
-
-			// Validate with-plan not used with planning phase
-			if withPlan != "" && skipTo == "planning" {
-				return fmt.Errorf("--with-plan cannot be used when skipping to planning phase (plan is generated during planning)")
-			}
-
-			// Validate with-plan file exists
-			if withPlan != "" {
-				if _, err := os.Stat(withPlan); os.IsNotExist(err) {
-					return fmt.Errorf("plan file does not exist: %s", withPlan)
-				}
+			skipToPhase, err := parseSkipToPhase(skipTo)
+			if err != nil {
+				return err
 			}
 
 			var wfType workflow.WorkflowType
@@ -156,7 +178,6 @@ Examples:
 				updatePRPtr = &updatePR
 			}
 
-			// Create StartOptions with all fields
 			opts := workflow.StartOptions{
 				Name:             name,
 				Description:      description,
@@ -282,14 +303,13 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 
-			// Validate skip-to flag and convert to Phase
-			var skipToPhase workflow.Phase
-			if skipTo != "" {
-				phase, ok := validPhases[skipTo]
-				if !ok {
-					return fmt.Errorf("invalid --skip-to value: %s (must be one of: planning, confirmation, implementation, refactoring, pr-split)", skipTo)
-				}
-				skipToPhase = phase
+			if err := validateResumeFlags(skipTo, forceBackward); err != nil {
+				return err
+			}
+
+			skipToPhase, err := parseSkipToPhase(skipTo)
+			if err != nil {
+				return err
 			}
 
 			orchestrator, err := createOrchestrator()
@@ -299,7 +319,6 @@ Examples:
 
 			ctx := context.Background()
 
-			// Create ResumeOptions with all fields
 			opts := workflow.ResumeOptions{
 				Name:          name,
 				SkipTo:        skipToPhase,
