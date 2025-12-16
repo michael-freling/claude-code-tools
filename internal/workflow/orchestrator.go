@@ -30,13 +30,13 @@ type Config struct {
 
 // StartOptions holds options for starting a workflow
 type StartOptions struct {
-	Name          string
-	Description   string
-	Type          WorkflowType
-	UpdatePR      *int
-	SkipTo        Phase
-	ExternalPlan  string
-	ForceBackward bool
+	Name             string
+	Description      string
+	Type             WorkflowType
+	UpdatePR         *int
+	SkipTo           Phase
+	ExternalPlanPath string
+	ForceBackward    bool
 }
 
 // ResumeOptions holds options for resuming a workflow
@@ -143,6 +143,67 @@ func (o *Orchestrator) SetConfirmFunc(fn func(plan *Plan) (bool, string, error))
 	o.confirmFunc = fn
 }
 
+// validatePRForUpdate validates that a PR exists and is open for update
+func (o *Orchestrator) validatePRForUpdate(ctx context.Context, prNumber int) (*PRValidationResult, error) {
+	prManager := NewPRManagerWithRunners(o.config.BaseDir, o.gitRunner, o.ghRunner)
+	validationResult, err := prManager.ValidatePRForUpdate(ctx, prNumber)
+	if err != nil {
+		return nil, fmt.Errorf("failed to validate PR #%d for update: %w", prNumber, err)
+	}
+	o.logger.Verbose("PR #%d validated for update: branch=%s, state=%s, mergeable=%s",
+		validationResult.Number, validationResult.HeadRefName, validationResult.State, validationResult.Mergeable)
+	return validationResult, nil
+}
+
+// loadAndSaveExternalPlan loads an external plan from a file and saves it to the workflow directory
+func (o *Orchestrator) loadAndSaveExternalPlan(workflowName, planPath string) error {
+	plan, err := LoadExternalPlan(planPath)
+	if err != nil {
+		return fmt.Errorf("failed to load external plan: %w", err)
+	}
+
+	if err := o.stateManager.SavePlan(workflowName, plan); err != nil {
+		return fmt.Errorf("failed to save external plan: %w", err)
+	}
+
+	planMarkdown := FormatPlanSummary(plan)
+	if err := o.stateManager.SavePlanMarkdown(workflowName, planMarkdown); err != nil {
+		return fmt.Errorf("failed to save plan markdown: %w", err)
+	}
+
+	return nil
+}
+
+// restoreFromFailedState restores workflow from failed state by determining which phase to retry
+func (o *Orchestrator) restoreFromFailedState(state *WorkflowState) {
+	if state.CurrentPhase != PhaseFailed {
+		return
+	}
+
+	if state.Error != nil {
+		state.CurrentPhase = state.Error.Phase
+	} else {
+		// Find the phase that was in progress or failed
+		for phase, phaseState := range state.Phases {
+			if phaseState.Status == StatusFailed || phaseState.Status == StatusInProgress {
+				state.CurrentPhase = phase
+				break
+			}
+		}
+	}
+
+	// Reset the phase status to allow retry
+	if phaseState, ok := state.Phases[state.CurrentPhase]; ok {
+		phaseState.Status = StatusInProgress
+	}
+
+	// Preserve CI failure type for phase execution to handle appropriately
+	isCIFailure := state.Error != nil && state.Error.FailureType == FailureTypeCI
+	if state.Error != nil && !isCIFailure {
+		state.Error = nil
+	}
+}
+
 // handleSkipToPhase validates and performs a skip to a target phase
 func (o *Orchestrator) handleSkipToPhase(state *WorkflowState, targetPhase Phase, forceBackward bool, externalPlanPath string) error {
 	if state == nil {
@@ -151,24 +212,13 @@ func (o *Orchestrator) handleSkipToPhase(state *WorkflowState, targetPhase Phase
 
 	validator := NewSkipValidator(o.stateManager, o.config.BaseDir)
 	if err := validator.ValidateSkip(state, targetPhase, forceBackward, externalPlanPath); err != nil {
-		return err
+		return fmt.Errorf("skip validation failed: %w", err)
 	}
 
 	if externalPlanPath != "" {
-		plan, err := LoadExternalPlan(externalPlanPath)
-		if err != nil {
-			return fmt.Errorf("failed to load external plan: %w", err)
+		if err := o.loadAndSaveExternalPlan(state.Name, externalPlanPath); err != nil {
+			return err
 		}
-
-		if err := o.stateManager.SavePlan(state.Name, plan); err != nil {
-			return fmt.Errorf("failed to save external plan: %w", err)
-		}
-
-		planMarkdown := FormatPlanSummary(plan)
-		if err := o.stateManager.SavePlanMarkdown(state.Name, planMarkdown); err != nil {
-			return fmt.Errorf("failed to save plan markdown: %w", err)
-		}
-
 		state.ExternalPlanUsed = true
 	}
 
@@ -193,13 +243,9 @@ func (o *Orchestrator) handleSkipToPhase(state *WorkflowState, targetPhase Phase
 func (o *Orchestrator) StartWithOptions(ctx context.Context, opts StartOptions) error {
 	// Validate PR for update if updatePR is provided
 	if opts.UpdatePR != nil {
-		prManager := NewPRManagerWithRunners(o.config.BaseDir, o.gitRunner, o.ghRunner)
-		validationResult, err := prManager.ValidatePRForUpdate(ctx, *opts.UpdatePR)
-		if err != nil {
-			return fmt.Errorf("failed to validate PR #%d for update: %w", *opts.UpdatePR, err)
+		if _, err := o.validatePRForUpdate(ctx, *opts.UpdatePR); err != nil {
+			return err
 		}
-		o.logger.Verbose("PR #%d validated for update: branch=%s, state=%s, mergeable=%s",
-			validationResult.Number, validationResult.HeadRefName, validationResult.State, validationResult.Mergeable)
 	}
 
 	// Check if a workflow with this name already exists
@@ -223,10 +269,9 @@ func (o *Orchestrator) StartWithOptions(ctx context.Context, opts StartOptions) 
 
 	// Store update PR information if provided
 	if opts.UpdatePR != nil {
-		prManager := NewPRManagerWithRunners(o.config.BaseDir, o.gitRunner, o.ghRunner)
-		validationResult, err := prManager.ValidatePRForUpdate(ctx, *opts.UpdatePR)
+		validationResult, err := o.validatePRForUpdate(ctx, *opts.UpdatePR)
 		if err != nil {
-			return fmt.Errorf("failed to validate PR #%d for update: %w", *opts.UpdatePR, err)
+			return err
 		}
 		state.UpdatePR = opts.UpdatePR
 		state.UpdatePRBranch = validationResult.HeadRefName
@@ -234,7 +279,7 @@ func (o *Orchestrator) StartWithOptions(ctx context.Context, opts StartOptions) 
 
 	// Handle skip if requested
 	if opts.SkipTo != "" {
-		if err := o.handleSkipToPhase(state, opts.SkipTo, opts.ForceBackward, opts.ExternalPlan); err != nil {
+		if err := o.handleSkipToPhase(state, opts.SkipTo, opts.ForceBackward, opts.ExternalPlanPath); err != nil {
 			return fmt.Errorf("failed to skip to phase: %w", err)
 		}
 	}
@@ -289,31 +334,7 @@ func (o *Orchestrator) ResumeWithOptions(ctx context.Context, opts ResumeOptions
 		return fmt.Errorf("workflow is in non-recoverable error state: %w", state.Error)
 	}
 
-	// If workflow is in FAILED state, restore it to the phase that failed
-	if state.CurrentPhase == PhaseFailed {
-		if state.Error != nil {
-			state.CurrentPhase = state.Error.Phase
-		} else {
-			// Find the phase that was in progress or failed
-			for phase, phaseState := range state.Phases {
-				if phaseState.Status == StatusFailed || phaseState.Status == StatusInProgress {
-					state.CurrentPhase = phase
-					break
-				}
-			}
-		}
-		// Reset the phase status to allow retry
-		if phaseState, ok := state.Phases[state.CurrentPhase]; ok {
-			phaseState.Status = StatusInProgress
-		}
-	}
-
-	// Preserve CI failure type for phase execution to handle appropriately
-	// (the error message is stored in phase feedback, so we only need to preserve the type)
-	isCIFailure := state.Error != nil && state.Error.FailureType == FailureTypeCI
-	if state.Error != nil && !isCIFailure {
-		state.Error = nil
-	}
+	o.restoreFromFailedState(state)
 
 	// Handle skip if requested
 	if opts.SkipTo != "" {

@@ -158,13 +158,13 @@ Examples:
 
 			// Create StartOptions with all fields
 			opts := workflow.StartOptions{
-				Name:          name,
-				Description:   description,
-				Type:          wfType,
-				UpdatePR:      updatePRPtr,
-				SkipTo:        skipToPhase,
-				ExternalPlan:  withPlan,
-				ForceBackward: forceBackward,
+				Name:             name,
+				Description:      description,
+				Type:             wfType,
+				UpdatePR:         updatePRPtr,
+				SkipTo:           skipToPhase,
+				ExternalPlanPath: withPlan,
+				ForceBackward:    forceBackward,
 			}
 
 			if err := orchestrator.StartWithOptions(ctx, opts); err != nil {
