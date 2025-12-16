@@ -28,6 +28,23 @@ type Config struct {
 	LogLevel                   LogLevel
 }
 
+// StartOptions holds options for starting a workflow
+type StartOptions struct {
+	Name             string
+	Description      string
+	Type             WorkflowType
+	SkipTo           Phase
+	ExternalPlanPath string
+	ForceBackward    bool
+}
+
+// ResumeOptions holds options for resuming a workflow
+type ResumeOptions struct {
+	Name          string
+	SkipTo        Phase
+	ForceBackward bool
+}
+
 // PhaseTimeouts holds timeout durations for each phase
 type PhaseTimeouts struct {
 	Planning       time.Duration
@@ -125,38 +142,138 @@ func (o *Orchestrator) SetConfirmFunc(fn func(plan *Plan) (bool, string, error))
 	o.confirmFunc = fn
 }
 
-// Start initializes and runs a new workflow
-func (o *Orchestrator) Start(ctx context.Context, name, description string, wfType WorkflowType) error {
+// loadAndSaveExternalPlan loads an external plan from a file and saves it to the workflow directory
+func (o *Orchestrator) loadAndSaveExternalPlan(workflowName, planPath string) error {
+	plan, err := LoadExternalPlan(planPath)
+	if err != nil {
+		return fmt.Errorf("failed to load external plan: %w", err)
+	}
+
+	if err := o.stateManager.SavePlan(workflowName, plan); err != nil {
+		return fmt.Errorf("failed to save external plan: %w", err)
+	}
+
+	planMarkdown := FormatPlanSummary(plan)
+	if err := o.stateManager.SavePlanMarkdown(workflowName, planMarkdown); err != nil {
+		return fmt.Errorf("failed to save plan markdown: %w", err)
+	}
+
+	return nil
+}
+
+// restoreFromFailedState restores workflow from failed state by determining which phase to retry
+func (o *Orchestrator) restoreFromFailedState(state *WorkflowState) {
+	if state.CurrentPhase != PhaseFailed {
+		return
+	}
+
+	if state.Error != nil {
+		state.CurrentPhase = state.Error.Phase
+	} else {
+		// Find the phase that was in progress or failed
+		for phase, phaseState := range state.Phases {
+			if phaseState.Status == StatusFailed || phaseState.Status == StatusInProgress {
+				state.CurrentPhase = phase
+				break
+			}
+		}
+	}
+
+	// Reset the phase status to allow retry
+	if phaseState, ok := state.Phases[state.CurrentPhase]; ok {
+		phaseState.Status = StatusInProgress
+	}
+
+	// Preserve CI failure type for phase execution to handle appropriately
+	isCIFailure := state.Error != nil && state.Error.FailureType == FailureTypeCI
+	if state.Error != nil && !isCIFailure {
+		state.Error = nil
+	}
+}
+
+// handleSkipToPhase validates and performs a skip to a target phase
+func (o *Orchestrator) handleSkipToPhase(state *WorkflowState, targetPhase Phase, forceBackward bool, externalPlanPath string) error {
+	if state == nil {
+		return fmt.Errorf("state cannot be nil")
+	}
+
+	validator := NewSkipValidator(o.stateManager)
+	if err := validator.ValidateSkip(state, targetPhase, forceBackward, externalPlanPath); err != nil {
+		return fmt.Errorf("skip validation failed: %w", err)
+	}
+
+	if externalPlanPath != "" {
+		if err := o.loadAndSaveExternalPlan(state.Name, externalPlanPath); err != nil {
+			return err
+		}
+		state.ExternalPlanUsed = true
+	}
+
+	skippedPhases := CalculateSkippedPhases(state.CurrentPhase, targetPhase)
+	o.stateManager.MarkPhasesSkipped(state, skippedPhases)
+
+	reason := fmt.Sprintf("Skipped from %s to %s", state.CurrentPhase, targetPhase)
+	if externalPlanPath != "" {
+		reason += " with external plan"
+	}
+	o.stateManager.RecordPhaseTransition(state, state.CurrentPhase, targetPhase, "skip", reason)
+
+	state.CurrentPhase = targetPhase
+	if phaseState, ok := state.Phases[targetPhase]; ok {
+		phaseState.Status = StatusInProgress
+	}
+
+	return nil
+}
+
+// StartWithOptions initializes and runs a new workflow with options
+func (o *Orchestrator) StartWithOptions(ctx context.Context, opts StartOptions) error {
 	// Check if a workflow with this name already exists
-	if o.stateManager.WorkflowExists(name) {
-		existingState, err := o.stateManager.LoadState(name)
+	if o.stateManager.WorkflowExists(opts.Name) {
+		existingState, err := o.stateManager.LoadState(opts.Name)
 		if err == nil && existingState.CurrentPhase == PhaseFailed {
 			// Delete failed workflow to allow restart with same name
-			if err := o.stateManager.DeleteWorkflow(name); err != nil {
+			if err := o.stateManager.DeleteWorkflow(opts.Name); err != nil {
 				return fmt.Errorf("failed to delete failed workflow: %w", err)
 			}
 		}
 		// If not failed or couldn't load state, InitState will handle the error
 	}
 
-	state, err := o.stateManager.InitState(name, description, wfType)
+	state, err := o.stateManager.InitState(opts.Name, opts.Description, opts.Type)
 	if err != nil {
 		return fmt.Errorf("failed to initialize workflow: %w", err)
 	}
 
 	state.SplitPR = o.config.SplitPR
 
-	if err := o.stateManager.SaveState(name, state); err != nil {
+	// Handle skip if requested
+	if opts.SkipTo != "" {
+		if err := o.handleSkipToPhase(state, opts.SkipTo, opts.ForceBackward, opts.ExternalPlanPath); err != nil {
+			return fmt.Errorf("failed to skip to phase: %w", err)
+		}
+	}
+
+	if err := o.stateManager.SaveState(opts.Name, state); err != nil {
 		return fmt.Errorf("failed to save state: %w", err)
 	}
 
 	return o.runWorkflow(ctx, state)
 }
 
-// Resume continues an existing workflow from current phase
-func (o *Orchestrator) Resume(ctx context.Context, name string) error {
-	o.logger.Verbose("Loading workflow state for '%s'", name)
-	state, err := o.stateManager.LoadState(name)
+// Start initializes and runs a new workflow (backward compatibility wrapper)
+func (o *Orchestrator) Start(ctx context.Context, name, description string, wfType WorkflowType) error {
+	return o.StartWithOptions(ctx, StartOptions{
+		Name:        name,
+		Description: description,
+		Type:        wfType,
+	})
+}
+
+// ResumeWithOptions continues an existing workflow with options
+func (o *Orchestrator) ResumeWithOptions(ctx context.Context, opts ResumeOptions) error {
+	o.logger.Verbose("Loading workflow state for '%s'", opts.Name)
+	state, err := o.stateManager.LoadState(opts.Name)
 	if err != nil {
 		return fmt.Errorf("failed to load workflow state: %w", err)
 	}
@@ -175,37 +292,27 @@ func (o *Orchestrator) Resume(ctx context.Context, name string) error {
 		return fmt.Errorf("workflow is in non-recoverable error state: %w", state.Error)
 	}
 
-	// If workflow is in FAILED state, restore it to the phase that failed
-	if state.CurrentPhase == PhaseFailed {
-		if state.Error != nil {
-			state.CurrentPhase = state.Error.Phase
-		} else {
-			// Find the phase that was in progress or failed
-			for phase, phaseState := range state.Phases {
-				if phaseState.Status == StatusFailed || phaseState.Status == StatusInProgress {
-					state.CurrentPhase = phase
-					break
-				}
-			}
-		}
-		// Reset the phase status to allow retry
-		if phaseState, ok := state.Phases[state.CurrentPhase]; ok {
-			phaseState.Status = StatusInProgress
+	o.restoreFromFailedState(state)
+
+	// Handle skip if requested
+	if opts.SkipTo != "" {
+		if err := o.handleSkipToPhase(state, opts.SkipTo, opts.ForceBackward, ""); err != nil {
+			return fmt.Errorf("failed to skip to phase: %w", err)
 		}
 	}
 
-	// Preserve CI failure type for phase execution to handle appropriately
-	// (the error message is stored in phase feedback, so we only need to preserve the type)
-	isCIFailure := state.Error != nil && state.Error.FailureType == FailureTypeCI
-	if state.Error != nil && !isCIFailure {
-		state.Error = nil
-	}
-
-	if err := o.stateManager.SaveState(name, state); err != nil {
+	if err := o.stateManager.SaveState(opts.Name, state); err != nil {
 		return fmt.Errorf("failed to save state: %w", err)
 	}
 
 	return o.runWorkflow(ctx, state)
+}
+
+// Resume continues an existing workflow from current phase (backward compatibility wrapper)
+func (o *Orchestrator) Resume(ctx context.Context, name string) error {
+	return o.ResumeWithOptions(ctx, ResumeOptions{
+		Name: name,
+	})
 }
 
 // Status returns current workflow state
@@ -455,12 +562,13 @@ func (o *Orchestrator) executeImplementation(ctx context.Context, state *Workflo
 		if err != nil {
 			return o.failWorkflow(state, fmt.Errorf("failed to create worktree: %w", err))
 		}
-		state.WorktreePath = worktreePath
 		o.logger.Verbose("Worktree created at: %s", worktreePath)
+		fmt.Printf("%s Created worktree at: %s\n", Green("✓"), worktreePath)
+
+		state.WorktreePath = worktreePath
 		if err := o.stateManager.SaveState(state.Name, state); err != nil {
 			return fmt.Errorf("failed to save state with worktree path: %w", err)
 		}
-		fmt.Printf("%s Created worktree at: %s\n", Green("✓"), worktreePath)
 	}
 
 	plan, err := o.stateManager.LoadPlan(state.Name)

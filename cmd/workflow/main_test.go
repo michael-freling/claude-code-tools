@@ -2335,3 +2335,526 @@ func TestCleanCmd_ConfirmationPromptCancelled(t *testing.T) {
 		})
 	}
 }
+
+func TestStartCmd_SkipToFlag(t *testing.T) {
+	cmd := newStartCmd()
+
+	skipToFlag := cmd.Flags().Lookup("skip-to")
+	require.NotNil(t, skipToFlag)
+	assert.Equal(t, "string", skipToFlag.Value.Type())
+	assert.Equal(t, "", skipToFlag.DefValue)
+}
+
+func TestStartCmd_WithPlanFlag(t *testing.T) {
+	cmd := newStartCmd()
+
+	withPlanFlag := cmd.Flags().Lookup("with-plan")
+	require.NotNil(t, withPlanFlag)
+	assert.Equal(t, "string", withPlanFlag.Value.Type())
+	assert.Equal(t, "", withPlanFlag.DefValue)
+}
+
+func TestResumeCmd_SkipToFlag(t *testing.T) {
+	cmd := newResumeCmd()
+
+	skipToFlag := cmd.Flags().Lookup("skip-to")
+	require.NotNil(t, skipToFlag)
+	assert.Equal(t, "string", skipToFlag.Value.Type())
+	assert.Equal(t, "", skipToFlag.DefValue)
+}
+
+func TestRootCmd_ForceBackwardFlag(t *testing.T) {
+	cmd := newRootCmd()
+
+	forceBackwardFlag := cmd.PersistentFlags().Lookup("force-backward")
+	require.NotNil(t, forceBackwardFlag)
+	assert.Equal(t, "bool", forceBackwardFlag.Value.Type())
+	assert.Equal(t, "false", forceBackwardFlag.DefValue)
+}
+
+func TestStartCmd_SkipToValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		skipTo     string
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{
+			name:       "valid planning phase",
+			skipTo:     "planning",
+			wantErr:    true,
+			wantErrMsg: "",
+		},
+		{
+			name:       "valid confirmation phase",
+			skipTo:     "confirmation",
+			wantErr:    true,
+			wantErrMsg: "",
+		},
+		{
+			name:       "valid implementation phase",
+			skipTo:     "implementation",
+			wantErr:    true,
+			wantErrMsg: "",
+		},
+		{
+			name:       "valid refactoring phase",
+			skipTo:     "refactoring",
+			wantErr:    true,
+			wantErrMsg: "",
+		},
+		{
+			name:       "valid pr-split phase",
+			skipTo:     "pr-split",
+			wantErr:    true,
+			wantErrMsg: "",
+		},
+		{
+			name:       "invalid phase",
+			skipTo:     "invalid-phase",
+			wantErr:    true,
+			wantErrMsg: "invalid flag combination: --skip-to value 'invalid-phase' is not valid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rootCmd := newRootCmd()
+			rootCmd.SetArgs([]string{"start", "test-workflow", "test description", "--type", "feature", "--skip-to", tt.skipTo})
+
+			buf := new(bytes.Buffer)
+			rootCmd.SetOut(buf)
+			rootCmd.SetErr(buf)
+
+			err := rootCmd.Execute()
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.wantErrMsg != "" {
+					assert.Contains(t, err.Error(), tt.wantErrMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestStartCmd_WithPlanValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		skipTo     string
+		withPlan   string
+		setupFile  bool
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{
+			name:       "with-plan without skip-to fails",
+			skipTo:     "",
+			withPlan:   "plan.json",
+			setupFile:  false,
+			wantErr:    true,
+			wantErrMsg: "--with-plan requires --skip-to to be specified",
+		},
+		{
+			name:       "with-plan with planning phase fails",
+			skipTo:     "planning",
+			withPlan:   "plan.json",
+			setupFile:  false,
+			wantErr:    true,
+			wantErrMsg: "--with-plan cannot be used when skipping to planning phase",
+		},
+		{
+			name:       "with-plan with non-existent file fails",
+			skipTo:     "implementation",
+			withPlan:   "/nonexistent/plan.json",
+			setupFile:  false,
+			wantErr:    true,
+			wantErrMsg: "plan file does not exist",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var planPath string
+			if tt.setupFile {
+				tempDir := t.TempDir()
+				planPath = filepath.Join(tempDir, "plan.json")
+				err := os.WriteFile(planPath, []byte("{}"), 0644)
+				require.NoError(t, err)
+			} else {
+				planPath = tt.withPlan
+			}
+
+			rootCmd := newRootCmd()
+			args := []string{"start", "test-workflow", "test description", "--type", "feature"}
+			if tt.skipTo != "" {
+				args = append(args, "--skip-to", tt.skipTo)
+			}
+			if tt.withPlan != "" {
+				args = append(args, "--with-plan", planPath)
+			}
+			rootCmd.SetArgs(args)
+
+			buf := new(bytes.Buffer)
+			rootCmd.SetOut(buf)
+			rootCmd.SetErr(buf)
+
+			err := rootCmd.Execute()
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.wantErrMsg != "" {
+					assert.Contains(t, err.Error(), tt.wantErrMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestResumeCmd_SkipToValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		skipTo     string
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{
+			name:       "valid planning phase",
+			skipTo:     "planning",
+			wantErr:    true,
+			wantErrMsg: "",
+		},
+		{
+			name:       "valid implementation phase",
+			skipTo:     "implementation",
+			wantErr:    true,
+			wantErrMsg: "",
+		},
+		{
+			name:       "invalid phase",
+			skipTo:     "invalid-phase",
+			wantErr:    true,
+			wantErrMsg: "invalid flag combination: --skip-to value 'invalid-phase' is not valid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rootCmd := newRootCmd()
+			rootCmd.SetArgs([]string{"resume", "test-workflow", "--skip-to", tt.skipTo})
+
+			buf := new(bytes.Buffer)
+			rootCmd.SetOut(buf)
+			rootCmd.SetErr(buf)
+
+			err := rootCmd.Execute()
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.wantErrMsg != "" {
+					assert.Contains(t, err.Error(), tt.wantErrMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestParseSkipToPhase(t *testing.T) {
+	tests := []struct {
+		name       string
+		skipTo     string
+		want       workflow.Phase
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{
+			name:    "empty string returns empty phase",
+			skipTo:  "",
+			want:    "",
+			wantErr: false,
+		},
+		{
+			name:    "valid planning phase",
+			skipTo:  "planning",
+			want:    workflow.PhasePlanning,
+			wantErr: false,
+		},
+		{
+			name:    "valid confirmation phase",
+			skipTo:  "confirmation",
+			want:    workflow.PhaseConfirmation,
+			wantErr: false,
+		},
+		{
+			name:    "valid implementation phase",
+			skipTo:  "implementation",
+			want:    workflow.PhaseImplementation,
+			wantErr: false,
+		},
+		{
+			name:    "valid refactoring phase",
+			skipTo:  "refactoring",
+			want:    workflow.PhaseRefactoring,
+			wantErr: false,
+		},
+		{
+			name:    "valid pr-split phase",
+			skipTo:  "pr-split",
+			want:    workflow.PhasePRSplit,
+			wantErr: false,
+		},
+		{
+			name:       "invalid phase returns error",
+			skipTo:     "invalid-phase",
+			want:       "",
+			wantErr:    true,
+			wantErrMsg: "invalid flag combination: --skip-to value 'invalid-phase' is not valid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseSkipToPhase(tt.skipTo)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrMsg)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestValidateStartFlags(t *testing.T) {
+	tests := []struct {
+		name          string
+		skipTo        string
+		withPlan      string
+		forceBackward bool
+		setupFile     bool
+		wantErr       bool
+		wantErrMsg    string
+	}{
+		{
+			name:          "valid flags with skip-to and with-plan",
+			skipTo:        "implementation",
+			withPlan:      "plan.json",
+			forceBackward: false,
+			setupFile:     true,
+			wantErr:       false,
+		},
+		{
+			name:          "with-plan without skip-to fails",
+			skipTo:        "",
+			withPlan:      "plan.json",
+			forceBackward: false,
+			setupFile:     false,
+			wantErr:       true,
+			wantErrMsg:    "invalid flag combination: --with-plan requires --skip-to to be specified",
+		},
+		{
+			name:          "with-plan with planning phase fails",
+			skipTo:        "planning",
+			withPlan:      "plan.json",
+			forceBackward: false,
+			setupFile:     false,
+			wantErr:       true,
+			wantErrMsg:    "invalid flag combination: --with-plan cannot be used when skipping to planning phase",
+		},
+		{
+			name:          "with-plan with non-existent file fails",
+			skipTo:        "implementation",
+			withPlan:      "/nonexistent/plan.json",
+			forceBackward: false,
+			setupFile:     false,
+			wantErr:       true,
+			wantErrMsg:    "invalid flag combination: plan file does not exist",
+		},
+		{
+			name:          "force-backward without skip-to fails",
+			skipTo:        "",
+			withPlan:      "",
+			forceBackward: true,
+			setupFile:     false,
+			wantErr:       true,
+			wantErrMsg:    "invalid flag combination: --force-backward requires --skip-to to be specified",
+		},
+		{
+			name:          "force-backward with skip-to succeeds",
+			skipTo:        "implementation",
+			withPlan:      "",
+			forceBackward: true,
+			setupFile:     false,
+			wantErr:       false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var planPath string
+			if tt.setupFile {
+				tempDir := t.TempDir()
+				planPath = filepath.Join(tempDir, "plan.json")
+				err := os.WriteFile(planPath, []byte("{}"), 0644)
+				require.NoError(t, err)
+			} else {
+				planPath = tt.withPlan
+			}
+
+			err := validateStartFlags(tt.skipTo, planPath, tt.forceBackward)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrMsg)
+				return
+			}
+
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestValidateResumeFlags(t *testing.T) {
+	tests := []struct {
+		name          string
+		skipTo        string
+		forceBackward bool
+		wantErr       bool
+		wantErrMsg    string
+	}{
+		{
+			name:          "force-backward without skip-to fails",
+			skipTo:        "",
+			forceBackward: true,
+			wantErr:       true,
+			wantErrMsg:    "invalid flag combination: --force-backward requires --skip-to to be specified",
+		},
+		{
+			name:          "force-backward with skip-to succeeds",
+			skipTo:        "implementation",
+			forceBackward: true,
+			wantErr:       false,
+		},
+		{
+			name:          "no force-backward succeeds",
+			skipTo:        "",
+			forceBackward: false,
+			wantErr:       false,
+		},
+		{
+			name:          "skip-to without force-backward succeeds",
+			skipTo:        "refactoring",
+			forceBackward: false,
+			wantErr:       false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateResumeFlags(tt.skipTo, tt.forceBackward)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrMsg)
+				return
+			}
+
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestStartCmd_ForceBackwardValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{
+			name:       "force-backward without skip-to fails",
+			args:       []string{"start", "test-workflow", "test description", "--type", "feature", "--force-backward"},
+			wantErr:    true,
+			wantErrMsg: "invalid flag combination: --force-backward requires --skip-to to be specified",
+		},
+		{
+			name:    "force-backward with skip-to succeeds with orchestrator call",
+			args:    []string{"start", "test-workflow", "test description", "--type", "feature", "--skip-to", "implementation", "--force-backward"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rootCmd := newRootCmd()
+			rootCmd.SetArgs(tt.args)
+
+			buf := new(bytes.Buffer)
+			rootCmd.SetOut(buf)
+			rootCmd.SetErr(buf)
+
+			err := rootCmd.Execute()
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.wantErrMsg != "" {
+					assert.Contains(t, err.Error(), tt.wantErrMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestResumeCmd_ForceBackwardValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{
+			name:       "force-backward without skip-to fails",
+			args:       []string{"resume", "test-workflow", "--force-backward"},
+			wantErr:    true,
+			wantErrMsg: "invalid flag combination: --force-backward requires --skip-to to be specified",
+		},
+		{
+			name:    "force-backward with skip-to succeeds with orchestrator call",
+			args:    []string{"resume", "test-workflow", "--skip-to", "implementation", "--force-backward"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rootCmd := newRootCmd()
+			rootCmd.SetArgs(tt.args)
+
+			buf := new(bytes.Buffer)
+			rootCmd.SetOut(buf)
+			rootCmd.SetErr(buf)
+
+			err := rootCmd.Execute()
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.wantErrMsg != "" {
+					assert.Contains(t, err.Error(), tt.wantErrMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}

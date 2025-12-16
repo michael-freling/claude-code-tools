@@ -20,7 +20,16 @@ var (
 	timeoutRefactoring         time.Duration
 	timeoutPRSplit             time.Duration
 	verbose                    bool
+	forceBackward              bool
 )
+
+var validPhases = map[string]workflow.Phase{
+	"planning":       workflow.PhasePlanning,
+	"confirmation":   workflow.PhaseConfirmation,
+	"implementation": workflow.PhaseImplementation,
+	"refactoring":    workflow.PhaseRefactoring,
+	"pr-split":       workflow.PhasePRSplit,
+}
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
@@ -44,6 +53,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.PersistentFlags().DurationVar(&timeoutRefactoring, "timeout-refactoring", 6*time.Hour, "refactoring phase timeout")
 	rootCmd.PersistentFlags().DurationVar(&timeoutPRSplit, "timeout-pr-split", 1*time.Hour, "PR split phase timeout")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose output with prompt debugging (prompts saved to .claude/workflow/<name>/prompts/)")
+	rootCmd.PersistentFlags().BoolVar(&forceBackward, "force-backward", false, "allow backward phase transitions (default false)")
 
 	rootCmd.AddCommand(newStartCmd())
 	rootCmd.AddCommand(newListCmd())
@@ -72,17 +82,74 @@ func createOrchestrator() (*workflow.Orchestrator, error) {
 	return workflow.NewOrchestratorWithConfig(config)
 }
 
+func parseSkipToPhase(skipTo string) (workflow.Phase, error) {
+	if skipTo == "" {
+		return "", nil
+	}
+
+	phase, ok := validPhases[skipTo]
+	if !ok {
+		return "", fmt.Errorf("invalid flag combination: --skip-to value '%s' is not valid (must be one of: planning, confirmation, implementation, refactoring, pr-split)", skipTo)
+	}
+	return phase, nil
+}
+
+func validateStartFlags(skipTo, withPlan string, forceBackward bool) error {
+	if withPlan != "" && skipTo == "" {
+		return fmt.Errorf("invalid flag combination: --with-plan requires --skip-to to be specified")
+	}
+
+	if withPlan != "" && skipTo == "planning" {
+		return fmt.Errorf("invalid flag combination: --with-plan cannot be used when skipping to planning phase (plan is generated during planning)")
+	}
+
+	if withPlan != "" {
+		if _, err := os.Stat(withPlan); os.IsNotExist(err) {
+			return fmt.Errorf("invalid flag combination: plan file does not exist: %s", withPlan)
+		}
+	}
+
+	if forceBackward && skipTo == "" {
+		return fmt.Errorf("invalid flag combination: --force-backward requires --skip-to to be specified")
+	}
+
+	return nil
+}
+
+func validateResumeFlags(skipTo string, forceBackward bool) error {
+	if forceBackward && skipTo == "" {
+		return fmt.Errorf("invalid flag combination: --force-backward requires --skip-to to be specified")
+	}
+
+	return nil
+}
+
 func newStartCmd() *cobra.Command {
 	var workflowType string
+	var skipTo string
+	var withPlan string
 
 	cmd := &cobra.Command{
 		Use:   "start <name> <description>",
 		Short: "Start a new workflow",
-		Long:  `Start a new workflow with the given name and description.`,
-		Args:  cobra.ExactArgs(2),
+		Long: `Start a new workflow with the given name and description.
+
+Examples:
+  workflow start my-feature "Add new feature"
+  workflow start my-feature "Add new feature" --skip-to implementation --with-plan plan.json`,
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			description := args[1]
+
+			if err := validateStartFlags(skipTo, withPlan, forceBackward); err != nil {
+				return err
+			}
+
+			skipToPhase, err := parseSkipToPhase(skipTo)
+			if err != nil {
+				return err
+			}
 
 			var wfType workflow.WorkflowType
 			switch workflowType {
@@ -100,7 +167,17 @@ func newStartCmd() *cobra.Command {
 			}
 
 			ctx := context.Background()
-			if err := orchestrator.Start(ctx, name, description, wfType); err != nil {
+
+			opts := workflow.StartOptions{
+				Name:             name,
+				Description:      description,
+				Type:             wfType,
+				SkipTo:           skipToPhase,
+				ExternalPlanPath: withPlan,
+				ForceBackward:    forceBackward,
+			}
+
+			if err := orchestrator.StartWithOptions(ctx, opts); err != nil {
 				fmt.Printf("\n%s %s\n", workflow.Red("✗"), err.Error())
 				return err
 			}
@@ -111,6 +188,8 @@ func newStartCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&workflowType, "type", "", "workflow type (feature or fix)")
 	cmd.MarkFlagRequired("type")
+	cmd.Flags().StringVar(&skipTo, "skip-to", "", "phase to skip to (planning, confirmation, implementation, refactoring, pr-split)")
+	cmd.Flags().StringVar(&withPlan, "with-plan", "", "path to external plan.json when skipping planning phase")
 
 	return cmd
 }
@@ -198,13 +277,28 @@ func newStatusCmd() *cobra.Command {
 }
 
 func newResumeCmd() *cobra.Command {
-	return &cobra.Command{
+	var skipTo string
+
+	cmd := &cobra.Command{
 		Use:   "resume <name>",
 		Short: "Resume an interrupted workflow",
-		Long:  `Resume a workflow from its current phase.`,
-		Args:  cobra.ExactArgs(1),
+		Long: `Resume a workflow from its current phase.
+
+Examples:
+  workflow resume my-feature
+  workflow resume my-feature --skip-to refactoring`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
+
+			if err := validateResumeFlags(skipTo, forceBackward); err != nil {
+				return err
+			}
+
+			skipToPhase, err := parseSkipToPhase(skipTo)
+			if err != nil {
+				return err
+			}
 
 			orchestrator, err := createOrchestrator()
 			if err != nil {
@@ -212,7 +306,14 @@ func newResumeCmd() *cobra.Command {
 			}
 
 			ctx := context.Background()
-			if err := orchestrator.Resume(ctx, name); err != nil {
+
+			opts := workflow.ResumeOptions{
+				Name:          name,
+				SkipTo:        skipToPhase,
+				ForceBackward: forceBackward,
+			}
+
+			if err := orchestrator.ResumeWithOptions(ctx, opts); err != nil {
 				fmt.Printf("\n%s %s\n", workflow.Red("✗"), err.Error())
 				return err
 			}
@@ -220,6 +321,10 @@ func newResumeCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVar(&skipTo, "skip-to", "", "phase to skip to (planning, confirmation, implementation, refactoring, pr-split)")
+
+	return cmd
 }
 
 func newDeleteCmd() *cobra.Command {

@@ -56,6 +56,10 @@ type StateManager interface {
 	ListWorkflows() ([]WorkflowInfo, error)
 	DeleteWorkflow(name string) error
 
+	// State helper operations
+	RecordPhaseTransition(state *WorkflowState, from, to Phase, transitionType, reason string)
+	MarkPhasesSkipped(state *WorkflowState, phases []Phase)
+
 	// Time provider for testing
 	SetTimeProvider(tp TimeProvider)
 }
@@ -177,6 +181,8 @@ func (s *fileStateManager) LoadState(name string) (*WorkflowState, error) {
 		return nil, fmt.Errorf("%w: %v", ErrStateCorrupted, err)
 	}
 
+	MigrateState(&state)
+
 	return &state, nil
 }
 
@@ -232,14 +238,16 @@ func (s *fileStateManager) InitState(name, description string, wfType WorkflowTy
 
 	now := s.timeProvider()
 	state := &WorkflowState{
-		Version:      stateVersion,
-		Name:         name,
-		Type:         wfType,
-		Description:  description,
-		CurrentPhase: PhasePlanning,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		Phases:       make(map[Phase]*PhaseState),
+		Version:       stateVersion,
+		Name:          name,
+		Type:          wfType,
+		Description:   description,
+		CurrentPhase:  PhasePlanning,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		Phases:        make(map[Phase]*PhaseState),
+		SkippedPhases: []Phase{},
+		PhaseHistory:  []PhaseTransition{},
 	}
 
 	// Initialize all phases
@@ -506,4 +514,42 @@ func (s *fileStateManager) atomicWrite(path string, data []byte) error {
 	}
 
 	return nil
+}
+
+// MigrateState initializes missing fields for backward compatibility
+func MigrateState(state *WorkflowState) {
+	if state.SkippedPhases == nil {
+		state.SkippedPhases = []Phase{}
+	}
+	if state.PhaseHistory == nil {
+		state.PhaseHistory = []PhaseTransition{}
+	}
+}
+
+// RecordPhaseTransition appends a new PhaseTransition to PhaseHistory
+func (s *fileStateManager) RecordPhaseTransition(state *WorkflowState, from, to Phase, transitionType, reason string) {
+	transition := PhaseTransition{
+		FromPhase:      from,
+		ToPhase:        to,
+		TransitionType: transitionType,
+		Timestamp:      s.timeProvider(),
+		Reason:         reason,
+	}
+	state.PhaseHistory = append(state.PhaseHistory, transition)
+}
+
+// MarkPhasesSkipped adds phases to SkippedPhases and marks each phase's status as StatusSkipped
+func (s *fileStateManager) MarkPhasesSkipped(state *WorkflowState, phases []Phase) {
+	for _, phase := range phases {
+		state.SkippedPhases = append(state.SkippedPhases, phase)
+		if phaseState, ok := state.Phases[phase]; ok {
+			phaseState.Status = StatusSkipped
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: Phase %s does not exist in state.Phases, initializing as skipped\n", phase)
+			state.Phases[phase] = &PhaseState{
+				Status:   StatusSkipped,
+				Attempts: 0,
+			}
+		}
+	}
 }

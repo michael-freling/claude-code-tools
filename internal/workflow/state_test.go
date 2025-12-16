@@ -1576,3 +1576,350 @@ func TestFileStateManager_SavePrompt_MultipleAttempts(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Attempt 3", string(content3))
 }
+
+func TestMigrateState(t *testing.T) {
+	tests := []struct {
+		name  string
+		state *WorkflowState
+	}{
+		{
+			name: "initializes nil SkippedPhases to empty slice",
+			state: &WorkflowState{
+				Version:       "1.0",
+				Name:          "test",
+				SkippedPhases: nil,
+				PhaseHistory:  []PhaseTransition{},
+			},
+		},
+		{
+			name: "initializes nil PhaseHistory to empty slice",
+			state: &WorkflowState{
+				Version:       "1.0",
+				Name:          "test",
+				SkippedPhases: []Phase{},
+				PhaseHistory:  nil,
+			},
+		},
+		{
+			name: "initializes both nil fields to empty slices",
+			state: &WorkflowState{
+				Version:       "1.0",
+				Name:          "test",
+				SkippedPhases: nil,
+				PhaseHistory:  nil,
+			},
+		},
+		{
+			name: "preserves existing SkippedPhases",
+			state: &WorkflowState{
+				Version:       "1.0",
+				Name:          "test",
+				SkippedPhases: []Phase{PhaseRefactoring},
+				PhaseHistory:  nil,
+			},
+		},
+		{
+			name: "preserves existing PhaseHistory",
+			state: &WorkflowState{
+				Version:       "1.0",
+				Name:          "test",
+				SkippedPhases: nil,
+				PhaseHistory: []PhaseTransition{
+					{
+						FromPhase:      PhasePlanning,
+						ToPhase:        PhaseImplementation,
+						TransitionType: "normal",
+						Timestamp:      time.Now(),
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			originalSkipped := tt.state.SkippedPhases
+			originalHistory := tt.state.PhaseHistory
+
+			MigrateState(tt.state)
+
+			require.NotNil(t, tt.state.SkippedPhases)
+			require.NotNil(t, tt.state.PhaseHistory)
+
+			if originalSkipped != nil {
+				assert.Equal(t, originalSkipped, tt.state.SkippedPhases)
+			} else {
+				assert.Equal(t, []Phase{}, tt.state.SkippedPhases)
+			}
+
+			if originalHistory != nil {
+				assert.Equal(t, originalHistory, tt.state.PhaseHistory)
+			} else {
+				assert.Equal(t, []PhaseTransition{}, tt.state.PhaseHistory)
+			}
+		})
+	}
+}
+
+func TestMigrateState_LoadsOldStateFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	sm := NewStateManager(tmpDir)
+
+	workflowName := "old-workflow"
+	oldStateJSON := `{
+		"version": "1.0",
+		"name": "old-workflow",
+		"type": "feature",
+		"description": "test",
+		"currentPhase": "PLANNING",
+		"createdAt": "2024-01-01T00:00:00Z",
+		"updatedAt": "2024-01-01T00:00:00Z",
+		"phases": {
+			"PLANNING": {
+				"status": "in_progress",
+				"attempts": 1
+			}
+		}
+	}`
+
+	err := sm.EnsureWorkflowDir(workflowName)
+	require.NoError(t, err)
+
+	statePath := filepath.Join(sm.WorkflowDir(workflowName), "state.json")
+	err = os.WriteFile(statePath, []byte(oldStateJSON), 0644)
+	require.NoError(t, err)
+
+	state, err := sm.LoadState(workflowName)
+	require.NoError(t, err)
+
+	assert.NotNil(t, state.SkippedPhases)
+	assert.NotNil(t, state.PhaseHistory)
+	assert.Equal(t, []Phase{}, state.SkippedPhases)
+	assert.Equal(t, []PhaseTransition{}, state.PhaseHistory)
+	assert.False(t, state.ExternalPlanUsed)
+}
+
+func TestRecordPhaseTransition(t *testing.T) {
+	tests := []struct {
+		name           string
+		initialHistory []PhaseTransition
+		from           Phase
+		to             Phase
+		transitionType string
+		reason         string
+		wantLen        int
+	}{
+		{
+			name:           "adds first transition to empty history",
+			initialHistory: []PhaseTransition{},
+			from:           "",
+			to:             PhasePlanning,
+			transitionType: "normal",
+			reason:         "",
+			wantLen:        1,
+		},
+		{
+			name: "adds transition to existing history",
+			initialHistory: []PhaseTransition{
+				{
+					FromPhase:      "",
+					ToPhase:        PhasePlanning,
+					TransitionType: "normal",
+					Timestamp:      time.Now(),
+				},
+			},
+			from:           PhasePlanning,
+			to:             PhaseImplementation,
+			transitionType: "normal",
+			reason:         "",
+			wantLen:        2,
+		},
+		{
+			name:           "records skip transition with reason",
+			initialHistory: []PhaseTransition{},
+			from:           PhasePlanning,
+			to:             PhaseImplementation,
+			transitionType: "skip",
+			reason:         "refactoring not needed",
+			wantLen:        1,
+		},
+		{
+			name:           "records resume transition",
+			initialHistory: []PhaseTransition{},
+			from:           PhaseImplementation,
+			to:             PhaseRefactoring,
+			transitionType: "resume",
+			reason:         "",
+			wantLen:        1,
+		},
+		{
+			name:           "records retry transition",
+			initialHistory: []PhaseTransition{},
+			from:           PhasePlanning,
+			to:             PhasePlanning,
+			transitionType: "retry",
+			reason:         "planning failed",
+			wantLen:        1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			sm := NewStateManager(tmpDir)
+
+			fixedTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+			sm.SetTimeProvider(func() time.Time { return fixedTime })
+
+			state := &WorkflowState{
+				PhaseHistory: tt.initialHistory,
+			}
+
+			sm.RecordPhaseTransition(state, tt.from, tt.to, tt.transitionType, tt.reason)
+
+			require.Len(t, state.PhaseHistory, tt.wantLen)
+
+			lastTransition := state.PhaseHistory[len(state.PhaseHistory)-1]
+			assert.Equal(t, tt.from, lastTransition.FromPhase)
+			assert.Equal(t, tt.to, lastTransition.ToPhase)
+			assert.Equal(t, tt.transitionType, lastTransition.TransitionType)
+			assert.Equal(t, tt.reason, lastTransition.Reason)
+			assert.Equal(t, fixedTime, lastTransition.Timestamp)
+		})
+	}
+}
+
+func TestMarkPhasesSkipped(t *testing.T) {
+	tests := []struct {
+		name         string
+		phases       []Phase
+		wantSkipped  []Phase
+		wantStatuses map[Phase]PhaseStatus
+	}{
+		{
+			name:        "marks single phase as skipped",
+			phases:      []Phase{PhaseRefactoring},
+			wantSkipped: []Phase{PhaseRefactoring},
+			wantStatuses: map[Phase]PhaseStatus{
+				PhaseRefactoring: StatusSkipped,
+			},
+		},
+		{
+			name:        "marks multiple phases as skipped",
+			phases:      []Phase{PhaseRefactoring, PhasePRSplit},
+			wantSkipped: []Phase{PhaseRefactoring, PhasePRSplit},
+			wantStatuses: map[Phase]PhaseStatus{
+				PhaseRefactoring: StatusSkipped,
+				PhasePRSplit:     StatusSkipped,
+			},
+		},
+		{
+			name:         "marks no phases when empty list provided",
+			phases:       []Phase{},
+			wantSkipped:  []Phase{},
+			wantStatuses: map[Phase]PhaseStatus{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			sm := NewStateManager(tmpDir)
+
+			state := &WorkflowState{
+				SkippedPhases: []Phase{},
+				Phases: map[Phase]*PhaseState{
+					PhasePlanning:       {Status: StatusCompleted},
+					PhaseConfirmation:   {Status: StatusCompleted},
+					PhaseImplementation: {Status: StatusCompleted},
+					PhaseRefactoring:    {Status: StatusPending},
+					PhasePRSplit:        {Status: StatusPending},
+				},
+			}
+
+			sm.MarkPhasesSkipped(state, tt.phases)
+
+			assert.Equal(t, tt.wantSkipped, state.SkippedPhases)
+
+			for phase, wantStatus := range tt.wantStatuses {
+				assert.Equal(t, wantStatus, state.Phases[phase].Status)
+			}
+		})
+	}
+}
+
+func TestMarkPhasesSkipped_WithNonExistentPhase(t *testing.T) {
+	tmpDir := t.TempDir()
+	sm := NewStateManager(tmpDir)
+
+	state := &WorkflowState{
+		SkippedPhases: []Phase{},
+		Phases: map[Phase]*PhaseState{
+			PhasePlanning: {Status: StatusCompleted},
+		},
+	}
+
+	sm.MarkPhasesSkipped(state, []Phase{PhaseRefactoring})
+
+	assert.Equal(t, []Phase{PhaseRefactoring}, state.SkippedPhases)
+	require.NotNil(t, state.Phases[PhaseRefactoring])
+	assert.Equal(t, StatusSkipped, state.Phases[PhaseRefactoring].Status)
+	assert.Equal(t, 0, state.Phases[PhaseRefactoring].Attempts)
+}
+
+func TestInitState_InitializesNewFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	sm := NewStateManager(tmpDir)
+
+	state, err := sm.InitState("test-workflow", "test description", WorkflowTypeFeature)
+	require.NoError(t, err)
+
+	assert.NotNil(t, state.SkippedPhases)
+	assert.NotNil(t, state.PhaseHistory)
+	assert.Equal(t, []Phase{}, state.SkippedPhases)
+	assert.Equal(t, []PhaseTransition{}, state.PhaseHistory)
+	assert.False(t, state.ExternalPlanUsed)
+}
+
+func TestSaveAndLoadState_WithNewFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	sm := NewStateManager(tmpDir)
+
+	state := &WorkflowState{
+		Version:      "1.0",
+		Name:         "test-workflow",
+		Type:         WorkflowTypeFeature,
+		Description:  "test",
+		CurrentPhase: PhaseImplementation,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+		Phases: map[Phase]*PhaseState{
+			PhasePlanning: {Status: StatusCompleted},
+		},
+		SkippedPhases: []Phase{PhaseRefactoring},
+		PhaseHistory: []PhaseTransition{
+			{
+				FromPhase:      PhasePlanning,
+				ToPhase:        PhaseImplementation,
+				TransitionType: "skip",
+				Timestamp:      time.Now(),
+				Reason:         "not needed",
+			},
+		},
+		ExternalPlanUsed: true,
+	}
+
+	err := sm.SaveState(state.Name, state)
+	require.NoError(t, err)
+
+	loaded, err := sm.LoadState(state.Name)
+	require.NoError(t, err)
+
+	assert.Equal(t, state.SkippedPhases, loaded.SkippedPhases)
+	assert.Len(t, loaded.PhaseHistory, 1)
+	assert.Equal(t, state.PhaseHistory[0].FromPhase, loaded.PhaseHistory[0].FromPhase)
+	assert.Equal(t, state.PhaseHistory[0].ToPhase, loaded.PhaseHistory[0].ToPhase)
+	assert.Equal(t, state.PhaseHistory[0].TransitionType, loaded.PhaseHistory[0].TransitionType)
+	assert.Equal(t, state.PhaseHistory[0].Reason, loaded.PhaseHistory[0].Reason)
+	assert.Equal(t, state.ExternalPlanUsed, loaded.ExternalPlanUsed)
+}

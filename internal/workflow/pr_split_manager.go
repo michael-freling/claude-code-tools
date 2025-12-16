@@ -3,11 +3,14 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/michael-freling/claude-code-tools/internal/command"
 )
+
+var prNumberRegex = regexp.MustCompile(`/pull/(\d+)(?:[/?#]|$)`)
 
 // PRSplitManager orchestrates the creation of split PRs with proper branch chains
 type PRSplitManager interface {

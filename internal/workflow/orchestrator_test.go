@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
 
 // MockClaudeExecutor is a mock implementation of ClaudeExecutor
@@ -121,6 +122,30 @@ func (m *MockStateManager) DeleteWorkflow(name string) error {
 
 func (m *MockStateManager) SetTimeProvider(tp TimeProvider) {
 	m.Called(tp)
+}
+
+func (m *MockStateManager) RecordPhaseTransition(state *WorkflowState, from, to Phase, transitionType, reason string) {
+	m.Called(state, from, to, transitionType, reason)
+	// Actually perform the operation for tests that expect state mutations
+	transition := PhaseTransition{
+		FromPhase:      from,
+		ToPhase:        to,
+		TransitionType: transitionType,
+		Timestamp:      time.Now(),
+		Reason:         reason,
+	}
+	state.PhaseHistory = append(state.PhaseHistory, transition)
+}
+
+func (m *MockStateManager) MarkPhasesSkipped(state *WorkflowState, phases []Phase) {
+	m.Called(state, phases)
+	// Actually perform the operation for tests that expect state mutations
+	for _, phase := range phases {
+		state.SkippedPhases = append(state.SkippedPhases, phase)
+		if phaseState, ok := state.Phases[phase]; ok {
+			phaseState.Status = StatusSkipped
+		}
+	}
 }
 
 func (m *MockStateManager) SaveRawOutput(name string, phase Phase, output string) error {
@@ -262,6 +287,11 @@ type MockWorktreeManager struct {
 
 func (m *MockWorktreeManager) CreateWorktree(workflowName string) (string, error) {
 	args := m.Called(workflowName)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockWorktreeManager) CreateWorktreeFromExistingBranch(ctx context.Context, workflowName string, branchName string) (string, error) {
+	args := m.Called(ctx, workflowName, branchName)
 	return args.String(0), args.Error(1)
 }
 
@@ -1503,13 +1533,14 @@ func TestOrchestrator_executePhase_InvalidPhase(t *testing.T) {
 
 func TestOrchestrator_Start(t *testing.T) {
 	tests := []struct {
-		name       string
-		setupMocks func(*MockStateManager)
-		wantErr    bool
+		name        string
+		setupMocks  func(*MockStateManager, *command.MockGitRunner, *command.MockGhRunner)
+		wantErr     bool
+		errContains string
 	}{
 		{
 			name: "fails when InitState fails",
-			setupMocks: func(sm *MockStateManager) {
+			setupMocks: func(sm *MockStateManager, gr *command.MockGitRunner, ghr *command.MockGhRunner) {
 				sm.On("WorkflowExists", "test-workflow").Return(false)
 				sm.On("InitState", "test-workflow", "test description", WorkflowTypeFeature).Return((*WorkflowState)(nil), errors.New("init failed"))
 			},
@@ -1517,7 +1548,7 @@ func TestOrchestrator_Start(t *testing.T) {
 		},
 		{
 			name: "deletes and restarts failed workflow",
-			setupMocks: func(sm *MockStateManager) {
+			setupMocks: func(sm *MockStateManager, gr *command.MockGitRunner, ghr *command.MockGhRunner) {
 				sm.On("WorkflowExists", "test-workflow").Return(true)
 				sm.On("LoadState", "test-workflow").Return(&WorkflowState{
 					Name:         "test-workflow",
@@ -1530,7 +1561,7 @@ func TestOrchestrator_Start(t *testing.T) {
 		},
 		{
 			name: "fails when workflow exists and not failed",
-			setupMocks: func(sm *MockStateManager) {
+			setupMocks: func(sm *MockStateManager, gr *command.MockGitRunner, ghr *command.MockGhRunner) {
 				sm.On("WorkflowExists", "test-workflow").Return(true)
 				sm.On("LoadState", "test-workflow").Return(&WorkflowState{
 					Name:         "test-workflow",
@@ -1542,7 +1573,7 @@ func TestOrchestrator_Start(t *testing.T) {
 		},
 		{
 			name: "fails when deleting failed workflow fails",
-			setupMocks: func(sm *MockStateManager) {
+			setupMocks: func(sm *MockStateManager, gr *command.MockGitRunner, ghr *command.MockGhRunner) {
 				sm.On("WorkflowExists", "test-workflow").Return(true)
 				sm.On("LoadState", "test-workflow").Return(&WorkflowState{
 					Name:         "test-workflow",
@@ -1554,7 +1585,7 @@ func TestOrchestrator_Start(t *testing.T) {
 		},
 		{
 			name: "continues when LoadState fails for existing workflow",
-			setupMocks: func(sm *MockStateManager) {
+			setupMocks: func(sm *MockStateManager, gr *command.MockGitRunner, ghr *command.MockGhRunner) {
 				sm.On("WorkflowExists", "test-workflow").Return(true)
 				sm.On("LoadState", "test-workflow").Return((*WorkflowState)(nil), errors.New("load failed"))
 				sm.On("InitState", "test-workflow", "test description", WorkflowTypeFeature).Return((*WorkflowState)(nil), ErrWorkflowExists)
@@ -1565,19 +1596,30 @@ func TestOrchestrator_Start(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
 			mockSM := new(MockStateManager)
-			tt.setupMocks(mockSM)
+			mockGitRunner := command.NewMockGitRunner(ctrl)
+			mockGhRunner := command.NewMockGhRunner(ctrl)
+
+			tt.setupMocks(mockSM, mockGitRunner, mockGhRunner)
 
 			o := &Orchestrator{
 				stateManager: mockSM,
 				config:       DefaultConfig("/tmp/workflows"),
 				logger:       NewLogger(LogLevelNormal),
+				gitRunner:    mockGitRunner,
+				ghRunner:     mockGhRunner,
 			}
 
 			err := o.Start(context.Background(), "test-workflow", "test description", WorkflowTypeFeature)
 
 			if tt.wantErr {
 				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
 				return
 			}
 
@@ -1585,6 +1627,11 @@ func TestOrchestrator_Start(t *testing.T) {
 			mockSM.AssertExpectations(t)
 		})
 	}
+}
+
+// Helper function to create int pointers
+func intPtr(i int) *int {
+	return &i
 }
 
 func TestOrchestrator_transitionPhase(t *testing.T) {
@@ -5221,6 +5268,201 @@ func TestOrchestrator_executePRCreation_PromptTooLong(t *testing.T) {
 			mockExec.AssertExpectations(t)
 			mockPG.AssertExpectations(t)
 			mockGR.AssertExpectations(t)
+		})
+	}
+}
+
+func TestOrchestrator_handleSkipToPhase(t *testing.T) {
+	tests := []struct {
+		name             string
+		currentPhase     Phase
+		targetPhase      Phase
+		forceBackward    bool
+		externalPlanPath string
+		setupState       func(*WorkflowState)
+		setupMocks       func(*MockStateManager, string)
+		wantErr          bool
+		errContains      string
+		validateState    func(*testing.T, *WorkflowState)
+	}{
+		{
+			name:             "skip forward with external plan - planning to confirmation",
+			currentPhase:     PhasePlanning,
+			targetPhase:      PhaseConfirmation,
+			externalPlanPath: "/tmp/plan.json",
+			setupState: func(state *WorkflowState) {
+				state.Phases[PhasePlanning].Status = StatusInProgress
+				state.Phases[PhaseConfirmation].Status = StatusPending
+			},
+			setupMocks: func(sm *MockStateManager, planPath string) {
+				sm.On("WorkflowDir", "test-workflow").Return("/tmp/workflow")
+				sm.On("SavePlan", "test-workflow", mock.AnythingOfType("*workflow.Plan")).Return(nil)
+				sm.On("SavePlanMarkdown", "test-workflow", mock.AnythingOfType("string")).Return(nil)
+				sm.On("MarkPhasesSkipped", mock.AnythingOfType("*workflow.WorkflowState"), mock.AnythingOfType("[]workflow.Phase")).Return()
+				sm.On("RecordPhaseTransition", mock.AnythingOfType("*workflow.WorkflowState"), mock.AnythingOfType("workflow.Phase"), mock.AnythingOfType("workflow.Phase"), mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return()
+			},
+			wantErr: false,
+			validateState: func(t *testing.T, state *WorkflowState) {
+				assert.Equal(t, PhaseConfirmation, state.CurrentPhase)
+				assert.True(t, state.ExternalPlanUsed)
+				// No phases skipped when going from 0 to 1
+				assert.Len(t, state.SkippedPhases, 0)
+				assert.Equal(t, StatusInProgress, state.Phases[PhaseConfirmation].Status)
+				require.Len(t, state.PhaseHistory, 1)
+				assert.Equal(t, "skip", state.PhaseHistory[0].TransitionType)
+			},
+		},
+		{
+			name:             "skip forward planning to implementation - skips confirmation",
+			currentPhase:     PhasePlanning,
+			targetPhase:      PhaseImplementation,
+			externalPlanPath: "/tmp/plan.json",
+			setupState: func(state *WorkflowState) {
+				state.Phases[PhasePlanning].Status = StatusInProgress
+				state.Phases[PhaseConfirmation].Status = StatusCompleted
+				state.Phases[PhaseImplementation].Status = StatusPending
+			},
+			setupMocks: func(sm *MockStateManager, planPath string) {
+				sm.On("WorkflowDir", "test-workflow").Return("/tmp/workflow")
+				sm.On("SavePlan", "test-workflow", mock.AnythingOfType("*workflow.Plan")).Return(nil)
+				sm.On("SavePlanMarkdown", "test-workflow", mock.AnythingOfType("string")).Return(nil)
+				sm.On("MarkPhasesSkipped", mock.AnythingOfType("*workflow.WorkflowState"), mock.AnythingOfType("[]workflow.Phase")).Return()
+				sm.On("RecordPhaseTransition", mock.AnythingOfType("*workflow.WorkflowState"), mock.AnythingOfType("workflow.Phase"), mock.AnythingOfType("workflow.Phase"), mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return()
+			},
+			wantErr: false,
+			validateState: func(t *testing.T, state *WorkflowState) {
+				assert.Equal(t, PhaseImplementation, state.CurrentPhase)
+				assert.True(t, state.ExternalPlanUsed)
+				// Only confirmation is skipped (between 0 and 2)
+				assert.Contains(t, state.SkippedPhases, PhaseConfirmation)
+				assert.Len(t, state.SkippedPhases, 1)
+				assert.Equal(t, StatusSkipped, state.Phases[PhaseConfirmation].Status)
+				assert.Equal(t, StatusInProgress, state.Phases[PhaseImplementation].Status)
+			},
+		},
+		{
+			name:         "validation fails when prerequisites missing",
+			currentPhase: PhasePlanning,
+			targetPhase:  PhaseImplementation,
+			setupState: func(state *WorkflowState) {
+				state.Phases[PhasePlanning].Status = StatusInProgress
+				state.Phases[PhaseConfirmation].Status = StatusPending
+				state.Phases[PhaseImplementation].Status = StatusPending
+			},
+			setupMocks: func(sm *MockStateManager, planPath string) {
+				sm.On("WorkflowDir", "test-workflow").Return("/tmp/workflow")
+			},
+			wantErr:     true,
+			errContains: "missing prerequisites",
+		},
+		{
+			name:         "validation fails when skipping to COMPLETED",
+			currentPhase: PhasePlanning,
+			targetPhase:  PhaseCompleted,
+			setupState: func(state *WorkflowState) {
+			},
+			setupMocks: func(sm *MockStateManager, planPath string) {
+			},
+			wantErr:     true,
+			errContains: "cannot skip to COMPLETED",
+		},
+		{
+			name:          "validation fails for backward skip without force",
+			currentPhase:  PhaseImplementation,
+			targetPhase:   PhasePlanning,
+			forceBackward: false,
+			setupState: func(state *WorkflowState) {
+			},
+			setupMocks: func(sm *MockStateManager, planPath string) {
+				// No mocks needed - validation fails early
+			},
+			wantErr:     true,
+			errContains: "cannot skip backward",
+		},
+		{
+			name:          "validation succeeds for backward skip with force",
+			currentPhase:  PhaseImplementation,
+			targetPhase:   PhasePlanning,
+			forceBackward: true,
+			setupState: func(state *WorkflowState) {
+			},
+			setupMocks: func(sm *MockStateManager, planPath string) {
+				// Planning has no prerequisites, so no mocks needed
+				sm.On("MarkPhasesSkipped", mock.AnythingOfType("*workflow.WorkflowState"), mock.AnythingOfType("[]workflow.Phase")).Return()
+				sm.On("RecordPhaseTransition", mock.AnythingOfType("*workflow.WorkflowState"), mock.AnythingOfType("workflow.Phase"), mock.AnythingOfType("workflow.Phase"), mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return()
+			},
+			wantErr: false,
+			validateState: func(t *testing.T, state *WorkflowState) {
+				assert.Equal(t, PhasePlanning, state.CurrentPhase)
+				assert.Equal(t, StatusInProgress, state.Phases[PhasePlanning].Status)
+				// Backward skip doesn't mark phases as skipped
+				assert.Len(t, state.SkippedPhases, 0)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var planPath string
+			if tt.externalPlanPath != "" {
+				tmpDir := t.TempDir()
+				plan := &Plan{
+					Summary: "Test plan",
+					Phases: []PlanPhase{
+						{Name: "Phase 1", Description: "Test phase"},
+					},
+					WorkStreams: []WorkStream{
+						{Name: "Stream 1", Tasks: []string{"Task 1"}},
+					},
+				}
+				planBytes, err := json.Marshal(plan)
+				require.NoError(t, err)
+				planPath = tmpDir + "/plan.json"
+				err = os.WriteFile(planPath, planBytes, 0644)
+				require.NoError(t, err)
+			}
+
+			mockSM := new(MockStateManager)
+			tt.setupMocks(mockSM, planPath)
+
+			state := &WorkflowState{
+				Name:         "test-workflow",
+				CurrentPhase: tt.currentPhase,
+				Phases: map[Phase]*PhaseState{
+					PhasePlanning:       {Status: StatusCompleted},
+					PhaseConfirmation:   {Status: StatusCompleted},
+					PhaseImplementation: {Status: StatusCompleted},
+					PhaseRefactoring:    {Status: StatusPending},
+				},
+				SkippedPhases: []Phase{},
+				PhaseHistory:  []PhaseTransition{},
+			}
+
+			if tt.setupState != nil {
+				tt.setupState(state)
+			}
+
+			o := &Orchestrator{
+				stateManager: mockSM,
+				config:       DefaultConfig("/tmp/workflows"),
+				logger:       NewLogger(LogLevelNormal),
+			}
+
+			err := o.handleSkipToPhase(state, tt.targetPhase, tt.forceBackward, planPath)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+			} else {
+				require.NoError(t, err)
+				if tt.validateState != nil {
+					tt.validateState(t, state)
+				}
+			}
+
+			mockSM.AssertExpectations(t)
 		})
 	}
 }

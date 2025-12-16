@@ -21,6 +21,7 @@ type WorktreeManager interface {
 type worktreeManager struct {
 	baseDir   string
 	gitRunner command.GitRunner
+	cmdRunner command.Runner
 }
 
 // NewWorktreeManager creates a new worktree manager
@@ -29,6 +30,7 @@ func NewWorktreeManager(baseDir string) WorktreeManager {
 	return &worktreeManager{
 		baseDir:   baseDir,
 		gitRunner: command.NewGitRunner(cmdRunner),
+		cmdRunner: cmdRunner,
 	}
 }
 
@@ -37,6 +39,16 @@ func NewWorktreeManagerWithRunner(baseDir string, gitRunner command.GitRunner) W
 	return &worktreeManager{
 		baseDir:   baseDir,
 		gitRunner: gitRunner,
+		cmdRunner: command.NewRunner(),
+	}
+}
+
+// NewWorktreeManagerWithRunners creates a new worktree manager with custom runners
+func NewWorktreeManagerWithRunners(baseDir string, gitRunner command.GitRunner, cmdRunner command.Runner) WorktreeManager {
+	return &worktreeManager{
+		baseDir:   baseDir,
+		gitRunner: gitRunner,
+		cmdRunner: cmdRunner,
 	}
 }
 

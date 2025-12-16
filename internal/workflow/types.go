@@ -39,17 +39,20 @@ const (
 
 // WorkflowState represents the persisted state of a workflow
 type WorkflowState struct {
-	Version      string                `json:"version"`
-	Name         string                `json:"name"`
-	Type         WorkflowType          `json:"type"`
-	Description  string                `json:"description"`
-	CurrentPhase Phase                 `json:"currentPhase"`
-	CreatedAt    time.Time             `json:"createdAt"`
-	UpdatedAt    time.Time             `json:"updatedAt"`
-	Phases       map[Phase]*PhaseState `json:"phases"`
-	Error        *WorkflowError        `json:"error,omitempty"`
-	WorktreePath string                `json:"worktreePath,omitempty"`
-	SplitPR      bool                  `json:"splitPR,omitempty"`
+	Version          string                `json:"version"`
+	Name             string                `json:"name"`
+	Type             WorkflowType          `json:"type"`
+	Description      string                `json:"description"`
+	CurrentPhase     Phase                 `json:"currentPhase"`
+	CreatedAt        time.Time             `json:"createdAt"`
+	UpdatedAt        time.Time             `json:"updatedAt"`
+	Phases           map[Phase]*PhaseState `json:"phases"`
+	Error            *WorkflowError        `json:"error,omitempty"`
+	WorktreePath     string                `json:"worktreePath,omitempty"`
+	SplitPR          bool                  `json:"splitPR,omitempty"`
+	SkippedPhases    []Phase               `json:"skippedPhases,omitempty"`
+	PhaseHistory     []PhaseTransition     `json:"phaseHistory,omitempty"`
+	ExternalPlanUsed bool                  `json:"externalPlanUsed,omitempty"`
 }
 
 // PhaseState represents the state of a single phase
@@ -61,6 +64,15 @@ type PhaseState struct {
 	Feedback    []string    `json:"feedback,omitempty"`
 	Required    *bool       `json:"required,omitempty"`
 	Metrics     *PRMetrics  `json:"metrics,omitempty"`
+}
+
+// PhaseTransition represents a transition between phases
+type PhaseTransition struct {
+	FromPhase      Phase     `json:"fromPhase"`
+	ToPhase        Phase     `json:"toPhase"`
+	TransitionType string    `json:"transitionType"`
+	Timestamp      time.Time `json:"timestamp"`
+	Reason         string    `json:"reason,omitempty"`
 }
 
 // PRMetrics holds diff statistics for PR split decision
@@ -210,6 +222,28 @@ type CheckCIOptions struct {
 type Commit struct {
 	Hash    string `json:"hash"`
 	Subject string `json:"subject"`
+}
+
+// ArtifactType represents a type of artifact or state flag
+type ArtifactType string
+
+const (
+	ArtifactPlan           ArtifactType = "plan.json"
+	ArtifactApproval       ArtifactType = "approval"
+	ArtifactImplementation ArtifactType = "implementation"
+	ArtifactPR             ArtifactType = "pr"
+)
+
+// PhasePrerequisite represents a single prerequisite for a phase
+type PhasePrerequisite struct {
+	ArtifactType ArtifactType `json:"artifactType"`
+	Description  string       `json:"description"`
+}
+
+// PhasePrerequisites represents all prerequisites for a specific phase
+type PhasePrerequisites struct {
+	Phase         Phase               `json:"phase"`
+	Prerequisites []PhasePrerequisite `json:"prerequisites"`
 }
 
 // Error variables for common error conditions
