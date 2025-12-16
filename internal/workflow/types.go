@@ -214,6 +214,28 @@ type Commit struct {
 	Subject string `json:"subject"`
 }
 
+// ArtifactType represents a type of artifact or state flag
+type ArtifactType string
+
+const (
+	ArtifactPlan           ArtifactType = "plan.json"
+	ArtifactApproval       ArtifactType = "approval"
+	ArtifactImplementation ArtifactType = "implementation"
+	ArtifactPR             ArtifactType = "pr"
+)
+
+// PhasePrerequisite represents a single prerequisite for a phase
+type PhasePrerequisite struct {
+	ArtifactType ArtifactType `json:"artifactType"`
+	Description  string       `json:"description"`
+}
+
+// PhasePrerequisites represents all prerequisites for a specific phase
+type PhasePrerequisites struct {
+	Phase         Phase               `json:"phase"`
+	Prerequisites []PhasePrerequisite `json:"prerequisites"`
+}
+
 // Error variables for common error conditions
 var (
 	ErrInvalidWorkflowName = errors.New("invalid workflow name")
