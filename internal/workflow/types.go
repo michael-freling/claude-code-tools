@@ -39,19 +39,22 @@ const (
 
 // WorkflowState represents the persisted state of a workflow
 type WorkflowState struct {
-	Version        string                `json:"version"`
-	Name           string                `json:"name"`
-	Type           WorkflowType          `json:"type"`
-	Description    string                `json:"description"`
-	CurrentPhase   Phase                 `json:"currentPhase"`
-	CreatedAt      time.Time             `json:"createdAt"`
-	UpdatedAt      time.Time             `json:"updatedAt"`
-	Phases         map[Phase]*PhaseState `json:"phases"`
-	Error          *WorkflowError        `json:"error,omitempty"`
-	WorktreePath   string                `json:"worktreePath,omitempty"`
-	SplitPR        bool                  `json:"splitPR,omitempty"`
-	UpdatePR       *int                  `json:"updatePR,omitempty"`       // nil = create mode, set = update mode
-	UpdatePRBranch string                `json:"updatePRBranch,omitempty"` // The branch name of the PR being updated
+	Version          string                `json:"version"`
+	Name             string                `json:"name"`
+	Type             WorkflowType          `json:"type"`
+	Description      string                `json:"description"`
+	CurrentPhase     Phase                 `json:"currentPhase"`
+	CreatedAt        time.Time             `json:"createdAt"`
+	UpdatedAt        time.Time             `json:"updatedAt"`
+	Phases           map[Phase]*PhaseState `json:"phases"`
+	Error            *WorkflowError        `json:"error,omitempty"`
+	WorktreePath     string                `json:"worktreePath,omitempty"`
+	SplitPR          bool                  `json:"splitPR,omitempty"`
+	UpdatePR         *int                  `json:"updatePR,omitempty"`       // nil = create mode, set = update mode
+	UpdatePRBranch   string                `json:"updatePRBranch,omitempty"` // The branch name of the PR being updated
+	SkippedPhases    []Phase               `json:"skippedPhases,omitempty"`
+	PhaseHistory     []PhaseTransition     `json:"phaseHistory,omitempty"`
+	ExternalPlanUsed bool                  `json:"externalPlanUsed,omitempty"`
 }
 
 // PhaseState represents the state of a single phase
@@ -63,6 +66,15 @@ type PhaseState struct {
 	Feedback    []string    `json:"feedback,omitempty"`
 	Required    *bool       `json:"required,omitempty"`
 	Metrics     *PRMetrics  `json:"metrics,omitempty"`
+}
+
+// PhaseTransition represents a transition between phases
+type PhaseTransition struct {
+	FromPhase      Phase     `json:"fromPhase"`
+	ToPhase        Phase     `json:"toPhase"`
+	TransitionType string    `json:"transitionType"`
+	Timestamp      time.Time `json:"timestamp"`
+	Reason         string    `json:"reason,omitempty"`
 }
 
 // PRMetrics holds diff statistics for PR split decision
