@@ -601,17 +601,17 @@ func TestPathsToYAML(t *testing.T) {
 		{
 			name:  "single path",
 			paths: []string{"**/*.go"},
-			want:  "  - \"**/*.go\"\n",
+			want:  "**/*.go",
 		},
 		{
 			name:  "multiple paths",
 			paths: []string{"**/*.go", "**/*.ts"},
-			want:  "  - \"**/*.go\"\n  - \"**/*.ts\"\n",
+			want:  "**/*.go, **/*.ts",
 		},
 		{
 			name:  "paths with special characters",
 			paths: []string{"**/*.{ts,tsx}", "src/**/*.py"},
-			want:  "  - \"**/*.{ts,tsx}\"\n  - \"src/**/*.py\"\n",
+			want:  "**/*.{ts,tsx}, src/**/*.py",
 		},
 	}
 
@@ -635,8 +635,7 @@ func TestEngine_Generate_RealRuleOutput(t *testing.T) {
 			ruleName: "golang",
 			wantContains: []string{
 				"---",
-				"globs:",
-				`  - "**/*.go"`,
+				"paths: **/*.go",
 				"# Go Coding Guidelines",
 			},
 		},
@@ -648,7 +647,7 @@ func TestEngine_Generate_RealRuleOutput(t *testing.T) {
 				"# Common Coding Guidelines",
 			},
 			wantNotContain: []string{
-				"globs:",
+				"paths:",
 			},
 		},
 		{
@@ -656,9 +655,7 @@ func TestEngine_Generate_RealRuleOutput(t *testing.T) {
 			ruleName: "typescript",
 			wantContains: []string{
 				"---",
-				"globs:",
-				`  - "**/*.ts"`,
-				`  - "**/*.tsx"`,
+				"paths: **/*.ts, **/*.tsx",
 				"# TypeScript Coding Guidelines",
 			},
 		},
@@ -768,8 +765,7 @@ func TestEngine_GenerateRuleWithOptions(t *testing.T) {
 				"prompts/rules/_partials.tmpl": &fstest.MapFile{
 					Data: []byte(`{{define "YAML_FRONTMATTER"}}---
 {{- if .Paths}}
-globs:
-{{pathsToYAML .Paths}}
+paths: {{pathsToYAML .Paths}}
 {{- end}}
 ---
 {{end}}`),
@@ -786,9 +782,7 @@ globs:
 			},
 			wantContains: []string{
 				"---",
-				"globs:",
-				`  - "src/**/*.go"`,
-				`  - "pkg/**/*.go"`,
+				"paths: src/**/*.go, pkg/**/*.go",
 				"# Go Guidelines",
 			},
 			wantErr: false,
@@ -809,8 +803,7 @@ globs:
 				"prompts/rules/_partials.tmpl": &fstest.MapFile{
 					Data: []byte(`{{define "YAML_FRONTMATTER"}}---
 {{- if .Paths}}
-globs:
-{{pathsToYAML .Paths}}
+paths: {{pathsToYAML .Paths}}
 {{- end}}
 ---
 {{end}}`),
@@ -825,8 +818,7 @@ globs:
 			opts:     GenerateOptions{},
 			wantContains: []string{
 				"---",
-				"globs:",
-				`  - "**/*.go"`,
+				"paths: **/*.go",
 				"# Go Guidelines",
 			},
 			wantErr: false,
@@ -891,8 +883,7 @@ func TestEngine_InitRulesDirectory(t *testing.T) {
 				"prompts/rules/_partials.tmpl": &fstest.MapFile{
 					Data: []byte(`{{define "YAML_FRONTMATTER"}}---
 {{- if .Paths}}
-globs:
-{{pathsToYAML .Paths}}
+paths: {{pathsToYAML .Paths}}
 {{- end}}
 ---
 {{end}}`),
@@ -1040,8 +1031,7 @@ func TestEngine_Generate_RuleTemplateData(t *testing.T) {
 				"prompts/rules/_partials.tmpl": &fstest.MapFile{
 					Data: []byte(`{{define "YAML_FRONTMATTER"}}---
 {{- if .Paths}}
-globs:
-{{pathsToYAML .Paths}}
+paths: {{pathsToYAML .Paths}}
 {{- end}}
 ---
 {{end}}`),
@@ -1056,9 +1046,7 @@ globs:
 			templateName: "test-rule",
 			wantContains: []string{
 				"---",
-				"globs:",
-				`  - "**/*.go"`,
-				`  - "**/*.ts"`,
+				"paths: **/*.go, **/*.ts",
 				"---",
 				"# Test Rule",
 				"A test rule",
@@ -1079,8 +1067,7 @@ globs:
 				"prompts/rules/_partials.tmpl": &fstest.MapFile{
 					Data: []byte(`{{define "YAML_FRONTMATTER"}}---
 {{- if .Paths}}
-globs:
-{{pathsToYAML .Paths}}
+paths: {{pathsToYAML .Paths}}
 {{- end}}
 ---
 {{end}}`),
@@ -1107,8 +1094,7 @@ globs:
 				"prompts/rules/_partials.tmpl": &fstest.MapFile{
 					Data: []byte(`{{define "YAML_FRONTMATTER"}}---
 {{- if .Paths}}
-globs:
-{{pathsToYAML .Paths}}
+paths: {{pathsToYAML .Paths}}
 {{- end}}
 ---
 {{end}}`),

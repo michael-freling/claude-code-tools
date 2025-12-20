@@ -343,8 +343,7 @@ func TestGenerator_GenerateRuleWithOptions(t *testing.T) {
 				"prompts/rules/_partials.tmpl": &fstest.MapFile{
 					Data: []byte(`{{define "YAML_FRONTMATTER"}}---
 {{- if .Paths}}
-globs:
-{{pathsToYAML .Paths}}
+paths: {{pathsToYAML .Paths}}
 {{- end}}
 ---
 {{end}}`),
@@ -360,8 +359,7 @@ globs:
 			},
 			wantContains: []string{
 				"---",
-				"globs:",
-				`  - "src/**/*.go"`,
+				"paths: src/**/*.go",
 				"# Go Guidelines",
 			},
 			wantErr: false,

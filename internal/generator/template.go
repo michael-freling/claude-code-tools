@@ -66,18 +66,14 @@ type RulesConfig struct {
 
 var templatesFS = templates.FS
 
-// pathsToYAML converts a string slice of paths to a YAML array format with indentation
+// pathsToYAML converts a string slice of paths to a comma-separated string
+// suitable for the paths field in Claude Code rule frontmatter.
+// For example: ["**/*.go", "**/*.mod"] becomes "**/*.go, **/*.mod"
 func pathsToYAML(paths []string) string {
 	if len(paths) == 0 {
 		return ""
 	}
-	var result strings.Builder
-	for _, path := range paths {
-		result.WriteString("  - \"")
-		result.WriteString(path)
-		result.WriteString("\"\n")
-	}
-	return result.String()
+	return strings.Join(paths, ", ")
 }
 
 // Engine holds parsed templates and provides generation capabilities
