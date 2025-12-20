@@ -1,0 +1,27 @@
+# Rules metadata configuration
+# This file defines available Claude Code rules and their default settings
+
+default_rules:
+  - coding-guidelines
+  - golang
+
+rules:
+  golang:
+    name: "Go Coding Guidelines"
+    description: "Go-specific coding standards including error handling, formatting, and testing patterns"
+    filename: ".claude/rules/golang.md"
+    paths:
+      - "**/*.go"
+
+  typescript:
+    name: "TypeScript Coding Guidelines"
+    description: "TypeScript-specific coding standards including types, patterns, and testing"
+    filename: ".claude/rules/typescript.md"
+    paths:
+      - "**/*.ts"
+      - "**/*.tsx"
+
+  coding-guidelines:
+    name: "Coding Guidelines"
+    description: "General coding guidelines applicable to all languages"
+    filename: ".claude/rules/coding-guidelines.md"

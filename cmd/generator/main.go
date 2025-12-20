@@ -19,14 +19,15 @@ func main() {
 func newRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "generator",
-		Short: "Generate Claude Code prompts for skills, agents, and commands",
-		Long:  `A CLI tool to generate Claude Code prompts from templates for skills, agents, and commands.`,
+		Short: "Generate Claude Code prompts for skills, agents, commands, and rules",
+		Long:  `A CLI tool to generate Claude Code prompts from templates for skills, agents, commands, and rules.`,
 	}
 
 	rootCmd.PersistentFlags().StringVarP(&templateDir, "template-dir", "t", "", "directory containing custom templates (default: use embedded templates)")
 
 	rootCmd.AddCommand(newAgentsCmd())
 	rootCmd.AddCommand(newCommandsCmd())
+	rootCmd.AddCommand(newRulesCmd())
 	rootCmd.AddCommand(newSkillsCmd())
 
 	return rootCmd

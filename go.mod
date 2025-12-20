@@ -7,6 +7,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/mock v0.6.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -18,5 +19,4 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	golang.org/x/sys v0.38.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

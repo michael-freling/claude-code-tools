@@ -62,3 +62,15 @@ func (g *Generator) GenerateAll(itemType ItemType) error {
 
 	return nil
 }
+
+func (g *Generator) GenerateRuleWithOptions(name string, opts GenerateOptions) (string, error) {
+	return g.engine.GenerateRuleWithOptions(name, opts)
+}
+
+func (g *Generator) GetDefaultRules() []string {
+	return g.engine.GetDefaultRules()
+}
+
+func (g *Generator) InitRulesDirectory(dir string, rules []string, force bool) error {
+	return g.engine.InitRulesDirectory(dir, rules, force)
+}

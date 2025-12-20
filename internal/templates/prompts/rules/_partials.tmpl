@@ -1,0 +1,7 @@
+{{define "YAML_FRONTMATTER"}}
+{{- if .Paths -}}
+---
+paths: {{pathsToYAML .Paths}}
+---
+{{ end }}
+{{- end }}

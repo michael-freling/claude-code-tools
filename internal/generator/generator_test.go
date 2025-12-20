@@ -5,6 +5,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"testing"
 	"testing/fstest"
 
@@ -90,7 +91,7 @@ func TestGenerator_List(t *testing.T) {
 		{
 			name:     "returns available agents",
 			itemType: ItemTypeAgent,
-			wantLen:  8,
+			wantLen:  6,
 		},
 		{
 			name:     "returns available commands",
@@ -132,10 +133,10 @@ func TestGenerator_Generate_Success(t *testing.T) {
 			wantContains: "CI error",
 		},
 		{
-			name:         "outputs golang-code-reviewer agent content",
+			name:         "outputs code-reviewer agent content",
 			itemType:     ItemTypeAgent,
-			templateName: "golang-code-reviewer",
-			wantContains: "Go",
+			templateName: "code-reviewer",
+			wantContains: "code",
 		},
 		{
 			name:         "outputs feature command content",
@@ -312,6 +313,201 @@ func TestGenerator_GenerateAll_Errors(t *testing.T) {
 				assert.Contains(t, err.Error(), tt.errContains)
 				return
 			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestGenerator_GenerateRuleWithOptions(t *testing.T) {
+	tests := []struct {
+		name         string
+		fsys         fs.FS
+		ruleName     string
+		opts         GenerateOptions
+		wantContains []string
+		wantErr      bool
+		errContains  string
+	}{
+		{
+			name: "generates rule with custom paths",
+			fsys: fstest.MapFS{
+				"prompts/rules/_metadata.yaml": &fstest.MapFile{
+					Data: []byte(`rules:
+  golang:
+    name: "Go Guidelines"
+    description: "Go coding standards"
+    paths:
+      - "**/*.go"
+`),
+				},
+				"prompts/rules/_partials.tmpl": &fstest.MapFile{
+					Data: []byte(`{{define "YAML_FRONTMATTER"}}---
+{{- if .Paths}}
+paths: {{pathsToYAML .Paths}}
+{{- end}}
+---
+{{end}}`),
+				},
+				"prompts/rules/golang.tmpl": &fstest.MapFile{
+					Data: []byte(`{{- template "YAML_FRONTMATTER" . -}}
+# {{.Title}}`),
+				},
+			},
+			ruleName: "golang",
+			opts: GenerateOptions{
+				Paths: []string{"src/**/*.go"},
+			},
+			wantContains: []string{
+				"---",
+				"paths: src/**/*.go",
+				"# Go Guidelines",
+			},
+			wantErr: false,
+		},
+		{
+			name:        "returns error for non-existent rule",
+			fsys:        fstest.MapFS{},
+			ruleName:    "non-existent",
+			opts:        GenerateOptions{},
+			wantErr:     true,
+			errContains: "not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gen, err := NewGeneratorWithFS(tt.fsys)
+			require.NoError(t, err)
+
+			got, err := gen.GenerateRuleWithOptions(tt.ruleName, tt.opts)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
+			for _, want := range tt.wantContains {
+				assert.Contains(t, got, want)
+			}
+		})
+	}
+}
+
+func TestGenerator_GetDefaultRules(t *testing.T) {
+	tests := []struct {
+		name string
+		fsys fs.FS
+		want []string
+	}{
+		{
+			name: "returns default rules from metadata",
+			fsys: fstest.MapFS{
+				"prompts/rules/_metadata.yaml": &fstest.MapFile{
+					Data: []byte(`default_rules:
+  - rule1
+  - rule2
+`),
+				},
+			},
+			want: []string{"rule1", "rule2"},
+		},
+		{
+			name: "returns empty slice when no default rules",
+			fsys: fstest.MapFS{},
+			want: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gen, err := NewGeneratorWithFS(tt.fsys)
+			require.NoError(t, err)
+
+			got := gen.GetDefaultRules()
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestGenerator_InitRulesDirectory(t *testing.T) {
+	tests := []struct {
+		name        string
+		fsys        fs.FS
+		rules       []string
+		force       bool
+		setupFiles  map[string]string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "creates rules files",
+			fsys: fstest.MapFS{
+				"prompts/rules/_metadata.yaml": &fstest.MapFile{
+					Data: []byte(`rules:
+  golang:
+    name: "Go Guidelines"
+    filename: "golang.md"
+`),
+				},
+				"prompts/rules/_partials.tmpl": &fstest.MapFile{
+					Data: []byte(`{{define "YAML_FRONTMATTER"}}---
+---
+{{end}}`),
+				},
+				"prompts/rules/golang.tmpl": &fstest.MapFile{
+					Data: []byte(`{{- template "YAML_FRONTMATTER" . -}}
+# {{.Title}}`),
+				},
+			},
+			rules:   []string{"golang"},
+			wantErr: false,
+		},
+		{
+			name: "returns error when file exists and force is false",
+			fsys: fstest.MapFS{
+				"prompts/rules/_metadata.yaml": &fstest.MapFile{
+					Data: []byte(`rules:
+  golang:
+    name: "Go Guidelines"
+    filename: "golang.md"
+`),
+				},
+				"prompts/rules/golang.tmpl": &fstest.MapFile{
+					Data: []byte(`# {{.Title}}`),
+				},
+			},
+			rules: []string{"golang"},
+			setupFiles: map[string]string{
+				"golang.md": "existing",
+			},
+			force:       false,
+			wantErr:     true,
+			errContains: "already exists",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+
+			if tt.setupFiles != nil {
+				for filename, content := range tt.setupFiles {
+					err := os.WriteFile(filepath.Join(tmpDir, filename), []byte(content), 0644)
+					require.NoError(t, err)
+				}
+			}
+
+			gen, err := NewGeneratorWithFS(tt.fsys)
+			require.NoError(t, err)
+
+			err = gen.InitRulesDirectory(tmpDir, tt.rules, tt.force)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
 			require.NoError(t, err)
 		})
 	}
