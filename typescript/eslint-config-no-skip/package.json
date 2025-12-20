@@ -28,7 +28,8 @@
     "clean": "rm -rf dist",
     "prepublishOnly": "pnpm clean && pnpm build",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "peerDependencies": {
     "eslint": "^9.0.0",
@@ -47,6 +48,8 @@
     "@types/node": "^22.0.0",
     "typescript": "^5.0.0",
     "eslint": "^9.0.0",
+    "eslint-plugin-jest": "^28.0.0",
+    "eslint-plugin-mocha": "^10.0.0",
     "vitest": "^2.0.0"
   },
   "keywords": [

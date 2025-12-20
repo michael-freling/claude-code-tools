@@ -10,16 +10,14 @@ describe('noSkipConfig', () => {
   describe('combined config includes all sub-configs', () => {
     const testCases = [
       {
-        name: 'should include jestConfig',
+        name: 'should include Jest config',
         expectedCount: 1,
         configSource: jestConfig,
-        description: 'Jest config',
       },
       {
-        name: 'should include cypressConfig',
+        name: 'should include Cypress config',
         expectedCount: 1,
         configSource: cypressConfig,
-        description: 'Cypress config',
       },
     ];
 
