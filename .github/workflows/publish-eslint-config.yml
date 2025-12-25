@@ -1,0 +1,47 @@
+name: Publish eslint-config-no-skip
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'typescript/eslint-config-no-skip/**'
+      - '.github/workflows/publish-eslint-config.yml'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        working-directory: typescript/eslint-config-no-skip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read Node.js version from .node-version
+        id: node-version
+        run: echo "version=$(cat .node-version)" >> $GITHUB_OUTPUT
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.node-version.outputs.version }}
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@claude-code-tools'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Publish to GitHub Packages
+        run: pnpm publish --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -9,3 +9,9 @@ coverage*.txt
 
 # Claude Code state
 .claude/
+
+# Node.js / pnpm
+node_modules/
+dist/
+*.log
+.pnpm-debug.log*
