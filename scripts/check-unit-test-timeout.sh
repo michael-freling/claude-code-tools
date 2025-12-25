@@ -7,8 +7,6 @@ set -euo pipefail
 # Used to catch tests that may be doing real I/O operations instead of mocking.
 
 # Configuration
-# Note: The workflow package has tests that intentionally use delays for CI checking behavior,
-# so we use a longer timeout (60s) to accommodate those tests.
 UNIT_TIMEOUT="${UNIT_TIMEOUT:-60s}"
 
 echo "=== Unit Test Timeout Check ==="
