@@ -130,3 +130,50 @@ func findNonFlagArgs(args []string, startIndex int, flagsWithValues []string) []
 
 	return nonFlagArgs
 }
+
+// extractTargetFromRefspec extracts the target branch from a refspec.
+// Handles formats: "+src:dst" -> "dst", "+branch" -> "branch", ":branch" -> "branch", "src:dst" -> "dst"
+func extractTargetFromRefspec(refspec string) string {
+	// Strip force push prefix
+	if strings.HasPrefix(refspec, "+") {
+		refspec = refspec[1:]
+	}
+
+	// Check for colon separator (src:dst format)
+	if idx := strings.Index(refspec, ":"); idx >= 0 {
+		return refspec[idx+1:]
+	}
+
+	// No colon, the refspec is the branch name itself
+	return refspec
+}
+
+// containsPushAllFlag checks if args contain --all or --mirror flags
+func containsPushAllFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--all" || arg == "--mirror" {
+			return true
+		}
+	}
+	return false
+}
+
+// containsDeleteFlag checks if args contain --delete or -d flag
+func containsDeleteFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--delete" || arg == "-d" {
+			return true
+		}
+	}
+	return false
+}
+
+// isDeleteRefspec checks if the refspec is a delete operation (starts with ":")
+func isDeleteRefspec(refspec string) bool {
+	return strings.HasPrefix(refspec, ":")
+}
+
+// isForcePushRefspec checks if the refspec is a force push (starts with "+")
+func isForcePushRefspec(refspec string) bool {
+	return strings.HasPrefix(refspec, "+")
+}

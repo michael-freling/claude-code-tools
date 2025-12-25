@@ -50,6 +50,24 @@ func (r *gitPushRule) Evaluate(input *ToolInput) (*RuleResult, error) {
 		return NewAllowedResult(), nil
 	}
 
+	// Check for --all or --mirror flags (pushes to all branches including protected ones)
+	if containsPushAllFlag(args) {
+		return NewBlockedResult(
+			r.Name(),
+			"Push --all/--mirror includes protected branches and is not allowed",
+		), nil
+	}
+
+	// Check for delete operations on protected branches
+	if result := r.checkDeleteOperation(args); result != nil {
+		return result, nil
+	}
+
+	// Check for refspec-based push to protected branches (including force push with +)
+	if result := r.checkRefspecPush(args); result != nil {
+		return result, nil
+	}
+
 	// Check for explicit branch name
 	if isExplicitPushToProtectedBranch(command) {
 		return NewBlockedResult(
@@ -76,6 +94,71 @@ func (r *gitPushRule) Evaluate(input *ToolInput) (*RuleResult, error) {
 	}
 
 	return NewAllowedResult(), nil
+}
+
+// checkDeleteOperation checks for delete operations on protected branches.
+func (r *gitPushRule) checkDeleteOperation(args []string) *RuleResult {
+	flagsWithValues := []string{"--repo", "--exec", "--receive-pack"}
+	nonFlagArgs := findNonFlagArgs(args, gitCommandArgsStartIndex, flagsWithValues)
+
+	// Check for --delete or -d flag with protected branch
+	if containsDeleteFlag(args) {
+		for _, arg := range nonFlagArgs {
+			if isProtectedBranch(arg) {
+				return NewBlockedResult(
+					r.Name(),
+					"Deleting main/master branch is not allowed",
+				)
+			}
+		}
+	}
+
+	// Check for delete refspec (:main or :master)
+	for _, arg := range nonFlagArgs {
+		if isDeleteRefspec(arg) {
+			target := extractTargetFromRefspec(arg)
+			if isProtectedBranch(target) {
+				return NewBlockedResult(
+					r.Name(),
+					"Deleting main/master branch is not allowed",
+				)
+			}
+		}
+	}
+
+	return nil
+}
+
+// checkRefspecPush checks for refspec-based pushes to protected branches.
+func (r *gitPushRule) checkRefspecPush(args []string) *RuleResult {
+	flagsWithValues := []string{"--repo", "--exec", "--receive-pack"}
+	nonFlagArgs := findNonFlagArgs(args, gitCommandArgsStartIndex, flagsWithValues)
+
+	for _, arg := range nonFlagArgs {
+		// Skip delete refspecs (handled separately)
+		if isDeleteRefspec(arg) {
+			continue
+		}
+
+		// Check if this is a refspec (contains : or starts with +)
+		if strings.Contains(arg, ":") || isForcePushRefspec(arg) {
+			target := extractTargetFromRefspec(arg)
+			if isProtectedBranch(target) {
+				if isForcePushRefspec(arg) {
+					return NewBlockedResult(
+						r.Name(),
+						"Force push to main/master branch is not allowed",
+					)
+				}
+				return NewBlockedResult(
+					r.Name(),
+					"Direct push to main/master branch is not allowed",
+				)
+			}
+		}
+	}
+
+	return nil
 }
 
 // isExplicitPushToProtectedBranch checks if the command explicitly pushes to main/master.
