@@ -536,3 +536,577 @@ func TestParseGitPushArgs(t *testing.T) {
 		})
 	}
 }
+
+func TestGitPushRule_Evaluate_RefspecForcePush(t *testing.T) {
+	tests := []struct {
+		name        string
+		command     string
+		wantAllowed bool
+		wantMessage string
+	}{
+		{
+			name:        "block git push origin +main:main",
+			command:     "git push origin +main:main",
+			wantAllowed: false,
+			wantMessage: "Force push to main/master branch is not allowed",
+		},
+		{
+			name:        "block git push origin +main",
+			command:     "git push origin +main",
+			wantAllowed: false,
+			wantMessage: "Force push to main/master branch is not allowed",
+		},
+		{
+			name:        "block git push origin +HEAD:main",
+			command:     "git push origin +HEAD:main",
+			wantAllowed: false,
+			wantMessage: "Force push to main/master branch is not allowed",
+		},
+		{
+			name:        "block git push origin +HEAD:master",
+			command:     "git push origin +HEAD:master",
+			wantAllowed: false,
+			wantMessage: "Force push to main/master branch is not allowed",
+		},
+		{
+			name:        "block git push origin +feature:main",
+			command:     "git push origin +feature:main",
+			wantAllowed: false,
+			wantMessage: "Force push to main/master branch is not allowed",
+		},
+		{
+			name:        "block git push origin feature:main (non-force but targets main)",
+			command:     "git push origin feature:main",
+			wantAllowed: false,
+			wantMessage: "Direct push to main/master branch is not allowed",
+		},
+		{
+			name:        "block git push origin feature:master",
+			command:     "git push origin feature:master",
+			wantAllowed: false,
+			wantMessage: "Direct push to main/master branch is not allowed",
+		},
+		{
+			name:        "allow git push origin +feature:feature",
+			command:     "git push origin +feature:feature",
+			wantAllowed: true,
+		},
+		{
+			name:        "allow git push origin feature:feature",
+			command:     "git push origin feature:feature",
+			wantAllowed: true,
+		},
+		{
+			name:        "allow git push origin +develop",
+			command:     "git push origin +develop",
+			wantAllowed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockGit := command.NewMockGitRunner(ctrl)
+			rule := NewGitPushRule(mockGit)
+
+			jsonInput := `{"tool_name": "Bash", "tool_input": {"command": "` + escapeJSON(tt.command) + `"}}`
+			reader := strings.NewReader(jsonInput)
+			toolInput, err := ParseToolInput(reader)
+			require.NoError(t, err)
+
+			got, err := rule.Evaluate(toolInput)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAllowed, got.Allowed)
+			if !tt.wantAllowed {
+				assert.Equal(t, "git-push", got.RuleName)
+				assert.Equal(t, tt.wantMessage, got.Message)
+			}
+		})
+	}
+}
+
+func TestGitPushRule_Evaluate_PushAll(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{
+			name:    "block git push --all",
+			command: "git push --all",
+		},
+		{
+			name:    "block git push --all origin",
+			command: "git push --all origin",
+		},
+		{
+			name:    "block git push origin --all",
+			command: "git push origin --all",
+		},
+		{
+			name:    "block git push --mirror",
+			command: "git push --mirror",
+		},
+		{
+			name:    "block git push --mirror origin",
+			command: "git push --mirror origin",
+		},
+		{
+			name:    "block git push origin --mirror",
+			command: "git push origin --mirror",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockGit := command.NewMockGitRunner(ctrl)
+			rule := NewGitPushRule(mockGit)
+
+			jsonInput := `{"tool_name": "Bash", "tool_input": {"command": "` + escapeJSON(tt.command) + `"}}`
+			reader := strings.NewReader(jsonInput)
+			toolInput, err := ParseToolInput(reader)
+			require.NoError(t, err)
+
+			got, err := rule.Evaluate(toolInput)
+			require.NoError(t, err)
+			assert.False(t, got.Allowed)
+			assert.Equal(t, "git-push", got.RuleName)
+			assert.Equal(t, "Push --all/--mirror includes protected branches and is not allowed", got.Message)
+		})
+	}
+}
+
+func TestGitPushRule_Evaluate_DeleteOperations(t *testing.T) {
+	tests := []struct {
+		name        string
+		command     string
+		wantAllowed bool
+		wantMessage string
+	}{
+		{
+			name:        "block git push origin :main",
+			command:     "git push origin :main",
+			wantAllowed: false,
+			wantMessage: "Deleting main/master branch is not allowed",
+		},
+		{
+			name:        "block git push origin :master",
+			command:     "git push origin :master",
+			wantAllowed: false,
+			wantMessage: "Deleting main/master branch is not allowed",
+		},
+		{
+			name:        "block git push --delete origin main",
+			command:     "git push --delete origin main",
+			wantAllowed: false,
+			wantMessage: "Deleting main/master branch is not allowed",
+		},
+		{
+			name:        "block git push -d origin main",
+			command:     "git push -d origin main",
+			wantAllowed: false,
+			wantMessage: "Deleting main/master branch is not allowed",
+		},
+		{
+			name:        "block git push -d origin master",
+			command:     "git push -d origin master",
+			wantAllowed: false,
+			wantMessage: "Deleting main/master branch is not allowed",
+		},
+		{
+			name:        "allow git push --delete origin feature",
+			command:     "git push --delete origin feature",
+			wantAllowed: true,
+		},
+		{
+			name:        "allow git push -d origin feature",
+			command:     "git push -d origin feature",
+			wantAllowed: true,
+		},
+		{
+			name:        "allow git push origin :feature",
+			command:     "git push origin :feature",
+			wantAllowed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockGit := command.NewMockGitRunner(ctrl)
+			rule := NewGitPushRule(mockGit)
+
+			jsonInput := `{"tool_name": "Bash", "tool_input": {"command": "` + escapeJSON(tt.command) + `"}}`
+			reader := strings.NewReader(jsonInput)
+			toolInput, err := ParseToolInput(reader)
+			require.NoError(t, err)
+
+			got, err := rule.Evaluate(toolInput)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAllowed, got.Allowed)
+			if !tt.wantAllowed {
+				assert.Equal(t, "git-push", got.RuleName)
+				assert.Equal(t, tt.wantMessage, got.Message)
+			}
+		})
+	}
+}
+
+func TestGitPushRule_Evaluate_CombinedFlags(t *testing.T) {
+	tests := []struct {
+		name        string
+		command     string
+		wantAllowed bool
+		wantMessage string
+	}{
+		{
+			name:        "block git push --verbose --force origin main",
+			command:     "git push --verbose --force origin main",
+			wantAllowed: false,
+			wantMessage: "Direct push to main/master branch is not allowed",
+		},
+		{
+			name:        "block git push -v -f origin main",
+			command:     "git push -v -f origin main",
+			wantAllowed: false,
+			wantMessage: "Direct push to main/master branch is not allowed",
+		},
+		{
+			name:        "block git push -v origin +main",
+			command:     "git push -v origin +main",
+			wantAllowed: false,
+			wantMessage: "Force push to main/master branch is not allowed",
+		},
+		{
+			name:        "allow git push -v -f origin feature",
+			command:     "git push -v -f origin feature",
+			wantAllowed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockGit := command.NewMockGitRunner(ctrl)
+			rule := NewGitPushRule(mockGit)
+
+			jsonInput := `{"tool_name": "Bash", "tool_input": {"command": "` + escapeJSON(tt.command) + `"}}`
+			reader := strings.NewReader(jsonInput)
+			toolInput, err := ParseToolInput(reader)
+			require.NoError(t, err)
+
+			got, err := rule.Evaluate(toolInput)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAllowed, got.Allowed)
+			if !tt.wantAllowed {
+				assert.Equal(t, "git-push", got.RuleName)
+				assert.Equal(t, tt.wantMessage, got.Message)
+			}
+		})
+	}
+}
+
+func TestGitPushRule_Evaluate_CommandChainingBypass(t *testing.T) {
+	tests := []struct {
+		name        string
+		command     string
+		wantAllowed bool
+		wantMessage string
+	}{
+		{
+			name:        "block git fetch && git push --force origin main",
+			command:     "git fetch && git push --force origin main",
+			wantAllowed: false,
+			wantMessage: "Direct push to main/master branch is not allowed",
+		},
+		{
+			name:        "block true; git push -f origin main",
+			command:     "true; git push -f origin main",
+			wantAllowed: false,
+			wantMessage: "Direct push to main/master branch is not allowed",
+		},
+		{
+			name:        "block git status || git push origin +main",
+			command:     "git status || git push origin +main",
+			wantAllowed: false,
+			wantMessage: "Force push to main/master branch is not allowed",
+		},
+		{
+			name:        "allow echo foo && echo bar",
+			command:     "echo foo && echo bar",
+			wantAllowed: true,
+		},
+		{
+			name:        "block multiple chained with git push at end",
+			command:     "git status && git fetch && git push origin main",
+			wantAllowed: false,
+			wantMessage: "Direct push to main/master branch is not allowed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockGit := command.NewMockGitRunner(ctrl)
+			rule := NewGitPushRule(mockGit)
+
+			jsonInput := `{"tool_name": "Bash", "tool_input": {"command": "` + escapeJSON(tt.command) + `"}}`
+			reader := strings.NewReader(jsonInput)
+			toolInput, err := ParseToolInput(reader)
+			require.NoError(t, err)
+
+			got, err := rule.Evaluate(toolInput)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAllowed, got.Allowed)
+			if !tt.wantAllowed {
+				assert.Equal(t, "git-push", got.RuleName)
+				assert.Equal(t, tt.wantMessage, got.Message)
+			}
+		})
+	}
+}
+
+func TestGitPushRule_Evaluate_PipeBypass(t *testing.T) {
+	tests := []struct {
+		name        string
+		command     string
+		wantAllowed bool
+		wantMessage string
+	}{
+		{
+			name:        "block git push --force origin main | cat",
+			command:     "git push --force origin main | cat",
+			wantAllowed: false,
+			wantMessage: "Direct push to main/master branch is not allowed",
+		},
+		{
+			name:        "block git push origin main 2>&1 | tee log.txt",
+			command:     "git push origin main 2>&1 | tee log.txt",
+			wantAllowed: false,
+			wantMessage: "Direct push to main/master branch is not allowed",
+		},
+		{
+			name:        "block git push -f origin master | grep output",
+			command:     "git push -f origin master | grep output",
+			wantAllowed: false,
+			wantMessage: "Direct push to main/master branch is not allowed",
+		},
+		{
+			name:        "allow ls | grep foo",
+			command:     "ls | grep foo",
+			wantAllowed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockGit := command.NewMockGitRunner(ctrl)
+			rule := NewGitPushRule(mockGit)
+
+			jsonInput := `{"tool_name": "Bash", "tool_input": {"command": "` + escapeJSON(tt.command) + `"}}`
+			reader := strings.NewReader(jsonInput)
+			toolInput, err := ParseToolInput(reader)
+			require.NoError(t, err)
+
+			got, err := rule.Evaluate(toolInput)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAllowed, got.Allowed)
+			if !tt.wantAllowed {
+				assert.Equal(t, "git-push", got.RuleName)
+				assert.Equal(t, tt.wantMessage, got.Message)
+			}
+		})
+	}
+}
+
+func TestGitPushRule_Evaluate_SubshellBypass(t *testing.T) {
+	tests := []struct {
+		name        string
+		command     string
+		wantAllowed bool
+		wantMessage string
+	}{
+		{
+			name:        "block (git push --force origin main)",
+			command:     "(git push --force origin main)",
+			wantAllowed: false,
+			wantMessage: "Direct push to main/master branch is not allowed",
+		},
+		{
+			name:        "block ( git push -f origin main )",
+			command:     "( git push -f origin main )",
+			wantAllowed: false,
+			wantMessage: "Direct push to main/master branch is not allowed",
+		},
+		{
+			name:        "block ((git push origin master))",
+			command:     "((git push origin master))",
+			wantAllowed: false,
+			wantMessage: "Direct push to main/master branch is not allowed",
+		},
+		{
+			name:        "allow (echo test)",
+			command:     "(echo test)",
+			wantAllowed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockGit := command.NewMockGitRunner(ctrl)
+			rule := NewGitPushRule(mockGit)
+
+			jsonInput := `{"tool_name": "Bash", "tool_input": {"command": "` + escapeJSON(tt.command) + `"}}`
+			reader := strings.NewReader(jsonInput)
+			toolInput, err := ParseToolInput(reader)
+			require.NoError(t, err)
+
+			got, err := rule.Evaluate(toolInput)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAllowed, got.Allowed)
+			if !tt.wantAllowed {
+				assert.Equal(t, "git-push", got.RuleName)
+				assert.Equal(t, tt.wantMessage, got.Message)
+			}
+		})
+	}
+}
+
+func TestGitPushRule_Evaluate_BackgroundingBypass(t *testing.T) {
+	tests := []struct {
+		name        string
+		command     string
+		wantAllowed bool
+		wantMessage string
+	}{
+		{
+			name:        "block git push --force origin main &",
+			command:     "git push --force origin main &",
+			wantAllowed: false,
+			wantMessage: "Direct push to main/master branch is not allowed",
+		},
+		{
+			name:        "block git push -f origin master &",
+			command:     "git push -f origin master &",
+			wantAllowed: false,
+			wantMessage: "Direct push to main/master branch is not allowed",
+		},
+		{
+			name:        "allow echo test &",
+			command:     "echo test &",
+			wantAllowed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockGit := command.NewMockGitRunner(ctrl)
+			rule := NewGitPushRule(mockGit)
+
+			jsonInput := `{"tool_name": "Bash", "tool_input": {"command": "` + escapeJSON(tt.command) + `"}}`
+			reader := strings.NewReader(jsonInput)
+			toolInput, err := ParseToolInput(reader)
+			require.NoError(t, err)
+
+			got, err := rule.Evaluate(toolInput)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAllowed, got.Allowed)
+			if !tt.wantAllowed {
+				assert.Equal(t, "git-push", got.RuleName)
+				assert.Equal(t, tt.wantMessage, got.Message)
+			}
+		})
+	}
+}
+
+func TestGitPushRule_Evaluate_FullRefPathBypass(t *testing.T) {
+	tests := []struct {
+		name        string
+		command     string
+		wantAllowed bool
+		wantMessage string
+	}{
+		{
+			name:        "block git push origin +HEAD:refs/heads/main",
+			command:     "git push origin +HEAD:refs/heads/main",
+			wantAllowed: false,
+			wantMessage: "Force push to main/master branch is not allowed",
+		},
+		{
+			name:        "block git push origin :refs/heads/main (delete)",
+			command:     "git push origin :refs/heads/main",
+			wantAllowed: false,
+			wantMessage: "Deleting main/master branch is not allowed",
+		},
+		{
+			name:        "block git push origin feature:refs/heads/main",
+			command:     "git push origin feature:refs/heads/main",
+			wantAllowed: false,
+			wantMessage: "Direct push to main/master branch is not allowed",
+		},
+		{
+			name:        "block git push origin +HEAD:refs/heads/master",
+			command:     "git push origin +HEAD:refs/heads/master",
+			wantAllowed: false,
+			wantMessage: "Force push to main/master branch is not allowed",
+		},
+		{
+			name:        "block git push origin :refs/heads/master (delete)",
+			command:     "git push origin :refs/heads/master",
+			wantAllowed: false,
+			wantMessage: "Deleting main/master branch is not allowed",
+		},
+		{
+			name:        "allow git push origin +HEAD:refs/heads/feature",
+			command:     "git push origin +HEAD:refs/heads/feature",
+			wantAllowed: true,
+		},
+		{
+			name:        "allow git push origin :refs/heads/feature (delete)",
+			command:     "git push origin :refs/heads/feature",
+			wantAllowed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockGit := command.NewMockGitRunner(ctrl)
+			rule := NewGitPushRule(mockGit)
+
+			jsonInput := `{"tool_name": "Bash", "tool_input": {"command": "` + escapeJSON(tt.command) + `"}}`
+			reader := strings.NewReader(jsonInput)
+			toolInput, err := ParseToolInput(reader)
+			require.NoError(t, err)
+
+			got, err := rule.Evaluate(toolInput)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAllowed, got.Allowed)
+			if !tt.wantAllowed {
+				assert.Equal(t, "git-push", got.RuleName)
+				assert.Equal(t, tt.wantMessage, got.Message)
+			}
+		})
+	}
+}

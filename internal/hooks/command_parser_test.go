@@ -244,6 +244,46 @@ func TestIsProtectedBranch(t *testing.T) {
 			branch: "MAIN",
 			want:   false,
 		},
+		{
+			name:   "refs/heads/main is protected",
+			branch: "refs/heads/main",
+			want:   true,
+		},
+		{
+			name:   "refs/heads/master is protected",
+			branch: "refs/heads/master",
+			want:   true,
+		},
+		{
+			name:   "origin/main is protected",
+			branch: "origin/main",
+			want:   true,
+		},
+		{
+			name:   "origin/master is protected",
+			branch: "origin/master",
+			want:   true,
+		},
+		{
+			name:   "refs/remotes/origin/main is protected",
+			branch: "refs/remotes/origin/main",
+			want:   true,
+		},
+		{
+			name:   "refs/remotes/origin/master is protected",
+			branch: "refs/remotes/origin/master",
+			want:   true,
+		},
+		{
+			name:   "refs/heads/feature is not protected",
+			branch: "refs/heads/feature",
+			want:   false,
+		},
+		{
+			name:   "origin/feature is not protected",
+			branch: "origin/feature",
+			want:   false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -356,6 +396,377 @@ func TestFindNonFlagArgs(t *testing.T) {
 			} else {
 				assert.Equal(t, tt.want, got)
 			}
+		})
+	}
+}
+
+func TestExtractTargetFromRefspec(t *testing.T) {
+	tests := []struct {
+		name    string
+		refspec string
+		want    string
+	}{
+		{
+			name:    "force push with src:dst",
+			refspec: "+main:main",
+			want:    "main",
+		},
+		{
+			name:    "force push single branch",
+			refspec: "+main",
+			want:    "main",
+		},
+		{
+			name:    "non-force push with src:dst",
+			refspec: "main:main",
+			want:    "main",
+		},
+		{
+			name:    "cross-branch push",
+			refspec: "feature:main",
+			want:    "main",
+		},
+		{
+			name:    "force push HEAD to branch",
+			refspec: "+HEAD:main",
+			want:    "main",
+		},
+		{
+			name:    "delete refspec",
+			refspec: ":main",
+			want:    "main",
+		},
+		{
+			name:    "simple branch name",
+			refspec: "main",
+			want:    "main",
+		},
+		{
+			name:    "force push to feature branch",
+			refspec: "+feature:feature",
+			want:    "feature",
+		},
+		{
+			name:    "branch with slashes",
+			refspec: "+HEAD:refs/heads/main",
+			want:    "refs/heads/main",
+		},
+		{
+			name:    "empty refspec",
+			refspec: "",
+			want:    "",
+		},
+		{
+			name:    "force push master",
+			refspec: "+master",
+			want:    "master",
+		},
+		{
+			name:    "feature to master",
+			refspec: "feature:master",
+			want:    "master",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractTargetFromRefspec(tt.refspec)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestContainsPushAllFlag(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{
+			name: "contains --all",
+			args: []string{"git", "push", "--all"},
+			want: true,
+		},
+		{
+			name: "contains --all with remote",
+			args: []string{"git", "push", "--all", "origin"},
+			want: true,
+		},
+		{
+			name: "contains --all after remote",
+			args: []string{"git", "push", "origin", "--all"},
+			want: true,
+		},
+		{
+			name: "contains --mirror",
+			args: []string{"git", "push", "--mirror"},
+			want: true,
+		},
+		{
+			name: "contains --mirror with remote",
+			args: []string{"git", "push", "--mirror", "origin"},
+			want: true,
+		},
+		{
+			name: "no --all or --mirror",
+			args: []string{"git", "push", "origin", "main"},
+			want: false,
+		},
+		{
+			name: "other flags only",
+			args: []string{"git", "push", "-f", "-u", "origin", "main"},
+			want: false,
+		},
+		{
+			name: "empty args",
+			args: []string{},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := containsPushAllFlag(tt.args)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestContainsDeleteFlag(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{
+			name: "contains --delete",
+			args: []string{"git", "push", "--delete", "origin", "main"},
+			want: true,
+		},
+		{
+			name: "contains -d",
+			args: []string{"git", "push", "-d", "origin", "main"},
+			want: true,
+		},
+		{
+			name: "no delete flag",
+			args: []string{"git", "push", "origin", "main"},
+			want: false,
+		},
+		{
+			name: "other flags only",
+			args: []string{"git", "push", "-f", "-u", "origin", "main"},
+			want: false,
+		},
+		{
+			name: "empty args",
+			args: []string{},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := containsDeleteFlag(tt.args)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIsDeleteRefspec(t *testing.T) {
+	tests := []struct {
+		name    string
+		refspec string
+		want    bool
+	}{
+		{
+			name:    "delete refspec for main",
+			refspec: ":main",
+			want:    true,
+		},
+		{
+			name:    "delete refspec for master",
+			refspec: ":master",
+			want:    true,
+		},
+		{
+			name:    "delete refspec for feature",
+			refspec: ":feature",
+			want:    true,
+		},
+		{
+			name:    "normal refspec",
+			refspec: "main",
+			want:    false,
+		},
+		{
+			name:    "force push refspec",
+			refspec: "+main",
+			want:    false,
+		},
+		{
+			name:    "src:dst refspec",
+			refspec: "feature:main",
+			want:    false,
+		},
+		{
+			name:    "empty refspec",
+			refspec: "",
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isDeleteRefspec(tt.refspec)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIsForcePushRefspec(t *testing.T) {
+	tests := []struct {
+		name    string
+		refspec string
+		want    bool
+	}{
+		{
+			name:    "force push single branch",
+			refspec: "+main",
+			want:    true,
+		},
+		{
+			name:    "force push with src:dst",
+			refspec: "+main:main",
+			want:    true,
+		},
+		{
+			name:    "force push HEAD to branch",
+			refspec: "+HEAD:main",
+			want:    true,
+		},
+		{
+			name:    "normal branch name",
+			refspec: "main",
+			want:    false,
+		},
+		{
+			name:    "src:dst refspec",
+			refspec: "feature:main",
+			want:    false,
+		},
+		{
+			name:    "delete refspec",
+			refspec: ":main",
+			want:    false,
+		},
+		{
+			name:    "empty refspec",
+			refspec: "",
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isForcePushRefspec(tt.refspec)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestSplitShellCommands(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    []string
+	}{
+		{
+			name:    "single command",
+			command: "git push origin main",
+			want:    []string{"git push origin main"},
+		},
+		{
+			name:    "command with && operator",
+			command: "git fetch && git push --force origin main",
+			want:    []string{"git fetch", "git push --force origin main"},
+		},
+		{
+			name:    "command with ; operator",
+			command: "true; git push -f origin main",
+			want:    []string{"true", "git push -f origin main"},
+		},
+		{
+			name:    "command with || operator",
+			command: "git status || git push origin +main",
+			want:    []string{"git status", "git push origin +main"},
+		},
+		{
+			name:    "command with | pipe",
+			command: "git push --force origin main | cat",
+			want:    []string{"git push --force origin main", "cat"},
+		},
+		{
+			name:    "command with & backgrounding",
+			command: "git push --force origin main &",
+			want:    []string{"git push --force origin main"},
+		},
+		{
+			name:    "subshell command",
+			command: "(git push --force origin main)",
+			want:    []string{"git push --force origin main"},
+		},
+		{
+			name:    "subshell with spaces",
+			command: "( git push -f origin main )",
+			want:    []string{"git push -f origin main"},
+		},
+		{
+			name:    "multiple operators",
+			command: "echo foo && echo bar; echo baz",
+			want:    []string{"echo foo", "echo bar", "echo baz"},
+		},
+		{
+			name:    "pipe with tee",
+			command: "git push origin main 2>&1 | tee log.txt",
+			want:    []string{"git push origin main", "tee log.txt"},
+		},
+		{
+			name:    "quoted string with operator - quotes stripped",
+			command: "echo '&& test' && git push origin main",
+			want:    []string{"echo && test", "git push origin main"},
+		},
+		{
+			name:    "double quoted string with operator - quotes stripped",
+			command: `echo "|| test" || git push origin main`,
+			want:    []string{"echo || test", "git push origin main"},
+		},
+		{
+			name:    "empty command",
+			command: "",
+			want:    nil,
+		},
+		{
+			name:    "whitespace only",
+			command: "   ",
+			want:    nil,
+		},
+		{
+			name:    "nested subshell",
+			command: "((git push origin main))",
+			want:    []string{"git push origin main"},
+		},
+		{
+			name:    "command with redirections",
+			command: "git push origin main > /dev/null",
+			want:    []string{"git push origin main"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := splitShellCommands(tt.command)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

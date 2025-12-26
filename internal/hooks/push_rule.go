@@ -44,10 +44,45 @@ func (r *gitPushRule) Evaluate(input *ToolInput) (*RuleResult, error) {
 
 	command = strings.TrimSpace(command)
 
+	// Split command on shell operators to handle chaining, pipes, backgrounding
+	subCommands := splitShellCommands(command)
+
+	// Check each sub-command
+	for _, subCmd := range subCommands {
+		if result := r.evaluateSingleCommand(subCmd); result != nil && !result.Allowed {
+			return result, nil
+		}
+	}
+
+	return NewAllowedResult(), nil
+}
+
+// evaluateSingleCommand checks if a single command (not chained) is a blocked git push.
+func (r *gitPushRule) evaluateSingleCommand(command string) *RuleResult {
+	command = strings.TrimSpace(command)
+
 	// Parse the command to check if it's a git push
 	args := parseGitPushArgs(command)
 	if len(args) < 2 || args[0] != "git" || args[1] != "push" {
-		return NewAllowedResult(), nil
+		return nil
+	}
+
+	// Check for --all or --mirror flags (pushes to all branches including protected ones)
+	if containsPushAllFlag(args) {
+		return NewBlockedResult(
+			r.Name(),
+			"Push --all/--mirror includes protected branches and is not allowed",
+		)
+	}
+
+	// Check for delete operations on protected branches
+	if result := r.checkDeleteOperation(args); result != nil {
+		return result
+	}
+
+	// Check for refspec-based push to protected branches (including force push with +)
+	if result := r.checkRefspecPush(args); result != nil {
+		return result
 	}
 
 	// Check for explicit branch name
@@ -55,7 +90,7 @@ func (r *gitPushRule) Evaluate(input *ToolInput) (*RuleResult, error) {
 		return NewBlockedResult(
 			r.Name(),
 			"Direct push to main/master branch is not allowed",
-		), nil
+		)
 	}
 
 	// Check for implicit push (no branch specified)
@@ -64,18 +99,83 @@ func (r *gitPushRule) Evaluate(input *ToolInput) (*RuleResult, error) {
 		currentBranch, err := r.gitRunner.GetCurrentBranch(context.Background(), "")
 		if err != nil {
 			// Fail open - allow the command if we can't determine the branch
-			return NewAllowedResult(), nil
+			return nil
 		}
 
 		if isProtectedBranch(currentBranch) {
 			return NewBlockedResult(
 				r.Name(),
 				"Direct push to main/master branch is not allowed",
-			), nil
+			)
 		}
 	}
 
-	return NewAllowedResult(), nil
+	return nil
+}
+
+// checkDeleteOperation checks for delete operations on protected branches.
+func (r *gitPushRule) checkDeleteOperation(args []string) *RuleResult {
+	flagsWithValues := []string{"--repo", "--exec", "--receive-pack"}
+	nonFlagArgs := findNonFlagArgs(args, gitCommandArgsStartIndex, flagsWithValues)
+
+	// Check for --delete or -d flag with protected branch
+	if containsDeleteFlag(args) {
+		for _, arg := range nonFlagArgs {
+			if isProtectedBranch(arg) {
+				return NewBlockedResult(
+					r.Name(),
+					"Deleting main/master branch is not allowed",
+				)
+			}
+		}
+	}
+
+	// Check for delete refspec (:main or :master)
+	for _, arg := range nonFlagArgs {
+		if isDeleteRefspec(arg) {
+			target := extractTargetFromRefspec(arg)
+			if isProtectedBranch(target) {
+				return NewBlockedResult(
+					r.Name(),
+					"Deleting main/master branch is not allowed",
+				)
+			}
+		}
+	}
+
+	return nil
+}
+
+// checkRefspecPush checks for refspec-based pushes to protected branches.
+func (r *gitPushRule) checkRefspecPush(args []string) *RuleResult {
+	flagsWithValues := []string{"--repo", "--exec", "--receive-pack"}
+	nonFlagArgs := findNonFlagArgs(args, gitCommandArgsStartIndex, flagsWithValues)
+
+	for _, arg := range nonFlagArgs {
+		// Skip delete refspecs (handled separately)
+		if isDeleteRefspec(arg) {
+			continue
+		}
+
+		// Check if this is a refspec (contains : or starts with +)
+		if strings.Contains(arg, ":") || isForcePushRefspec(arg) {
+			target := extractTargetFromRefspec(arg)
+			if isProtectedBranch(target) {
+				if isForcePushRefspec(arg) {
+					return NewBlockedResult(
+						r.Name(),
+						"Force push to main/master branch is not allowed",
+					)
+				}
+				return NewBlockedResult(
+					r.Name(),
+					"Direct push to main/master branch is not allowed",
+				)
+			}
+		}
+	}
+
+	return nil
 }
 
 // isExplicitPushToProtectedBranch checks if the command explicitly pushes to main/master.
