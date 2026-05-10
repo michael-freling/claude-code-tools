@@ -288,7 +288,7 @@ func EnsureUserConfig(configDir, homeDir string) error {
 
 	config := map[string]any{
 		"hasCompletedOnboarding": true,
-		"theme":                 theme,
+		"theme":                  theme,
 	}
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {

@@ -501,6 +501,47 @@ func TestEnsureUserConfig(t *testing.T) {
 		assert.Contains(t, string(data), `"theme": "dark"`)
 	})
 
+	t.Run("defaults to dark when host file has no theme key", func(t *testing.T) {
+		homeDir := t.TempDir()
+		configDir := t.TempDir()
+
+		hostConfig := `{"numStartups": 5}`
+		require.NoError(t, os.WriteFile(filepath.Join(homeDir, ".claude.json"), []byte(hostConfig), 0o644))
+
+		err := EnsureUserConfig(configDir, homeDir)
+		require.NoError(t, err)
+
+		data, err := os.ReadFile(filepath.Join(configDir, ".claude.json"))
+		require.NoError(t, err)
+		assert.Contains(t, string(data), `"theme": "dark"`)
+	})
+
+	t.Run("defaults to dark when host file has invalid JSON", func(t *testing.T) {
+		homeDir := t.TempDir()
+		configDir := t.TempDir()
+
+		require.NoError(t, os.WriteFile(filepath.Join(homeDir, ".claude.json"), []byte(`{invalid`), 0o644))
+
+		err := EnsureUserConfig(configDir, homeDir)
+		require.NoError(t, err)
+
+		data, err := os.ReadFile(filepath.Join(configDir, ".claude.json"))
+		require.NoError(t, err)
+		assert.Contains(t, string(data), `"theme": "dark"`)
+	})
+
+	t.Run("directory creation error", func(t *testing.T) {
+		baseDir := t.TempDir()
+		blockingFile := filepath.Join(baseDir, "blocked")
+		require.NoError(t, os.WriteFile(blockingFile, []byte("file"), 0o644))
+
+		configDir := filepath.Join(blockingFile, "config")
+
+		err := EnsureUserConfig(configDir, baseDir)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to create config directory")
+	})
+
 	t.Run("skips if file already exists", func(t *testing.T) {
 		homeDir := t.TempDir()
 		configDir := t.TempDir()

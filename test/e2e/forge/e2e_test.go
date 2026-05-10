@@ -135,8 +135,8 @@ Reply with the raw command outputs only, no other text.`
 	// gh repo view should return the repo name.
 	assert.Contains(t, outputStr, "claude-code-tools", "expected output to contain repo name from gh repo view")
 
-	// go test should show passing output.
-	assert.Contains(t, outputStr, "PASS", "expected output to contain PASS from go test")
+	// go test should show passing output (non-verbose `go test` prints "ok  <pkg>").
+	assert.Contains(t, outputStr, "ok  \tgithub.com/michael-freling/claude-code-tools", "expected output to contain ok from go test")
 
 	// Step 7: Verify containers are cleaned up.
 	dockerClient, err := container.NewClient()
