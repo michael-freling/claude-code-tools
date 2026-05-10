@@ -1,0 +1,75 @@
+{
+  "name": "@michael-freling/eslint-config-no-skip",
+  "version": "0.1.0",
+  "description": "ESLint shareable configuration to detect and error on skipped tests in Jest and Cypress",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./jest": {
+      "types": "./dist/jest.d.ts",
+      "import": "./dist/jest.js"
+    },
+    "./cypress": {
+      "types": "./dist/cypress.d.ts",
+      "import": "./dist/cypress.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "pnpm clean && pnpm build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint .",
+    "lint:examples": "eslint examples/"
+  },
+  "peerDependencies": {
+    "eslint": "^9.0.0",
+    "eslint-plugin-jest": "^28.0.0",
+    "eslint-plugin-mocha": "^10.0.0"
+  },
+  "peerDependenciesMeta": {
+    "eslint-plugin-jest": {
+      "optional": true
+    },
+    "eslint-plugin-mocha": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "eslint": "^9.0.0",
+    "eslint-plugin-jest": "^28.0.0",
+    "eslint-plugin-mocha": "^10.0.0",
+    "jiti": "^2.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^2.0.0"
+  },
+  "keywords": [
+    "eslint",
+    "eslint-config",
+    "jest",
+    "cypress",
+    "no-skip",
+    "testing"
+  ],
+  "license": "MIT",
+  "author": "Claude Code Tools",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/michael-freling/claude-code-tools"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  }
+}
