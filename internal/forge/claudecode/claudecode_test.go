@@ -628,6 +628,46 @@ func TestBuildEnv_UIDGIDEnvVars(t *testing.T) {
 	}
 }
 
+func TestWriteGitconfig_WriteFileError(t *testing.T) {
+	configDir := t.TempDir()
+	require.NoError(t, os.Chmod(configDir, 0o555))
+	t.Cleanup(func() { os.Chmod(configDir, 0o755) })
+
+	err := WriteGitconfig(configDir, Options{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to write gitconfig")
+}
+
+func TestEnsureSettings_WriteFileError(t *testing.T) {
+	configDir := t.TempDir()
+	require.NoError(t, os.Chmod(configDir, 0o555))
+	t.Cleanup(func() { os.Chmod(configDir, 0o755) })
+
+	err := EnsureSettings(configDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to write settings.json")
+}
+
+func TestEnsureUserConfig_WriteFileError(t *testing.T) {
+	homeDir := t.TempDir()
+	configDir := t.TempDir()
+	require.NoError(t, os.Chmod(configDir, 0o555))
+	t.Cleanup(func() { os.Chmod(configDir, 0o755) })
+
+	err := EnsureUserConfig(configDir, homeDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to write .claude.json")
+}
+
+func TestReadHostTheme_EmptyThemeString(t *testing.T) {
+	homeDir := t.TempDir()
+	hostConfig := `{"theme": ""}`
+	require.NoError(t, os.WriteFile(filepath.Join(homeDir, ".claude.json"), []byte(hostConfig), 0o644))
+
+	theme := readHostTheme(homeDir)
+	assert.Equal(t, "dark", theme)
+}
+
 func TestDetectCacheDirs(t *testing.T) {
 	t.Run("go caches from host plus forge caches always present", func(t *testing.T) {
 		homeDir := t.TempDir()

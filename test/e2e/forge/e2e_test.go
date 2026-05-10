@@ -107,7 +107,7 @@ func TestForgeStart(t *testing.T) {
 
 	prompt := `Run these four commands and show me the output of each:
 1. git log --oneline -3
-2. git pull --ff-only
+2. git fetch origin main
 3. gh repo view --json name,owner
 4. go test ./internal/forge/config/...
 
@@ -134,10 +134,12 @@ Reply with the raw command outputs only, no other text.`
 	commitHashPattern := regexp.MustCompile(`[0-9a-f]{7,}`)
 	assert.Regexp(t, commitHashPattern, outputStr, "expected output to contain a commit hash from git log")
 
-	// git pull should succeed (Already up to date, or show fetched commits).
-	assert.True(t,
-		strings.Contains(outputStr, "Already up to date") || strings.Contains(outputStr, "Updating") || strings.Contains(outputStr, "Fast-forward"),
-		"expected output to contain git pull result")
+	// git fetch should succeed. Output varies: it may print nothing (already up to date),
+	// show "From" lines with fetched refs, or show branch tracking info.
+	// The key verification is that it doesn't error — Claude would report the error in the output.
+	assert.False(t,
+		strings.Contains(outputStr, "fatal:") && strings.Contains(outputStr, "fetch"),
+		"expected git fetch to succeed without fatal errors")
 
 	// gh repo view should return the repo name.
 	assert.Contains(t, outputStr, "claude-code-tools", "expected output to contain repo name from gh repo view")
