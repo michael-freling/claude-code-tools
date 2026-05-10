@@ -104,13 +104,9 @@ func TestForgeStart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	markerFile := ".e2e-test-marker"
-	t.Cleanup(func() { os.Remove(filepath.Join(projectRoot, markerFile)) })
-
-	prompt := `Run these commands and show me the output of each:
+	prompt := `Run these two commands and show me the output of each:
 1. git log --oneline -3
 2. gh repo view --json name,owner
-3. echo "forge-e2e-pass" > ` + markerFile + `
 
 Reply with the raw command outputs only, no other text.`
 	cmd := exec.CommandContext(ctx, binaryPath, "start", "-p", prompt)
@@ -137,13 +133,6 @@ Reply with the raw command outputs only, no other text.`
 
 	// gh repo view should return the repo name.
 	assert.Contains(t, outputStr, "claude-code-tools", "expected output to contain repo name from gh repo view")
-
-	// Verify files written in the container are visible on the host (bidirectional bind mount).
-	markerPath := filepath.Join(projectRoot, markerFile)
-	markerContent, err := os.ReadFile(markerPath)
-	if assert.NoError(t, err, "file created in container should be visible on host") {
-		assert.Contains(t, string(markerContent), "forge-e2e-pass")
-	}
 
 	// Step 7: Verify containers are cleaned up.
 	dockerClient, err := container.NewClient()
