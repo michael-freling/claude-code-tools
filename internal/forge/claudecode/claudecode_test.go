@@ -469,8 +469,14 @@ func TestEnsureSettings_CreatesDirectory(t *testing.T) {
 func TestDefaultSettings(t *testing.T) {
 	settings := DefaultSettings()
 
-	assert.Contains(t, settings, `"hasCompletedOnboarding": true`)
 	assert.Contains(t, settings, `"autoUpdaterStatus": "disabled"`)
+}
+
+func TestDefaultUserConfig(t *testing.T) {
+	config := DefaultUserConfig()
+
+	assert.Contains(t, config, `"hasCompletedOnboarding": true`)
+	assert.Contains(t, config, `"theme": "dark"`)
 }
 
 func TestBuildEnv_UIDGIDEnvVars(t *testing.T) {

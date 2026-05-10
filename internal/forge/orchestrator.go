@@ -136,6 +136,11 @@ func (o *Orchestrator) Start(ctx context.Context, opts StartOptions) (*Session, 
 		return nil, fmt.Errorf("failed to ensure settings.json: %w", err)
 	}
 
+	// Ensure .claude.json exists (skips onboarding in container)
+	if err := claudecode.EnsureUserConfig(o.ConfigDir); err != nil {
+		return nil, fmt.Errorf("failed to ensure .claude.json: %w", err)
+	}
+
 	// Pull images if not present
 	for _, img := range []string{cfg.Images.Agent, cfg.Images.Gateway} {
 		exists, err := o.Containers.ImageExists(ctx, img)

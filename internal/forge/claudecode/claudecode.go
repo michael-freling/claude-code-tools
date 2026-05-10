@@ -246,8 +246,15 @@ func WriteGitconfig(configDir string, opts Options) error {
 // DefaultSettings returns the default Claude Code settings JSON content.
 func DefaultSettings() string {
 	return `{
+  "autoUpdaterStatus": "disabled"
+}`
+}
+
+// DefaultUserConfig returns the default ~/.claude.json content.
+// This file controls onboarding state and theme (separate from settings.json).
+func DefaultUserConfig() string {
+	return `{
   "hasCompletedOnboarding": true,
-  "autoUpdaterStatus": "disabled",
   "theme": "dark"
 }`
 }
@@ -266,6 +273,25 @@ func EnsureSettings(configDir string) error {
 
 	if err := os.WriteFile(settingsPath, []byte(DefaultSettings()), 0o644); err != nil {
 		return fmt.Errorf("failed to write settings.json: %w", err)
+	}
+
+	return nil
+}
+
+// EnsureUserConfig writes .claude.json to the config directory if it doesn't exist.
+// This is mounted into the container at ~/.claude.json to skip onboarding.
+func EnsureUserConfig(configDir string) error {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	configPath := filepath.Join(configDir, ".claude.json")
+	if pathExists(configPath) {
+		return nil
+	}
+
+	if err := os.WriteFile(configPath, []byte(DefaultUserConfig()), 0o644); err != nil {
+		return fmt.Errorf("failed to write .claude.json: %w", err)
 	}
 
 	return nil
