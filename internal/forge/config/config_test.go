@@ -1,0 +1,158 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestDefaultConfig(t *testing.T) {
+	cfg := DefaultConfig()
+
+	assert.Equal(t, DefaultAgentImage, cfg.Images.Agent)
+	assert.Equal(t, DefaultGatewayImage, cfg.Images.Gateway)
+	assert.False(t, cfg.Defaults.SkipPermissions)
+	assert.False(t, cfg.Defaults.Worktree)
+}
+
+func TestLoad(t *testing.T) {
+	tests := []struct {
+		name        string
+		configYAML  string
+		want        *Config
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "full config",
+			configYAML: `images:
+  agent: custom-agent:v1
+  gateway: custom-gateway:v2
+defaults:
+  skip_permissions: true
+  worktree: true
+`,
+			want: &Config{
+				Images: ImagesConfig{
+					Agent:   "custom-agent:v1",
+					Gateway: "custom-gateway:v2",
+				},
+				Defaults: DefaultsConfig{
+					SkipPermissions: true,
+					Worktree:        true,
+				},
+			},
+		},
+		{
+			name: "partial config fills defaults for images",
+			configYAML: `defaults:
+  skip_permissions: true
+`,
+			want: &Config{
+				Images: ImagesConfig{
+					Agent:   DefaultAgentImage,
+					Gateway: DefaultGatewayImage,
+				},
+				Defaults: DefaultsConfig{
+					SkipPermissions: true,
+					Worktree:        false,
+				},
+			},
+		},
+		{
+			name: "partial config with only agent image",
+			configYAML: `images:
+  agent: my-agent:latest
+`,
+			want: &Config{
+				Images: ImagesConfig{
+					Agent:   "my-agent:latest",
+					Gateway: DefaultGatewayImage,
+				},
+			},
+		},
+		{
+			name:       "empty config uses all defaults",
+			configYAML: "",
+			want:       DefaultConfig(),
+		},
+		{
+			name: "explicit empty image strings get defaults",
+			configYAML: `images:
+  agent: ""
+  gateway: ""
+`,
+			want: DefaultConfig(),
+		},
+		{
+			name:        "invalid YAML",
+			configYAML:  "invalid: yaml: [broken",
+			wantErr:     true,
+			errContains: "failed to parse config file",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+
+			if tt.configYAML != "" || tt.name == "empty config uses all defaults" {
+				err := os.WriteFile(filepath.Join(tmpDir, "config.yaml"), []byte(tt.configYAML), 0o644)
+				require.NoError(t, err)
+			}
+
+			got, err := Load(tmpDir)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestLoad_FileDoesNotExist(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	got, err := Load(tmpDir)
+
+	require.NoError(t, err)
+	assert.Equal(t, DefaultConfig(), got)
+}
+
+func TestLoad_UnreadableFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	// Create a directory where the file should be, causing a read error
+	err := os.MkdirAll(configPath, 0o755)
+	require.NoError(t, err)
+
+	_, err = Load(tmpDir)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read config file")
+}
+
+func TestLoad_PartialGatewayOnly(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	configYAML := `images:
+  gateway: my-gateway:latest
+`
+	err := os.WriteFile(filepath.Join(tmpDir, "config.yaml"), []byte(configYAML), 0o644)
+	require.NoError(t, err)
+
+	got, err := Load(tmpDir)
+
+	require.NoError(t, err)
+	assert.Equal(t, DefaultAgentImage, got.Images.Agent)
+	assert.Equal(t, "my-gateway:latest", got.Images.Gateway)
+}

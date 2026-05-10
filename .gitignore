@@ -3,6 +3,8 @@
 #
 # Binaries for programs and plugins
 generator
+/claude-forge
+docker/agent/claude-forge
 
 # Coverage files
 coverage*.txt

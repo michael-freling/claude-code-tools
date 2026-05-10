@@ -1,0 +1,389 @@
+package container
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"strings"
+	"time"
+
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/network"
+	dockerclient "github.com/docker/docker/client"
+)
+
+//go:generate mockgen -destination=mock_docker_test.go -package=docker github.com/michael-freling/claude-code-tools/internal/forge/container DockerAPI
+
+// DockerAPI abstracts the Docker client methods used by the forge client.
+type DockerAPI interface {
+	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, containerName string) (container.CreateResponse, error)
+	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
+	ContainerStop(ctx context.Context, containerID string, options container.StopOptions) error
+	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
+	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
+	NetworkCreate(ctx context.Context, name string, options network.CreateOptions) (network.CreateResponse, error)
+	NetworkRemove(ctx context.Context, networkID string) error
+	ImagePull(ctx context.Context, refStr string, options image.PullOptions) (io.ReadCloser, error)
+	ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
+	Close() error
+}
+
+// dockerAPIWrapper wraps the Docker client to implement DockerAPI.
+// This is needed because the Docker SDK's ContainerCreate has a different signature
+// (includes platform parameter) than our interface.
+type dockerAPIWrapper struct {
+	client *dockerclient.Client
+}
+
+func (w *dockerAPIWrapper) ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, containerName string) (container.CreateResponse, error) {
+	return w.client.ContainerCreate(ctx, config, hostConfig, networkingConfig, nil, containerName)
+}
+
+func (w *dockerAPIWrapper) ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error {
+	return w.client.ContainerStart(ctx, containerID, options)
+}
+
+func (w *dockerAPIWrapper) ContainerStop(ctx context.Context, containerID string, options container.StopOptions) error {
+	return w.client.ContainerStop(ctx, containerID, options)
+}
+
+func (w *dockerAPIWrapper) ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error {
+	return w.client.ContainerRemove(ctx, containerID, options)
+}
+
+func (w *dockerAPIWrapper) ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error) {
+	return w.client.ContainerList(ctx, options)
+}
+
+func (w *dockerAPIWrapper) NetworkCreate(ctx context.Context, name string, options network.CreateOptions) (network.CreateResponse, error) {
+	return w.client.NetworkCreate(ctx, name, options)
+}
+
+func (w *dockerAPIWrapper) NetworkRemove(ctx context.Context, networkID string) error {
+	return w.client.NetworkRemove(ctx, networkID)
+}
+
+func (w *dockerAPIWrapper) ImagePull(ctx context.Context, refStr string, options image.PullOptions) (io.ReadCloser, error) {
+	return w.client.ImagePull(ctx, refStr, options)
+}
+
+func (w *dockerAPIWrapper) ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error) {
+	return w.client.ImageList(ctx, options)
+}
+
+func (w *dockerAPIWrapper) Close() error {
+	return w.client.Close()
+}
+
+// Client provides Docker operations for claude-forge.
+type Client struct {
+	docker DockerAPI
+}
+
+// NewClient creates a new Docker client using environment configuration.
+func NewClient() (*Client, error) {
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Docker client: %w", err)
+	}
+
+	return &Client{
+		docker: &dockerAPIWrapper{client: cli},
+	}, nil
+}
+
+// newClientWithAPI creates a new Client with the given DockerAPI (for testing).
+func newClientWithAPI(api DockerAPI) *Client {
+	return &Client{docker: api}
+}
+
+// Close closes the Docker client connection.
+func (c *Client) Close() error {
+	return c.docker.Close()
+}
+
+// CreateNetwork creates a Docker network with the given name.
+func (c *Client) CreateNetwork(ctx context.Context, name string) (string, error) {
+	resp, err := c.docker.NetworkCreate(ctx, name, network.CreateOptions{
+		Driver: "bridge",
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to create network %s: %w", name, err)
+	}
+
+	return resp.ID, nil
+}
+
+// RemoveNetwork removes a Docker network by name.
+func (c *Client) RemoveNetwork(ctx context.Context, name string) error {
+	if err := c.docker.NetworkRemove(ctx, name); err != nil {
+		return fmt.Errorf("failed to remove network %s: %w", name, err)
+	}
+	return nil
+}
+
+// AgentOptions holds configuration for starting an agent container.
+type AgentOptions struct {
+	Name        string            // container name: forge-agent-<project-id>-<session-id>
+	Image       string            // agent image
+	NetworkName string            // Docker network to attach to
+	ProjectDir  string            // host path to project (mounted at /work)
+	SessionDir  string            // host path to session storage
+	ClaudeDir   string            // host path to ~/.claude/
+	ConfigDir   string            // host path to ~/.config/claude-forge/
+	HomeDir     string            // host home dir for CLAUDE.md paths
+	Env         map[string]string // environment variables
+	Privileged  bool
+	Cmd         []string // claude args: --dangerously-skip-permissions, --worktree, etc.
+}
+
+// StartAgent creates and starts an agent container.
+func (c *Client) StartAgent(ctx context.Context, opts AgentOptions) (string, error) {
+	env := make([]string, 0, len(opts.Env))
+	for k, v := range opts.Env {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	mounts := []mount.Mount{
+		{
+			Type:   mount.TypeBind,
+			Source: opts.ProjectDir,
+			Target: "/work",
+		},
+	}
+
+	// Session directory mount
+	if opts.SessionDir != "" {
+		mounts = append(mounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: opts.SessionDir,
+			Target: "/home/user/.claude/projects/" + extractProjectID(opts.Name),
+		})
+	}
+
+	// Claude dir mounts (read-only) for rules, agents, commands, skills, CLAUDE.md
+	if opts.ClaudeDir != "" {
+		claudeSubdirs := []string{"rules", "agents", "commands", "skills"}
+		for _, subdir := range claudeSubdirs {
+			mounts = append(mounts, mount.Mount{
+				Type:     mount.TypeBind,
+				Source:   opts.ClaudeDir + "/" + subdir,
+				Target:   "/home/user/.claude/" + subdir,
+				ReadOnly: true,
+			})
+		}
+	}
+
+	// Config dir mounts (read-only) for settings.json, gitconfig
+	if opts.ConfigDir != "" {
+		mounts = append(mounts, mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   opts.ConfigDir,
+			Target:   "/home/user/.config/claude-forge",
+			ReadOnly: true,
+		})
+	}
+
+	// Home CLAUDE.md mount (read-only)
+	if opts.HomeDir != "" {
+		mounts = append(mounts, mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   opts.HomeDir + "/CLAUDE.md",
+			Target:   "/home/user/CLAUDE.md",
+			ReadOnly: true,
+		})
+	}
+
+	containerConfig := &container.Config{
+		Image:      opts.Image,
+		Env:        env,
+		Cmd:        opts.Cmd,
+		Entrypoint: []string{"claude"},
+		WorkingDir: "/work",
+	}
+
+	hostConfig := &container.HostConfig{
+		Mounts:     mounts,
+		Privileged: opts.Privileged,
+	}
+
+	networkingConfig := &network.NetworkingConfig{
+		EndpointsConfig: map[string]*network.EndpointSettings{
+			opts.NetworkName: {},
+		},
+	}
+
+	resp, err := c.docker.ContainerCreate(ctx, containerConfig, hostConfig, networkingConfig, opts.Name)
+	if err != nil {
+		return "", fmt.Errorf("failed to create agent container: %w", err)
+	}
+
+	if err := c.docker.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		return "", fmt.Errorf("failed to start agent container: %w", err)
+	}
+
+	return resp.ID, nil
+}
+
+// GatewayOptions holds configuration for starting a gateway container.
+type GatewayOptions struct {
+	Name        string // container name: forge-gateway-<project-id>-<session-id>
+	Image       string
+	NetworkName string
+	SSHDir      string // host ~/.ssh/ (ro)
+	GHConfigDir string // host ~/.config/gh/ (ro)
+	Owner       string // allowed repo owner
+	Repo        string // allowed repo name
+}
+
+// StartGateway creates and starts a gateway container.
+func (c *Client) StartGateway(ctx context.Context, opts GatewayOptions) (string, error) {
+	mounts := []mount.Mount{}
+
+	if opts.SSHDir != "" {
+		mounts = append(mounts, mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   opts.SSHDir,
+			Target:   "/home/user/.ssh",
+			ReadOnly: true,
+		})
+	}
+
+	if opts.GHConfigDir != "" {
+		mounts = append(mounts, mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   opts.GHConfigDir,
+			Target:   "/home/user/.config/gh",
+			ReadOnly: true,
+		})
+	}
+
+	containerConfig := &container.Config{
+		Image: opts.Image,
+		Cmd:   []string{"gateway", fmt.Sprintf("--owner=%s", opts.Owner), fmt.Sprintf("--repo=%s", opts.Repo)},
+	}
+
+	hostConfig := &container.HostConfig{
+		Mounts: mounts,
+	}
+
+	networkingConfig := &network.NetworkingConfig{
+		EndpointsConfig: map[string]*network.EndpointSettings{
+			opts.NetworkName: {},
+		},
+	}
+
+	resp, err := c.docker.ContainerCreate(ctx, containerConfig, hostConfig, networkingConfig, opts.Name)
+	if err != nil {
+		return "", fmt.Errorf("failed to create gateway container: %w", err)
+	}
+
+	if err := c.docker.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		return "", fmt.Errorf("failed to start gateway container: %w", err)
+	}
+
+	return resp.ID, nil
+}
+
+// ContainerInfo holds information about a running container.
+type ContainerInfo struct {
+	Name    string
+	ID      string
+	Image   string
+	Status  string
+	Created time.Time
+}
+
+// StopContainer stops a container by name.
+func (c *Client) StopContainer(ctx context.Context, name string) error {
+	if err := c.docker.ContainerStop(ctx, name, container.StopOptions{}); err != nil {
+		return fmt.Errorf("failed to stop container %s: %w", name, err)
+	}
+	return nil
+}
+
+// RemoveContainer removes a container by name.
+func (c *Client) RemoveContainer(ctx context.Context, name string) error {
+	if err := c.docker.ContainerRemove(ctx, name, container.RemoveOptions{Force: true}); err != nil {
+		return fmt.Errorf("failed to remove container %s: %w", name, err)
+	}
+	return nil
+}
+
+// ListForgeContainers lists containers with names matching "forge-agent-*" or "forge-gateway-*".
+func (c *Client) ListForgeContainers(ctx context.Context) ([]ContainerInfo, error) {
+	filterArgs := filters.NewArgs()
+	filterArgs.Add("name", "forge-agent-")
+	filterArgs.Add("name", "forge-gateway-")
+
+	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filterArgs,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list forge containers: %w", err)
+	}
+
+	result := make([]ContainerInfo, 0, len(containers))
+	for _, c := range containers {
+		name := ""
+		if len(c.Names) > 0 {
+			name = strings.TrimPrefix(c.Names[0], "/")
+		}
+
+		result = append(result, ContainerInfo{
+			Name:    name,
+			ID:      c.ID,
+			Image:   c.Image,
+			Status:  c.Status,
+			Created: time.Unix(c.Created, 0),
+		})
+	}
+
+	return result, nil
+}
+
+// PullImage pulls a Docker image.
+func (c *Client) PullImage(ctx context.Context, imageName string) error {
+	reader, err := c.docker.ImagePull(ctx, imageName, image.PullOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to pull image %s: %w", imageName, err)
+	}
+	defer reader.Close()
+
+	// Drain the reader to complete the pull
+	if _, err := io.Copy(io.Discard, reader); err != nil {
+		return fmt.Errorf("failed to complete image pull for %s: %w", imageName, err)
+	}
+
+	return nil
+}
+
+// ImageExists checks if a Docker image exists locally.
+func (c *Client) ImageExists(ctx context.Context, imageName string) (bool, error) {
+	filterArgs := filters.NewArgs()
+	filterArgs.Add("reference", imageName)
+
+	images, err := c.docker.ImageList(ctx, image.ListOptions{
+		Filters: filterArgs,
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to list images: %w", err)
+	}
+
+	return len(images) > 0, nil
+}
+
+// extractProjectID extracts the project ID portion from a container name.
+// Container names follow the pattern: forge-agent-<project-id>-<session-id>
+// or forge-gateway-<project-id>-<session-id>
+func extractProjectID(containerName string) string {
+	// Remove the prefix to get project-id-session-id
+	name := containerName
+	name = strings.TrimPrefix(name, "forge-agent-")
+	name = strings.TrimPrefix(name, "forge-gateway-")
+	return name
+}

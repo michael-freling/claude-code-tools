@@ -1,0 +1,267 @@
+package claudecode
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+// ContainerConfig holds all Claude Code configuration needed for the agent container.
+type ContainerConfig struct {
+	Env       map[string]string // Environment variables for the container
+	Cmd       []string          // Arguments to pass to the claude entrypoint
+	Mounts    []MountConfig     // Volume mounts for Claude Code files
+	Gitconfig string            // Generated gitconfig content
+}
+
+// MountConfig represents a bind mount for the container.
+type MountConfig struct {
+	Source   string
+	Target   string
+	ReadOnly bool
+}
+
+// Options holds user-provided options for configuring Claude Code.
+type Options struct {
+	SkipPermissions bool   // Pass --dangerously-skip-permissions (default true)
+	Worktree        bool   // Pass --worktree to Claude Code
+	Prompt          string // Pass -p "<prompt>" to Claude Code
+	Resume          string // Pass --resume <session-id> to Claude Code
+	Continue        bool   // Pass --continue to Claude Code (resume most recent)
+
+	// Paths
+	ProjectDir string // Host path to the project directory
+	HomeDir    string // Host home directory (for ~/CLAUDE.md, ~/.claude/, etc.)
+	ConfigDir  string // Path to ~/.config/claude-forge/
+	SessionDir string // Path to session storage dir (e.g. ~/.claude-forge/<project-id>/)
+
+	// Auth
+	AuthToken string // Claude Code auth token (ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN)
+	AuthType  string // "api_key" or "oauth"
+
+	// Project
+	ProjectID string // Project identifier (e.g. "-work")
+	Owner     string // GitHub repo owner
+	Repo      string // GitHub repo name
+
+	// Git identity (from host git config)
+	GitUserName  string
+	GitUserEmail string
+}
+
+// BuildContainerConfig constructs the full container configuration from options.
+// This is the main entry point -- it generates env vars, command args, volume mounts,
+// and gitconfig content that the Docker client needs to start the agent container.
+func BuildContainerConfig(opts Options) (*ContainerConfig, error) {
+	if err := validate(opts); err != nil {
+		return nil, err
+	}
+
+	env := buildEnv(opts)
+	cmd := buildCmd(opts)
+	mounts := buildMounts(opts)
+	gitconfig := generateGitconfig(opts)
+
+	return &ContainerConfig{
+		Env:       env,
+		Cmd:       cmd,
+		Mounts:    mounts,
+		Gitconfig: gitconfig,
+	}, nil
+}
+
+// validate checks that required fields are set and values are valid.
+func validate(opts Options) error {
+	if opts.ProjectDir == "" {
+		return fmt.Errorf("project directory is required")
+	}
+	if opts.AuthToken == "" {
+		return fmt.Errorf("auth token is required")
+	}
+	if opts.AuthType != "api_key" && opts.AuthType != "oauth" {
+		return fmt.Errorf("auth type must be \"api_key\" or \"oauth\", got %q", opts.AuthType)
+	}
+	return nil
+}
+
+// buildEnv constructs the environment variable map for the container.
+func buildEnv(opts Options) map[string]string {
+	env := map[string]string{
+		"HOME":                "/home/user",
+		"GIT_TERMINAL_PROMPT": "0",
+	}
+	if opts.AuthType == "api_key" {
+		env["ANTHROPIC_API_KEY"] = opts.AuthToken
+	} else {
+		env["CLAUDE_CODE_OAUTH_TOKEN"] = opts.AuthToken
+	}
+	return env
+}
+
+// buildCmd constructs the command arguments for the claude entrypoint.
+func buildCmd(opts Options) []string {
+	var cmd []string
+	if opts.SkipPermissions {
+		cmd = append(cmd, "--dangerously-skip-permissions")
+	}
+	if opts.Worktree {
+		cmd = append(cmd, "--worktree")
+	}
+	if opts.Resume != "" {
+		cmd = append(cmd, "--resume", opts.Resume)
+	} else if opts.Continue {
+		cmd = append(cmd, "--continue")
+	}
+	if opts.Prompt != "" {
+		cmd = append(cmd, "-p", opts.Prompt)
+	}
+	return cmd
+}
+
+// buildMounts constructs the list of volume mounts for the container.
+// Conditional mounts are only included if the source path exists on the host.
+func buildMounts(opts Options) []MountConfig {
+	mounts := []MountConfig{
+		{
+			Source: opts.ProjectDir,
+			Target: "/work",
+		},
+	}
+
+	// Session directory
+	if opts.SessionDir != "" && pathExists(opts.SessionDir) {
+		mounts = append(mounts, MountConfig{
+			Source: opts.SessionDir,
+			Target: "/home/user/.claude/projects/" + opts.ProjectID + "/",
+		})
+	}
+
+	// Home CLAUDE.md (read-only)
+	if opts.HomeDir != "" {
+		homeClaude := filepath.Join(opts.HomeDir, "CLAUDE.md")
+		if pathExists(homeClaude) {
+			mounts = append(mounts, MountConfig{
+				Source:   homeClaude,
+				Target:   "/home/user/CLAUDE.md",
+				ReadOnly: true,
+			})
+		}
+	}
+
+	// ~/.claude/CLAUDE.md (read-only)
+	if opts.HomeDir != "" {
+		dotClaudeMD := filepath.Join(opts.HomeDir, ".claude", "CLAUDE.md")
+		if pathExists(dotClaudeMD) {
+			mounts = append(mounts, MountConfig{
+				Source:   dotClaudeMD,
+				Target:   "/home/user/.claude/CLAUDE.md",
+				ReadOnly: true,
+			})
+		}
+	}
+
+	// ~/.claude/ subdirectories (read-only)
+	claudeSubdirs := []string{"rules", "agents", "commands", "skills"}
+	if opts.HomeDir != "" {
+		for _, subdir := range claudeSubdirs {
+			source := filepath.Join(opts.HomeDir, ".claude", subdir)
+			if pathExists(source) {
+				mounts = append(mounts, MountConfig{
+					Source:   source,
+					Target:   "/home/user/.claude/" + subdir + "/",
+					ReadOnly: true,
+				})
+			}
+		}
+	}
+
+	// Config dir settings.json (read-only)
+	if opts.ConfigDir != "" {
+		settingsPath := filepath.Join(opts.ConfigDir, "settings.json")
+		if pathExists(settingsPath) {
+			mounts = append(mounts, MountConfig{
+				Source:   settingsPath,
+				Target:   "/home/user/.claude/settings.json",
+				ReadOnly: true,
+			})
+		}
+	}
+
+	// Config dir gitconfig (read-only)
+	if opts.ConfigDir != "" {
+		gitconfigPath := filepath.Join(opts.ConfigDir, "gitconfig")
+		if pathExists(gitconfigPath) {
+			mounts = append(mounts, MountConfig{
+				Source:   gitconfigPath,
+				Target:   "/home/user/.gitconfig",
+				ReadOnly: true,
+			})
+		}
+	}
+
+	return mounts
+}
+
+// generateGitconfig produces gitconfig content that routes GitHub traffic
+// through the gateway proxy and sets the git user identity.
+func generateGitconfig(opts Options) string {
+	return fmt.Sprintf(`[http "https://github.com"]
+    proxy = http://gateway:8080
+
+[http "https://api.github.com"]
+    proxy = http://gateway:8080
+
+[user]
+    name = %s
+    email = %s
+`, opts.GitUserName, opts.GitUserEmail)
+}
+
+// WriteGitconfig writes the generated gitconfig to the config directory.
+// Creates the config directory if it doesn't exist.
+func WriteGitconfig(configDir string, opts Options) error {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	content := generateGitconfig(opts)
+	gitconfigPath := filepath.Join(configDir, "gitconfig")
+	if err := os.WriteFile(gitconfigPath, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("failed to write gitconfig: %w", err)
+	}
+
+	return nil
+}
+
+// DefaultSettings returns the default Claude Code settings JSON content.
+func DefaultSettings() string {
+	return `{
+  "hasCompletedOnboarding": true,
+  "autoUpdaterStatus": "disabled"
+}`
+}
+
+// EnsureSettings writes settings.json to the config directory if it doesn't exist.
+// Creates the config directory if it doesn't exist.
+func EnsureSettings(configDir string) error {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	settingsPath := filepath.Join(configDir, "settings.json")
+	if pathExists(settingsPath) {
+		return nil
+	}
+
+	if err := os.WriteFile(settingsPath, []byte(DefaultSettings()), 0o644); err != nil {
+		return fmt.Errorf("failed to write settings.json: %w", err)
+	}
+
+	return nil
+}
+
+// pathExists returns true if the given path exists on the filesystem.
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
