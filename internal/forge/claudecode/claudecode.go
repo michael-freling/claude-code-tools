@@ -247,7 +247,8 @@ func WriteGitconfig(configDir string, opts Options) error {
 // DefaultSettings returns the default Claude Code settings JSON content.
 func DefaultSettings() string {
 	return `{
-  "autoUpdaterStatus": "disabled"
+  "autoUpdaterStatus": "disabled",
+  "skipDangerousModePermissionPrompt": true
 }`
 }
 

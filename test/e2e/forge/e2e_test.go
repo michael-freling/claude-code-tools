@@ -104,9 +104,10 @@ func TestForgeStart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	prompt := `Run these two commands and show me the output of each:
+	prompt := `Run these three commands and show me the output of each:
 1. git log --oneline -3
 2. gh repo view --json name,owner
+3. go test ./internal/forge/config/...
 
 Reply with the raw command outputs only, no other text.`
 	cmd := exec.CommandContext(ctx, binaryPath, "start", "-p", prompt)
@@ -133,6 +134,9 @@ Reply with the raw command outputs only, no other text.`
 
 	// gh repo view should return the repo name.
 	assert.Contains(t, outputStr, "claude-code-tools", "expected output to contain repo name from gh repo view")
+
+	// go test should show passing output.
+	assert.Contains(t, outputStr, "PASS", "expected output to contain PASS from go test")
 
 	// Step 7: Verify containers are cleaned up.
 	dockerClient, err := container.NewClient()

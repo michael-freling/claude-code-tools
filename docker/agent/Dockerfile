@@ -42,6 +42,10 @@ COPY claude-forge /usr/local/bin/claude-forge
 RUN ln -s /usr/local/bin/claude-forge /usr/local/bin/forge-gh \
     && ln -s /usr/local/bin/claude-forge /usr/local/bin/gh
 
+# Managed settings: skip directory trust prompt in container
+RUN mkdir -p /etc/claude-code && \
+    echo '{"skipProjectTrustPrompt": true}' > /etc/claude-code/managed-settings.json
+
 # Create non-root user (entrypoint adjusts UID/GID at startup)
 RUN useradd -m -s /bin/bash user
 
