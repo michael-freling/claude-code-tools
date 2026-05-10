@@ -159,6 +159,10 @@ func (o *Orchestrator) Start(ctx context.Context, opts StartOptions) (*Session, 
 	o.Log("Starting gateway: %s", sess.GatewayName)
 	sshDir := filepath.Join(o.HomeDir, ".ssh")
 	ghConfigDir := filepath.Join(o.HomeDir, ".config", "gh")
+	gatewayEnv := map[string]string{}
+	if ghToken := os.Getenv("GITHUB_TOKEN"); ghToken != "" {
+		gatewayEnv["GITHUB_TOKEN"] = ghToken
+	}
 	if _, err := o.Containers.StartGateway(ctx, container.GatewayOptions{
 		Name:        sess.GatewayName,
 		Image:       cfg.Images.Gateway,
@@ -167,6 +171,7 @@ func (o *Orchestrator) Start(ctx context.Context, opts StartOptions) (*Session, 
 		GHConfigDir: ghConfigDir,
 		Owner:       proj.Owner,
 		Repo:        proj.Repo,
+		Env:         gatewayEnv,
 	}); err != nil {
 		o.Cleanup(ctx, sess)
 		return nil, fmt.Errorf("failed to start gateway: %w", err)

@@ -279,10 +279,16 @@ type GatewayOptions struct {
 	GHConfigDir string // host ~/.config/gh/ (ro)
 	Owner       string // allowed repo owner
 	Repo        string // allowed repo name
+	Env         map[string]string
 }
 
 // StartGateway creates and starts a gateway container.
 func (c *Client) StartGateway(ctx context.Context, opts GatewayOptions) (string, error) {
+	env := make([]string, 0, len(opts.Env))
+	for k, v := range opts.Env {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+
 	mounts := []mount.Mount{}
 
 	if opts.SSHDir != "" {
@@ -305,6 +311,7 @@ func (c *Client) StartGateway(ctx context.Context, opts GatewayOptions) (string,
 
 	containerConfig := &container.Config{
 		Image: opts.Image,
+		Env:   env,
 		Cmd:   []string{"gateway", fmt.Sprintf("--owner=%s", opts.Owner), fmt.Sprintf("--repo=%s", opts.Repo)},
 	}
 
@@ -314,7 +321,9 @@ func (c *Client) StartGateway(ctx context.Context, opts GatewayOptions) (string,
 
 	networkingConfig := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{
-			opts.NetworkName: {},
+			opts.NetworkName: {
+				Aliases: []string{"gateway"},
+			},
 		},
 	}
 

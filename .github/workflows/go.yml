@@ -92,7 +92,9 @@ jobs:
         cache: true
 
     - name: Forge E2E tests
-      run: go test -tags=forge_e2e -v -race -timeout 5m ./test/e2e/forge/...
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: go test -tags=forge_e2e -v -race -timeout 15m ./test/e2e/forge/...
 
   docker-build:
     runs-on: ubuntu-latest
