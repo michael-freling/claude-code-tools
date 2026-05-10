@@ -49,7 +49,7 @@ jobs:
       run: |
         # Exclude generated mocks and cmd/ entry points from coverage threshold.
         # cmd/ packages are thin CLI wrappers tested via e2e tests, not unit tests.
-        grep -v "mock_" coverage.txt | grep -v "^github.com/michael-freling/claude-code-tools/cmd/" > coverage_filtered.txt
+        grep -v "mock_" coverage.txt | grep -v "^github.com/michael-freling/claude-code-tools/cmd/" | grep -v "testhelpers.go" > coverage_filtered.txt
         coverage=$(go tool cover -func=coverage_filtered.txt | grep total | awk '{print $3}' | sed 's/%//')
         threshold=88.5
         echo "Total coverage (excluding generated mocks and cmd/ entry points): ${coverage}%"
@@ -81,5 +81,19 @@ jobs:
     - name: Check unit test timeout (2s)
       run: ./scripts/check-unit-test-timeout.sh
 
-  # E2E tests are run locally only (require real Claude CLI)
+  forge-e2e:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+        cache: true
+
+    - name: Forge E2E tests
+      run: go test -tags=forge_e2e -v -race -timeout 5m ./test/e2e/forge/...
+
+  # Claude CLI E2E tests are run locally only (require real Claude CLI)
   # Run with: ./scripts/run-e2e-tests.sh
