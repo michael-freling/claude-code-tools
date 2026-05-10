@@ -472,11 +472,49 @@ func TestDefaultSettings(t *testing.T) {
 	assert.Contains(t, settings, `"autoUpdaterStatus": "disabled"`)
 }
 
-func TestDefaultUserConfig(t *testing.T) {
-	config := DefaultUserConfig()
+func TestEnsureUserConfig(t *testing.T) {
+	t.Run("reads theme from host .claude.json", func(t *testing.T) {
+		homeDir := t.TempDir()
+		configDir := t.TempDir()
 
-	assert.Contains(t, config, `"hasCompletedOnboarding": true`)
-	assert.Contains(t, config, `"theme": "dark"`)
+		hostConfig := `{"theme": "light-daltonized", "numStartups": 5}`
+		require.NoError(t, os.WriteFile(filepath.Join(homeDir, ".claude.json"), []byte(hostConfig), 0o644))
+
+		err := EnsureUserConfig(configDir, homeDir)
+		require.NoError(t, err)
+
+		data, err := os.ReadFile(filepath.Join(configDir, ".claude.json"))
+		require.NoError(t, err)
+		assert.Contains(t, string(data), `"hasCompletedOnboarding": true`)
+		assert.Contains(t, string(data), `"light-daltonized"`)
+	})
+
+	t.Run("defaults to dark when host file missing", func(t *testing.T) {
+		homeDir := t.TempDir()
+		configDir := t.TempDir()
+
+		err := EnsureUserConfig(configDir, homeDir)
+		require.NoError(t, err)
+
+		data, err := os.ReadFile(filepath.Join(configDir, ".claude.json"))
+		require.NoError(t, err)
+		assert.Contains(t, string(data), `"theme": "dark"`)
+	})
+
+	t.Run("skips if file already exists", func(t *testing.T) {
+		homeDir := t.TempDir()
+		configDir := t.TempDir()
+
+		existing := `{"theme": "custom"}`
+		require.NoError(t, os.WriteFile(filepath.Join(configDir, ".claude.json"), []byte(existing), 0o644))
+
+		err := EnsureUserConfig(configDir, homeDir)
+		require.NoError(t, err)
+
+		data, err := os.ReadFile(filepath.Join(configDir, ".claude.json"))
+		require.NoError(t, err)
+		assert.Equal(t, existing, string(data))
+	})
 }
 
 func TestBuildEnv_UIDGIDEnvVars(t *testing.T) {

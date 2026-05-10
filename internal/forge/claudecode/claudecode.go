@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -250,15 +251,6 @@ func DefaultSettings() string {
 }`
 }
 
-// DefaultUserConfig returns the default ~/.claude.json content.
-// This file controls onboarding state and theme (separate from settings.json).
-func DefaultUserConfig() string {
-	return `{
-  "hasCompletedOnboarding": true,
-  "theme": "dark"
-}`
-}
-
 // EnsureSettings writes settings.json to the config directory if it doesn't exist.
 // Creates the config directory if it doesn't exist.
 func EnsureSettings(configDir string) error {
@@ -279,8 +271,9 @@ func EnsureSettings(configDir string) error {
 }
 
 // EnsureUserConfig writes .claude.json to the config directory if it doesn't exist.
+// It reads the theme from the host's ~/.claude.json so the container matches the user's preference.
 // This is mounted into the container at ~/.claude.json to skip onboarding.
-func EnsureUserConfig(configDir string) error {
+func EnsureUserConfig(configDir, homeDir string) error {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
@@ -290,11 +283,42 @@ func EnsureUserConfig(configDir string) error {
 		return nil
 	}
 
-	if err := os.WriteFile(configPath, []byte(DefaultUserConfig()), 0o644); err != nil {
+	theme := readHostTheme(homeDir)
+
+	config := map[string]any{
+		"hasCompletedOnboarding": true,
+		"theme":                 theme,
+	}
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal .claude.json: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, append(data, '\n'), 0o644); err != nil {
 		return fmt.Errorf("failed to write .claude.json: %w", err)
 	}
 
 	return nil
+}
+
+// readHostTheme reads the theme from the host's ~/.claude.json.
+// Returns "dark" as the default if the file doesn't exist or can't be parsed.
+func readHostTheme(homeDir string) string {
+	hostConfig := filepath.Join(homeDir, ".claude.json")
+	data, err := os.ReadFile(hostConfig)
+	if err != nil {
+		return "dark"
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return "dark"
+	}
+
+	if theme, ok := parsed["theme"].(string); ok && theme != "" {
+		return theme
+	}
+	return "dark"
 }
 
 // CacheDir represents a host dependency cache directory to mount into the container.

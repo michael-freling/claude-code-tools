@@ -210,19 +210,18 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOptions) (string, err
 		}
 	}
 
-	// Config dir file mounts (read-only) for settings.json, .claude.json, gitconfig
+	// Config dir file mounts for settings.json, .claude.json, gitconfig
+	// settings.json and .claude.json are read-write because Claude Code writes to them at runtime.
 	if opts.ConfigDir != "" {
 		mounts = append(mounts, mount.Mount{
-			Type:     mount.TypeBind,
-			Source:   opts.ConfigDir + "/settings.json",
-			Target:   "/home/user/.claude/settings.json",
-			ReadOnly: true,
+			Type:   mount.TypeBind,
+			Source: opts.ConfigDir + "/settings.json",
+			Target: "/home/user/.claude/settings.json",
 		})
 		mounts = append(mounts, mount.Mount{
-			Type:     mount.TypeBind,
-			Source:   opts.ConfigDir + "/.claude.json",
-			Target:   "/home/user/.claude.json",
-			ReadOnly: true,
+			Type:   mount.TypeBind,
+			Source: opts.ConfigDir + "/.claude.json",
+			Target: "/home/user/.claude.json",
 		})
 		mounts = append(mounts, mount.Mount{
 			Type:     mount.TypeBind,

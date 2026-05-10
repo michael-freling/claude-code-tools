@@ -137,7 +137,7 @@ func (o *Orchestrator) Start(ctx context.Context, opts StartOptions) (*Session, 
 	}
 
 	// Ensure .claude.json exists (skips onboarding in container)
-	if err := claudecode.EnsureUserConfig(o.ConfigDir); err != nil {
+	if err := claudecode.EnsureUserConfig(o.ConfigDir, o.HomeDir); err != nil {
 		return nil, fmt.Errorf("failed to ensure .claude.json: %w", err)
 	}
 
