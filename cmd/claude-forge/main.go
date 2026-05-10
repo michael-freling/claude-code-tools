@@ -30,12 +30,16 @@ type orchestratorFactoryFunc func() (*forge.Orchestrator, func(), error)
 // Tests override this to inject a mock.
 var createOrchestrator orchestratorFactoryFunc = newOrchestrator
 
+// forgeGHGatewayURL is the gateway URL used by the forge-gh client.
+// Tests override this to inject a non-routable address.
+var forgeGHGatewayURL = "http://gateway:8083"
+
 func main() {
 	// Busybox-style multi-call binary: if invoked as "gh" or "forge-gh",
 	// act as the forge-gh GitHub CLI wrapper.
 	basename := filepath.Base(os.Args[0])
 	if basename == "gh" || basename == "forge-gh" {
-		client := forgegh.NewClient("http://gateway:8083")
+		client := forgegh.NewClient(forgeGHGatewayURL)
 		if err := client.Run(os.Args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -410,7 +414,7 @@ func newForgeGHCmd() *cobra.Command {
 		Long:               `Proxy GitHub CLI commands through the gateway API server. This is used inside the agent container as an alternative to the busybox-style os.Args[0] detection.`,
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client := forgegh.NewClient("http://gateway:8083")
+			client := forgegh.NewClient(forgeGHGatewayURL)
 			return client.Run(args)
 		},
 	}

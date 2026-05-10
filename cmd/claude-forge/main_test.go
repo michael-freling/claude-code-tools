@@ -552,12 +552,14 @@ func TestAuthCmd_WithShortToken(t *testing.T) {
 }
 
 func TestForgeGHCmd_Execute_NoGateway(t *testing.T) {
+	original := forgeGHGatewayURL
+	forgeGHGatewayURL = "http://127.0.0.1:1" // port 1 is always refused
+	t.Cleanup(func() { forgeGHGatewayURL = original })
+
 	cmd := newForgeGHCmd()
-	// forge-gh with no args will try to connect to gateway:8083 for schema
 	cmd.SetArgs([]string{"pr", "list"})
 
 	err := cmd.Execute()
-	// Should fail because gateway:8083 is not available
 	require.Error(t, err)
 }
 

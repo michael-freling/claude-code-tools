@@ -104,7 +104,7 @@ func TestBuildContainerConfig_FullOptions(t *testing.T) {
 	// Gitconfig content
 	assert.Contains(t, cfg.Gitconfig, "Test User")
 	assert.Contains(t, cfg.Gitconfig, "test@example.com")
-	assert.Contains(t, cfg.Gitconfig, "proxy = http://gateway:8080")
+	assert.Contains(t, cfg.Gitconfig, `insteadOf = https://github.com/`)
 }
 
 func TestBuildContainerConfig_MinimalOptions(t *testing.T) {
@@ -327,9 +327,8 @@ func TestGenerateGitconfig(t *testing.T) {
 
 	result := generateGitconfig(opts)
 
-	assert.Contains(t, result, `[http "https://github.com"]`)
-	assert.Contains(t, result, `proxy = http://gateway:8080`)
-	assert.Contains(t, result, `[http "https://api.github.com"]`)
+	assert.Contains(t, result, `[url "http://gateway:8080/github.com/"]`)
+	assert.Contains(t, result, `insteadOf = https://github.com/`)
 	assert.Contains(t, result, `[user]`)
 	assert.Contains(t, result, `name = Jane Doe`)
 	assert.Contains(t, result, `email = jane@example.com`)
@@ -343,7 +342,7 @@ func TestGenerateGitconfig_EmptyUserInfo(t *testing.T) {
 	assert.Contains(t, result, "name = \n")
 	assert.Contains(t, result, "email = \n")
 	// Proxy settings should still be present
-	assert.Contains(t, result, `proxy = http://gateway:8080`)
+	assert.Contains(t, result, `insteadOf = https://github.com/`)
 }
 
 func TestWriteGitconfig(t *testing.T) {
@@ -365,7 +364,7 @@ func TestWriteGitconfig(t *testing.T) {
 	content := string(data)
 	assert.Contains(t, content, "name = John Doe")
 	assert.Contains(t, content, "email = john@example.com")
-	assert.Contains(t, content, `proxy = http://gateway:8080`)
+	assert.Contains(t, content, `insteadOf = https://github.com/`)
 }
 
 func TestWriteGitconfig_CreatesDirectory(t *testing.T) {

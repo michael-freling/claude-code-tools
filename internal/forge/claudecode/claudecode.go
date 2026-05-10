@@ -214,13 +214,12 @@ func buildMounts(opts Options) []MountConfig {
 }
 
 // generateGitconfig produces gitconfig content that routes GitHub traffic
-// through the gateway proxy and sets the git user identity.
+// through the gateway reverse proxy and sets the git user identity.
+// Uses url.insteadOf to rewrite https://github.com/ URLs to plain HTTP
+// requests to the gateway, avoiding CONNECT tunneling.
 func generateGitconfig(opts Options) string {
-	return fmt.Sprintf(`[http "https://github.com"]
-    proxy = http://gateway:8080
-
-[http "https://api.github.com"]
-    proxy = http://gateway:8080
+	return fmt.Sprintf(`[url "http://gateway:8080/github.com/"]
+    insteadOf = https://github.com/
 
 [user]
     name = %s

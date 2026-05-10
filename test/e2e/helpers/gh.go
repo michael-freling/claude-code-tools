@@ -6,12 +6,19 @@ import (
 	"testing"
 )
 
-// RequireGH skips the test if gh is not available in PATH
+// RequireGH skips the test if the real GitHub CLI (gh) is not available in PATH.
+// It also skips if the gh binary is actually the forge-gh wrapper (a symlink to claude-forge).
 func RequireGH(t *testing.T) {
 	t.Helper()
 
 	if _, err := exec.LookPath("gh"); err != nil {
 		t.Skip("gh not found in PATH")
+	}
+	// Verify it's the real GitHub CLI, not the forge-gh alias
+	cmd := exec.Command("gh", "--version")
+	output, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(output), "gh version") {
+		t.Skip("gh in PATH is not the GitHub CLI")
 	}
 }
 

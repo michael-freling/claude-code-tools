@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,10 +105,11 @@ func TestForgeStart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	prompt := `Run these three commands and show me the output of each:
+	prompt := `Run these four commands and show me the output of each:
 1. git log --oneline -3
-2. gh repo view --json name,owner
-3. go test ./internal/forge/config/...
+2. git pull --ff-only
+3. gh repo view --json name,owner
+4. go test ./internal/forge/config/...
 
 Reply with the raw command outputs only, no other text.`
 	cmd := exec.CommandContext(ctx, binaryPath, "start", "-p", prompt)
@@ -131,6 +133,11 @@ Reply with the raw command outputs only, no other text.`
 	// Git log output should contain a short commit hash (7+ hex chars).
 	commitHashPattern := regexp.MustCompile(`[0-9a-f]{7,}`)
 	assert.Regexp(t, commitHashPattern, outputStr, "expected output to contain a commit hash from git log")
+
+	// git pull should succeed (Already up to date, or show fetched commits).
+	assert.True(t,
+		strings.Contains(outputStr, "Already up to date") || strings.Contains(outputStr, "Updating") || strings.Contains(outputStr, "Fast-forward"),
+		"expected output to contain git pull result")
 
 	// gh repo view should return the repo name.
 	assert.Contains(t, outputStr, "claude-code-tools", "expected output to contain repo name from gh repo view")
