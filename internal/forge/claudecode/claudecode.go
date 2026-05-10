@@ -247,7 +247,8 @@ func WriteGitconfig(configDir string, opts Options) error {
 func DefaultSettings() string {
 	return `{
   "hasCompletedOnboarding": true,
-  "autoUpdaterStatus": "disabled"
+  "autoUpdaterStatus": "disabled",
+  "theme": "dark"
 }`
 }
 
