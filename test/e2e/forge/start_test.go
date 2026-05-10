@@ -153,11 +153,13 @@ func TestForgeStart_GatewayOperations(t *testing.T) {
 		assert.Contains(t, out, "claude-code-tools")
 	})
 
-	// Test 2: git ls-remote through gateway proxy
+	// Test 2: git ls-remote through gateway proxy using URL rewriting.
+	// The gateway is a reverse proxy, not a forward proxy, so git must
+	// rewrite https://github.com/ to http://gateway:8080/github.com/
+	// instead of using CONNECT tunneling via http.proxy.
 	t.Run("git ls-remote through proxy", func(t *testing.T) {
-		// Configure git to use the gateway as HTTP proxy for github.com
 		out := dockerExec(t, agentName, "git",
-			"-c", "http.https://github.com.proxy=http://gateway:8080",
+			"-c", "url.http://gateway:8080/github.com/.insteadOf=https://github.com/",
 			"ls-remote", "--heads",
 			"https://github.com/michael-freling/claude-code-tools.git",
 		)
