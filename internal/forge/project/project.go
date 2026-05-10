@@ -21,6 +21,17 @@ var sshRemoteRegexp = regexp.MustCompile(`^git@[^:]+:([^/]+)/([^/]+?)(?:\.git)?$
 // httpsRemoteRegexp matches HTTPS remote URLs like https://github.com/owner/repo.git
 var httpsRemoteRegexp = regexp.MustCompile(`^https?://[^/]+/([^/]+)/([^/]+?)(?:\.git)?$`)
 
+// GitConfig reads a git config value from the host's git configuration.
+// It returns an empty string if the key is not set or git is not available.
+func GitConfig(key string) string {
+	cmd := exec.Command("git", "config", "--get", key)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // Identify extracts project info from a directory by reading its git remote.
 // dir is the host path to the project directory.
 // It runs `git -C <dir> remote get-url origin` and parses the result.

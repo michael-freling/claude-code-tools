@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -71,25 +69,6 @@ containers, Docker networks, and session state.`,
 	return rootCmd
 }
 
-// generateSessionID returns 8 random hex characters for use as a session identifier.
-func generateSessionID() (string, error) {
-	b := make([]byte, 4)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("failed to generate session ID: %w", err)
-	}
-	return hex.EncodeToString(b), nil
-}
-
-// getGitConfig reads a git config value from the host's git configuration.
-func getGitConfig(key string) string {
-	cmd := exec.Command("git", "config", "--get", key)
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
 // startSession runs the common logic for the start and resume commands.
 // It creates the Docker network, starts gateway and agent containers, attaches
 // to the agent container's TTY, and cleans up on exit.
@@ -127,7 +106,7 @@ func startSession(skipPermissions, worktree bool, prompt, resumeID string, conti
 	fmt.Printf("Auth: %s\n", creds.AuthType)
 
 	// 5. Generate session ID.
-	sessionID, err := generateSessionID()
+	sessionID, err := session.GenerateID()
 	if err != nil {
 		return err
 	}
@@ -144,8 +123,8 @@ func startSession(skipPermissions, worktree bool, prompt, resumeID string, conti
 	}
 
 	// 8. Read git user config.
-	gitUserName := getGitConfig("user.name")
-	gitUserEmail := getGitConfig("user.email")
+	gitUserName := project.GitConfig("user.name")
+	gitUserEmail := project.GitConfig("user.email")
 
 	// 9. Write/update gitconfig.
 	ccOpts := claudecode.Options{

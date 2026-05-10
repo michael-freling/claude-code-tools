@@ -2,6 +2,8 @@ package session
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,6 +12,15 @@ import (
 	"strings"
 	"time"
 )
+
+// GenerateID returns 8 random hex characters for use as a session identifier.
+func GenerateID() (string, error) {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("failed to generate session ID: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
 
 // Session represents a claude-forge session.
 type Session struct {

@@ -3,12 +3,32 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGenerateID(t *testing.T) {
+	id, err := GenerateID()
+	require.NoError(t, err)
+
+	// Must be exactly 8 hex characters (4 random bytes = 8 hex chars).
+	assert.Len(t, id, 8)
+	assert.Regexp(t, regexp.MustCompile(`^[0-9a-f]{8}$`), id)
+}
+
+func TestGenerateID_Unique(t *testing.T) {
+	ids := make(map[string]bool)
+	for range 100 {
+		id, err := GenerateID()
+		require.NoError(t, err)
+		assert.False(t, ids[id], "duplicate session ID generated: %s", id)
+		ids[id] = true
+	}
+}
 
 func TestList(t *testing.T) {
 	tests := []struct {

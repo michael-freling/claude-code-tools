@@ -173,6 +173,17 @@ func TestParseRemoteURL(t *testing.T) {
 	}
 }
 
+func TestGitConfig(t *testing.T) {
+	// user.name should be set in any development environment.
+	name := GitConfig("user.name")
+	assert.NotEmpty(t, name)
+}
+
+func TestGitConfig_NonExistentKey(t *testing.T) {
+	val := GitConfig("forge.nonexistent.key.abc123")
+	assert.Empty(t, val)
+}
+
 // runGit runs a git command in the given directory.
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
