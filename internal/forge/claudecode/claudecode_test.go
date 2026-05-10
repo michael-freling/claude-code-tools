@@ -514,18 +514,17 @@ func TestBuildEnv_UIDGIDEnvVars(t *testing.T) {
 }
 
 func TestDetectCacheDirs(t *testing.T) {
-	t.Run("detects existing cache directories", func(t *testing.T) {
+	t.Run("go caches from host plus forge caches always present", func(t *testing.T) {
 		homeDir := t.TempDir()
 
-		// Create some cache directories
+		// Create Go cache directories on host
 		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, "go", "pkg", "mod"), 0o755))
-		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, ".npm"), 0o755))
-		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, ".cache", "pip"), 0o755))
-		// Don't create .cache/go-build or .local/share/pnpm/store
+		// Don't create .cache/go-build
 
 		result := DetectCacheDirs(homeDir)
 
-		assert.Len(t, result, 3)
+		// 1 Go host cache + 3 forge caches (npm, pnpm, pip) = 4
+		assert.Len(t, result, 4)
 
 		// Verify correct source/target pairs
 		sources := make(map[string]string)
@@ -533,31 +532,64 @@ func TestDetectCacheDirs(t *testing.T) {
 			sources[cd.Source] = cd.Target
 		}
 
+		// Go host cache
 		assert.Equal(t, "/home/user/go/pkg/mod", sources[filepath.Join(homeDir, "go", "pkg", "mod")])
-		assert.Equal(t, "/home/user/.npm", sources[filepath.Join(homeDir, ".npm")])
-		assert.Equal(t, "/home/user/.cache/pip", sources[filepath.Join(homeDir, ".cache", "pip")])
+
+		// Forge caches (always created)
+		forgeCacheBase := filepath.Join(homeDir, ".claude-forge", "caches")
+		assert.Equal(t, "/home/user/.npm", sources[filepath.Join(forgeCacheBase, "npm")])
+		assert.Equal(t, "/home/user/.local/share/pnpm/store", sources[filepath.Join(forgeCacheBase, "pnpm")])
+		assert.Equal(t, "/home/user/.cache/pip", sources[filepath.Join(forgeCacheBase, "pip")])
 	})
 
-	t.Run("returns nil when no cache directories exist", func(t *testing.T) {
+	t.Run("forge caches always present even with no host caches", func(t *testing.T) {
 		homeDir := t.TempDir()
 
 		result := DetectCacheDirs(homeDir)
 
-		assert.Nil(t, result)
+		// 0 Go host caches + 3 forge caches = 3
+		assert.Len(t, result, 3)
+
+		// Verify forge cache directories were created
+		forgeCacheBase := filepath.Join(homeDir, ".claude-forge", "caches")
+		for _, name := range []string{"npm", "pnpm", "pip"} {
+			info, err := os.Stat(filepath.Join(forgeCacheBase, name))
+			require.NoError(t, err, "forge cache dir %s should exist", name)
+			assert.True(t, info.IsDir())
+		}
 	})
 
-	t.Run("detects all cache directories", func(t *testing.T) {
+	t.Run("all go host caches plus forge caches", func(t *testing.T) {
 		homeDir := t.TempDir()
 
-		// Create all cache directories
+		// Create all Go cache directories
 		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, "go", "pkg", "mod"), 0o755))
 		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, ".cache", "go-build"), 0o755))
+
+		result := DetectCacheDirs(homeDir)
+
+		// 2 Go host caches + 3 forge caches = 5
+		assert.Len(t, result, 5)
+	})
+
+	t.Run("forge caches use per-forge paths not host paths", func(t *testing.T) {
+		homeDir := t.TempDir()
+
+		// Create host npm/pip dirs that should NOT be used
 		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, ".npm"), 0o755))
-		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, ".local", "share", "pnpm", "store"), 0o755))
 		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, ".cache", "pip"), 0o755))
 
 		result := DetectCacheDirs(homeDir)
 
-		assert.Len(t, result, 5)
+		forgeCacheBase := filepath.Join(homeDir, ".claude-forge", "caches")
+		for _, cd := range result {
+			if cd.Target == "/home/user/.npm" {
+				// Must come from forge cache, not host
+				assert.Equal(t, filepath.Join(forgeCacheBase, "npm"), cd.Source)
+			}
+			if cd.Target == "/home/user/.cache/pip" {
+				assert.Equal(t, filepath.Join(forgeCacheBase, "pip"), cd.Source)
+			}
+		}
 	})
 }

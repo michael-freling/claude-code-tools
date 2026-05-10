@@ -15,7 +15,24 @@ import (
 	dockerclient "github.com/docker/docker/client"
 )
 
-//go:generate mockgen -destination=mock_docker_test.go -package=docker github.com/michael-freling/claude-code-tools/internal/forge/container DockerAPI
+//go:generate mockgen -destination=mock_docker_test.go -package=container github.com/michael-freling/claude-code-tools/internal/forge/container DockerAPI
+
+// ContainerManager abstracts container operations for the orchestrator.
+type ContainerManager interface {
+	CreateNetwork(ctx context.Context, name string) (string, error)
+	RemoveNetwork(ctx context.Context, name string) error
+	StartAgent(ctx context.Context, opts AgentOptions) (string, error)
+	StartGateway(ctx context.Context, opts GatewayOptions) (string, error)
+	StopContainer(ctx context.Context, name string) error
+	RemoveContainer(ctx context.Context, name string) error
+	ListForgeContainers(ctx context.Context) ([]ContainerInfo, error)
+	PullImage(ctx context.Context, image string) error
+	ImageExists(ctx context.Context, image string) (bool, error)
+	Close() error
+}
+
+// Ensure Client implements ContainerManager at compile time.
+var _ ContainerManager = (*Client)(nil)
 
 // DockerAPI abstracts the Docker client methods used by the forge client.
 type DockerAPI interface {

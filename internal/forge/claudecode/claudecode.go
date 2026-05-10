@@ -276,24 +276,39 @@ type CacheDir struct {
 	Target string // container path
 }
 
-// DetectCacheDirs finds dependency cache directories on the host that should
-// be mounted into the container for faster package installation.
-// Only directories that exist are returned.
+// DetectCacheDirs finds dependency cache directories that should be mounted
+// into the container for faster package installation.
+//
+// Go caches are shared from the host (Go handles version differences safely).
+// npm/pnpm/pip caches use per-forge directories under ~/.claude-forge/caches/
+// to avoid version conflicts with host tools.
 func DetectCacheDirs(homeDir string) []CacheDir {
-	candidates := []CacheDir{
+	var result []CacheDir
+
+	// Go caches: safe to share with host (version-independent)
+	hostCaches := []CacheDir{
 		{filepath.Join(homeDir, "go", "pkg", "mod"), "/home/user/go/pkg/mod"},
 		{filepath.Join(homeDir, ".cache", "go-build"), "/home/user/.cache/go-build"},
-		{filepath.Join(homeDir, ".npm"), "/home/user/.npm"},
-		{filepath.Join(homeDir, ".local", "share", "pnpm", "store"), "/home/user/.local/share/pnpm/store"},
-		{filepath.Join(homeDir, ".cache", "pip"), "/home/user/.cache/pip"},
 	}
-
-	var result []CacheDir
-	for _, c := range candidates {
+	for _, c := range hostCaches {
 		if pathExists(c.Source) {
 			result = append(result, c)
 		}
 	}
+
+	// npm/pnpm/pip: use per-forge caches to avoid version conflicts with host.
+	// These dirs are always created (not conditional on host existence).
+	forgeCacheBase := filepath.Join(homeDir, ".claude-forge", "caches")
+	forgeCaches := []CacheDir{
+		{filepath.Join(forgeCacheBase, "npm"), "/home/user/.npm"},
+		{filepath.Join(forgeCacheBase, "pnpm"), "/home/user/.local/share/pnpm/store"},
+		{filepath.Join(forgeCacheBase, "pip"), "/home/user/.cache/pip"},
+	}
+	for _, c := range forgeCaches {
+		_ = os.MkdirAll(c.Source, 0o755)
+		result = append(result, c)
+	}
+
 	return result
 }
 
