@@ -313,6 +313,54 @@ func TestNewOrchestrator(t *testing.T) {
 	orch.Log("test message %s", "arg")
 }
 
+func TestStart_Interactive(t *testing.T) {
+	tests := []struct {
+		name            string
+		interactive     bool
+		wantInteractive bool
+	}{
+		{
+			name:            "interactive mode passes through to agent options",
+			interactive:     true,
+			wantInteractive: true,
+		},
+		{
+			name:            "non-interactive mode passes through to agent options",
+			interactive:     false,
+			wantInteractive: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+
+			mockCM := NewMockContainerManager(ctrl)
+			orch, _ := setupOrchestrator(t, mockCM)
+
+			projectDir := setupGitProject(t)
+			t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+
+			mockCM.EXPECT().ImageExists(gomock.Any(), gomock.Any()).Return(true, nil).Times(2)
+			mockCM.EXPECT().CreateNetwork(gomock.Any(), gomock.Any()).Return("net-id", nil)
+			mockCM.EXPECT().StartGateway(gomock.Any(), gomock.Any()).Return("gw-id", nil)
+			mockCM.EXPECT().StartAgent(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(ctx context.Context, opts container.AgentOptions) (string, error) {
+					assert.Equal(t, tt.wantInteractive, opts.Interactive)
+					return "agent-id", nil
+				})
+
+			sess, err := orch.Start(context.Background(), StartOptions{
+				Interactive: tt.interactive,
+				ProjectDir:  projectDir,
+			})
+
+			require.NoError(t, err)
+			assert.NotNil(t, sess)
+		})
+	}
+}
+
 func TestStart_OAuthCredentials(t *testing.T) {
 	ctrl := gomock.NewController(t)
 

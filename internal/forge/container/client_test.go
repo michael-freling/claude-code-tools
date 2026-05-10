@@ -145,6 +145,7 @@ func TestStartAgent(t *testing.T) {
 				ProjectDir:  "/home/user/my-project",
 				Env:         map[string]string{"ANTHROPIC_API_KEY": "sk-test"},
 				Privileged:  true,
+				Interactive: true,
 				Cmd:         []string{"--dangerously-skip-permissions"},
 			},
 			setupMock: func(m *MockDockerAPI) {
@@ -162,6 +163,8 @@ func TestStartAgent(t *testing.T) {
 						assert.Equal(t, []string{"claude", "--dangerously-skip-permissions"}, []string(config.Cmd))
 						assert.Equal(t, "/work", config.WorkingDir)
 						assert.Contains(t, config.Env, "ANTHROPIC_API_KEY=sk-test")
+						assert.True(t, config.Tty, "Tty should be true when Interactive is true")
+						assert.True(t, config.OpenStdin, "OpenStdin should be true when Interactive is true")
 						assert.True(t, hostConfig.Privileged)
 						assert.Contains(t, netConfig.EndpointsConfig, "forge_net")
 
@@ -291,6 +294,63 @@ func TestStartAgent_Mounts(t *testing.T) {
 
 	_, err := client.StartAgent(ctx, opts)
 	require.NoError(t, err)
+}
+
+func TestStartAgent_Interactive(t *testing.T) {
+	tests := []struct {
+		name        string
+		interactive bool
+		wantTty     bool
+		wantStdin   bool
+	}{
+		{
+			name:        "interactive mode sets Tty and OpenStdin",
+			interactive: true,
+			wantTty:     true,
+			wantStdin:   true,
+		},
+		{
+			name:        "non-interactive mode does not set Tty or OpenStdin",
+			interactive: false,
+			wantTty:     false,
+			wantStdin:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockAPI := NewMockDockerAPI(ctrl)
+
+			opts := AgentOptions{
+				Name:        "forge-agent-test-session",
+				Image:       "agent:latest",
+				NetworkName: "forge_net",
+				ProjectDir:  "/home/user/project",
+				Interactive: tt.interactive,
+			}
+
+			mockAPI.EXPECT().
+				ContainerCreate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+				DoAndReturn(func(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, netConfig *network.NetworkingConfig, name string) (container.CreateResponse, error) {
+					assert.Equal(t, tt.wantTty, config.Tty, "Tty mismatch")
+					assert.Equal(t, tt.wantStdin, config.OpenStdin, "OpenStdin mismatch")
+					return container.CreateResponse{ID: "c-123"}, nil
+				})
+
+			mockAPI.EXPECT().
+				ContainerStart(gomock.Any(), "c-123", container.StartOptions{}).
+				Return(nil)
+
+			client := newClientWithAPI(mockAPI)
+			ctx := context.Background()
+
+			_, err := client.StartAgent(ctx, opts)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestStartAgent_UIDGIDEnvVars(t *testing.T) {

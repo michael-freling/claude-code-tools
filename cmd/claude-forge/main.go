@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -100,6 +101,7 @@ func startSession(skipPermissions, worktree bool, prompt, resumeID string, conti
 	ctx := context.Background()
 	hostUID := os.Getuid()
 	hostGID := os.Getgid()
+	interactive := prompt == ""
 
 	sess, err := orch.Start(ctx, forge.StartOptions{
 		SkipPermissions: skipPermissions,
@@ -107,6 +109,7 @@ func startSession(skipPermissions, worktree bool, prompt, resumeID string, conti
 		Prompt:          prompt,
 		ResumeID:        resumeID,
 		Continue:        continueSession,
+		Interactive:     interactive,
 		UID:             hostUID,
 		GID:             hostGID,
 	})
@@ -114,16 +117,38 @@ func startSession(skipPermissions, worktree bool, prompt, resumeID string, conti
 		return err
 	}
 
-	// Attach to the agent container's TTY using docker attach.
-	fmt.Println("Claude Code is ready. Attaching to session...")
-	attachCmd := exec.Command("docker", "attach", sess.AgentName)
-	attachCmd.Stdin = os.Stdin
-	attachCmd.Stdout = os.Stdout
-	attachCmd.Stderr = os.Stderr
-	// docker attach returns an error when the container exits, which is expected.
-	_ = attachCmd.Run()
+	if interactive {
+		// Attach to the agent container's TTY using docker attach.
+		fmt.Println("Claude Code is ready. Attaching to session...")
+		attachCmd := exec.Command("docker", "attach", sess.AgentName)
+		attachCmd.Stdin = os.Stdin
+		attachCmd.Stdout = os.Stdout
+		attachCmd.Stderr = os.Stderr
+		// docker attach returns an error when the container exits, which is expected.
+		_ = attachCmd.Run()
+	} else {
+		// Non-interactive mode: wait for the container to exit, then print its logs.
+		fmt.Println("Claude Code is running in non-interactive mode...")
+		waitCmd := exec.Command("docker", "wait", sess.AgentName)
+		waitOutput, err := waitCmd.Output()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: docker wait failed: %v\n", err)
+		}
 
-	// Clean up after the user exits.
+		logsCmd := exec.Command("docker", "logs", sess.AgentName)
+		logsCmd.Stdout = os.Stdout
+		logsCmd.Stderr = os.Stderr
+		_ = logsCmd.Run()
+
+		// Check exit code from docker wait
+		exitCode := strings.TrimSpace(string(waitOutput))
+		if exitCode != "" && exitCode != "0" {
+			orch.Cleanup(context.Background(), sess)
+			return fmt.Errorf("agent exited with code %s", exitCode)
+		}
+	}
+
+	// Clean up after the container finishes.
 	orch.Cleanup(context.Background(), sess)
 	return nil
 }

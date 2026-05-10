@@ -44,6 +44,7 @@ type StartOptions struct {
 	Prompt          string
 	ResumeID        string
 	Continue        bool
+	Interactive     bool   // allocate TTY for docker attach (false for prompt mode)
 	ProjectDir      string // working directory (defaults to cwd if empty)
 	UID             int    // host user UID
 	GID             int    // host user GID
@@ -234,6 +235,7 @@ func (o *Orchestrator) Start(ctx context.Context, opts StartOptions) (*Session, 
 		ConfigDir:   o.ConfigDir,
 		HomeDir:     o.HomeDir,
 		Env:         agentEnv,
+		Interactive: opts.Interactive,
 		Cmd:         agentCmd,
 		UID:         opts.UID,
 		GID:         opts.GID,
