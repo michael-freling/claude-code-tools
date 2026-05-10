@@ -308,6 +308,9 @@ func TestNewOrchestrator(t *testing.T) {
 	assert.Equal(t, "/home/testuser/.claude", orch.ClaudeDir)
 	assert.NotNil(t, orch.Log)
 	assert.Equal(t, mockCM, orch.Containers)
+
+	// Verify the default Log function executes without panic
+	orch.Log("test message %s", "arg")
 }
 
 func TestStart_OAuthCredentials(t *testing.T) {

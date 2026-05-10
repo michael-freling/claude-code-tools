@@ -113,6 +113,23 @@ func TestResolve(t *testing.T) {
 	}
 }
 
+func TestResolve_CredentialsFileUnreadable(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+
+	tmpDir := t.TempDir()
+
+	// Create a credentials file with no read permissions
+	credPath := filepath.Join(tmpDir, ".credentials.json")
+	require.NoError(t, os.WriteFile(credPath, []byte(`{"accessToken":"tok"}`), 0o644))
+	require.NoError(t, os.Chmod(credPath, 0o000))
+	t.Cleanup(func() { os.Chmod(credPath, 0o644) }) // restore for cleanup
+
+	_, err := Resolve(tmpDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read credentials file")
+}
+
 func TestResolve_EnvVarPrecedenceOverFile(t *testing.T) {
 	tmpDir := t.TempDir()
 

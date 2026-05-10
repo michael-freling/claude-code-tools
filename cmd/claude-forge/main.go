@@ -22,6 +22,13 @@ import (
 // version is set at build time via ldflags.
 var version = "dev"
 
+// orchestratorFactoryFunc creates an Orchestrator and returns a cleanup function.
+type orchestratorFactoryFunc func() (*forge.Orchestrator, func(), error)
+
+// createOrchestrator is the factory function for creating an Orchestrator.
+// Tests override this to inject a mock.
+var createOrchestrator orchestratorFactoryFunc = newOrchestrator
+
 func main() {
 	// Busybox-style multi-call binary: if invoked as "gh" or "forge-gh",
 	// act as the forge-gh GitHub CLI wrapper.
@@ -84,7 +91,7 @@ func newOrchestrator() (*forge.Orchestrator, func(), error) {
 
 // startSession runs the common logic for the start and resume commands.
 func startSession(skipPermissions, worktree bool, prompt, resumeID string, continueSession bool) error {
-	orch, cleanup, err := newOrchestrator()
+	orch, cleanup, err := createOrchestrator()
 	if err != nil {
 		return err
 	}
@@ -217,7 +224,7 @@ func newStopCmd() *cobra.Command {
 		Use:   "stop",
 		Short: "Stop running Claude Code containers for the current project",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			orch, cleanup, err := newOrchestrator()
+			orch, cleanup, err := createOrchestrator()
 			if err != nil {
 				return err
 			}
@@ -239,7 +246,7 @@ func newStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show running Claude Code containers",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			orch, cleanup, err := newOrchestrator()
+			orch, cleanup, err := createOrchestrator()
 			if err != nil {
 				return err
 			}
@@ -276,7 +283,7 @@ func newBuildCmd() *cobra.Command {
 		Use:   "build",
 		Short: "Pull or rebuild Claude Code Docker images",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			orch, cleanup, err := newOrchestrator()
+			orch, cleanup, err := createOrchestrator()
 			if err != nil {
 				return err
 			}

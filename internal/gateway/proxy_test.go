@@ -411,6 +411,46 @@ func TestParseGitRequest(t *testing.T) {
 	}
 }
 
+func TestProxy_ServeHTTP_ForwardsRequestHeaders(t *testing.T) {
+	var capturedHeaders http.Header
+	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedHeaders = r.Header
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ghServer.Close()
+
+	proxy := newTestProxy(t, ghServer.URL)
+
+	req := httptest.NewRequest(http.MethodGet, "/github.com/owner/repo.git/info/refs?service=git-upload-pack", nil)
+	req.Header.Set("X-Custom-Header", "custom-value")
+	req.Header.Add("X-Multi-Header", "value1")
+	req.Header.Add("X-Multi-Header", "value2")
+	w := httptest.NewRecorder()
+
+	proxy.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "custom-value", capturedHeaders.Get("X-Custom-Header"))
+	values := capturedHeaders.Values("X-Multi-Header")
+	assert.Contains(t, values, "value1")
+	assert.Contains(t, values, "value2")
+}
+
+func TestProxy_ServeHTTP_EmptyOwnerRepoPath(t *testing.T) {
+	proxy := NewProxy(
+		ProxyConfig{AllowedOwner: "my-owner", AllowedRepo: "my-repo"},
+		NewGitHubAuthFromToken("test-token"),
+	)
+
+	// Path that resolves to empty owner/repo after stripping github.com prefix
+	req := httptest.NewRequest(http.MethodGet, "/github.com//.git/info/refs?service=git-upload-pack", nil)
+	w := httptest.NewRecorder()
+
+	proxy.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 // newTestProxy creates a Proxy with its upstream URL pointed at the test server.
 func newTestProxy(t *testing.T, testServerURL string) *Proxy {
 	t.Helper()

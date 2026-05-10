@@ -391,6 +391,37 @@ func TestWriteGitconfig_CreatesDirectory(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestWriteGitconfig_DirectoryCreationError(t *testing.T) {
+	// Create a file where a directory is expected, so MkdirAll fails
+	baseDir := t.TempDir()
+	blockingFile := filepath.Join(baseDir, "blocked")
+	require.NoError(t, os.WriteFile(blockingFile, []byte("file"), 0o644))
+
+	// Try to create a config dir under the file -- will fail
+	configDir := filepath.Join(blockingFile, "config")
+
+	opts := Options{
+		GitUserName:  "User",
+		GitUserEmail: "user@test.com",
+	}
+
+	err := WriteGitconfig(configDir, opts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create config directory")
+}
+
+func TestEnsureSettings_DirectoryCreationError(t *testing.T) {
+	baseDir := t.TempDir()
+	blockingFile := filepath.Join(baseDir, "blocked")
+	require.NoError(t, os.WriteFile(blockingFile, []byte("file"), 0o644))
+
+	configDir := filepath.Join(blockingFile, "config")
+
+	err := EnsureSettings(configDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create config directory")
+}
+
 func TestEnsureSettings_CreatesIfMissing(t *testing.T) {
 	configDir := t.TempDir()
 

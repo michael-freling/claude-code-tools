@@ -42,6 +42,14 @@ func NewServerWithAuth(config ProxyConfig, ghAuth *GitHubAuth) *Server {
 // listens on apiAddr. It blocks until an OS interrupt signal is received,
 // then shuts down both servers gracefully.
 func (s *Server) Run(proxyAddr, apiAddr string) error {
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	return s.RunWithContext(ctx, proxyAddr, apiAddr)
+}
+
+// RunWithContext starts both servers and blocks until the context is cancelled
+// or a server error occurs, then shuts down gracefully.
+func (s *Server) RunWithContext(ctx context.Context, proxyAddr, apiAddr string) error {
 	proxyServer := &http.Server{
 		Addr:    proxyAddr,
 		Handler: s.proxy,
@@ -70,21 +78,17 @@ func (s *Server) Run(proxyAddr, apiAddr string) error {
 		}
 	}()
 
-	// Wait for interrupt or error
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
 	select {
-	case sig := <-sigCh:
-		fmt.Fprintf(os.Stderr, "received signal %v, shutting down\n", sig)
+	case <-ctx.Done():
+		fmt.Fprintf(os.Stderr, "shutting down\n")
 	case err := <-errCh:
 		return err
 	}
 
 	// Graceful shutdown
-	ctx := context.Background()
-	proxyServer.Shutdown(ctx)
-	apiHTTPServer.Shutdown(ctx)
+	shutdownCtx := context.Background()
+	proxyServer.Shutdown(shutdownCtx)
+	apiHTTPServer.Shutdown(shutdownCtx)
 
 	wg.Wait()
 	return nil
