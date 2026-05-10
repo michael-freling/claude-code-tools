@@ -105,6 +105,16 @@ func startSession(skipPermissions, worktree bool, prompt, resumeID string, conti
 	}
 	fmt.Printf("Auth: %s\n", creds.AuthType)
 
+	// Detect host UID/GID for file ownership mapping.
+	hostUID := os.Getuid()
+	hostGID := os.Getgid()
+
+	// Detect dependency cache directories.
+	cacheDirs := claudecode.DetectCacheDirs(homeDir)
+	if len(cacheDirs) > 0 {
+		fmt.Printf("Cache mounts: %d directories\n", len(cacheDirs))
+	}
+
 	// 5. Generate session ID.
 	sessionID, err := session.GenerateID()
 	if err != nil {
@@ -228,6 +238,21 @@ func startSession(skipPermissions, worktree bool, prompt, resumeID string, conti
 	} else {
 		agentEnv["CLAUDE_CODE_OAUTH_TOKEN"] = creds.Token
 	}
+	if hostUID > 0 {
+		agentEnv["FORGE_UID"] = fmt.Sprintf("%d", hostUID)
+	}
+	if hostGID > 0 {
+		agentEnv["FORGE_GID"] = fmt.Sprintf("%d", hostGID)
+	}
+
+	// Convert claudecode.CacheDir to container.CacheDir
+	var containerCacheDirs []container.CacheDir
+	for _, cd := range cacheDirs {
+		containerCacheDirs = append(containerCacheDirs, container.CacheDir{
+			Source: cd.Source,
+			Target: cd.Target,
+		})
+	}
 
 	// Start agent container.
 	fmt.Printf("Starting agent: %s\n", agentName)
@@ -242,6 +267,9 @@ func startSession(skipPermissions, worktree bool, prompt, resumeID string, conti
 		HomeDir:     homeDir,
 		Env:         agentEnv,
 		Cmd:         agentCmd,
+		UID:         hostUID,
+		GID:         hostGID,
+		CacheDirs:   containerCacheDirs,
 	}); err != nil {
 		cleanup()
 		return fmt.Errorf("failed to start agent: %w", err)

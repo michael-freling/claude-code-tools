@@ -441,3 +441,123 @@ func TestDefaultSettings(t *testing.T) {
 	assert.Contains(t, settings, `"hasCompletedOnboarding": true`)
 	assert.Contains(t, settings, `"autoUpdaterStatus": "disabled"`)
 }
+
+func TestBuildEnv_UIDGIDEnvVars(t *testing.T) {
+	tests := []struct {
+		name       string
+		uid        int
+		gid        int
+		wantUID    bool
+		wantGID    bool
+		wantUIDVal string
+		wantGIDVal string
+	}{
+		{
+			name:       "sets FORGE_UID and FORGE_GID when both positive",
+			uid:        1000,
+			gid:        1000,
+			wantUID:    true,
+			wantGID:    true,
+			wantUIDVal: "1000",
+			wantGIDVal: "1000",
+		},
+		{
+			name:    "does not set when both zero",
+			uid:     0,
+			gid:     0,
+			wantUID: false,
+			wantGID: false,
+		},
+		{
+			name:       "sets only UID when GID is zero",
+			uid:        501,
+			gid:        0,
+			wantUID:    true,
+			wantGID:    false,
+			wantUIDVal: "501",
+		},
+		{
+			name:       "sets only GID when UID is zero",
+			uid:        0,
+			gid:        20,
+			wantUID:    false,
+			wantGID:    true,
+			wantGIDVal: "20",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := Options{
+				AuthToken: "sk-test",
+				AuthType:  "api_key",
+				UID:       tt.uid,
+				GID:       tt.gid,
+			}
+
+			env := buildEnv(opts)
+
+			if tt.wantUID {
+				assert.Equal(t, tt.wantUIDVal, env["FORGE_UID"])
+			} else {
+				_, exists := env["FORGE_UID"]
+				assert.False(t, exists, "FORGE_UID should not be set")
+			}
+			if tt.wantGID {
+				assert.Equal(t, tt.wantGIDVal, env["FORGE_GID"])
+			} else {
+				_, exists := env["FORGE_GID"]
+				assert.False(t, exists, "FORGE_GID should not be set")
+			}
+		})
+	}
+}
+
+func TestDetectCacheDirs(t *testing.T) {
+	t.Run("detects existing cache directories", func(t *testing.T) {
+		homeDir := t.TempDir()
+
+		// Create some cache directories
+		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, "go", "pkg", "mod"), 0o755))
+		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, ".npm"), 0o755))
+		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, ".cache", "pip"), 0o755))
+		// Don't create .cache/go-build or .local/share/pnpm/store
+
+		result := DetectCacheDirs(homeDir)
+
+		assert.Len(t, result, 3)
+
+		// Verify correct source/target pairs
+		sources := make(map[string]string)
+		for _, cd := range result {
+			sources[cd.Source] = cd.Target
+		}
+
+		assert.Equal(t, "/home/user/go/pkg/mod", sources[filepath.Join(homeDir, "go", "pkg", "mod")])
+		assert.Equal(t, "/home/user/.npm", sources[filepath.Join(homeDir, ".npm")])
+		assert.Equal(t, "/home/user/.cache/pip", sources[filepath.Join(homeDir, ".cache", "pip")])
+	})
+
+	t.Run("returns nil when no cache directories exist", func(t *testing.T) {
+		homeDir := t.TempDir()
+
+		result := DetectCacheDirs(homeDir)
+
+		assert.Nil(t, result)
+	})
+
+	t.Run("detects all cache directories", func(t *testing.T) {
+		homeDir := t.TempDir()
+
+		// Create all cache directories
+		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, "go", "pkg", "mod"), 0o755))
+		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, ".cache", "go-build"), 0o755))
+		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, ".npm"), 0o755))
+		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, ".local", "share", "pnpm", "store"), 0o755))
+		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, ".cache", "pip"), 0o755))
+
+		result := DetectCacheDirs(homeDir)
+
+		assert.Len(t, result, 5)
+	})
+}

@@ -47,6 +47,10 @@ type Options struct {
 	// Git identity (from host git config)
 	GitUserName  string
 	GitUserEmail string
+
+	// Host user identity (for file ownership mapping)
+	UID int // host user UID
+	GID int // host user GID
 }
 
 // BuildContainerConfig constructs the full container configuration from options.
@@ -94,6 +98,12 @@ func buildEnv(opts Options) map[string]string {
 		env["ANTHROPIC_API_KEY"] = opts.AuthToken
 	} else {
 		env["CLAUDE_CODE_OAUTH_TOKEN"] = opts.AuthToken
+	}
+	if opts.UID > 0 {
+		env["FORGE_UID"] = fmt.Sprintf("%d", opts.UID)
+	}
+	if opts.GID > 0 {
+		env["FORGE_GID"] = fmt.Sprintf("%d", opts.GID)
 	}
 	return env
 }
@@ -258,6 +268,33 @@ func EnsureSettings(configDir string) error {
 	}
 
 	return nil
+}
+
+// CacheDir represents a host dependency cache directory to mount into the container.
+type CacheDir struct {
+	Source string // host path
+	Target string // container path
+}
+
+// DetectCacheDirs finds dependency cache directories on the host that should
+// be mounted into the container for faster package installation.
+// Only directories that exist are returned.
+func DetectCacheDirs(homeDir string) []CacheDir {
+	candidates := []CacheDir{
+		{filepath.Join(homeDir, "go", "pkg", "mod"), "/home/user/go/pkg/mod"},
+		{filepath.Join(homeDir, ".cache", "go-build"), "/home/user/.cache/go-build"},
+		{filepath.Join(homeDir, ".npm"), "/home/user/.npm"},
+		{filepath.Join(homeDir, ".local", "share", "pnpm", "store"), "/home/user/.local/share/pnpm/store"},
+		{filepath.Join(homeDir, ".cache", "pip"), "/home/user/.cache/pip"},
+	}
+
+	var result []CacheDir
+	for _, c := range candidates {
+		if pathExists(c.Source) {
+			result = append(result, c)
+		}
+	}
+	return result
 }
 
 // pathExists returns true if the given path exists on the filesystem.

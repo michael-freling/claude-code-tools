@@ -158,8 +158,8 @@ func TestStartAgent(t *testing.T) {
 					).
 					DoAndReturn(func(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, netConfig *network.NetworkingConfig, name string) (container.CreateResponse, error) {
 						assert.Equal(t, "agent:latest", config.Image)
-						assert.Equal(t, []string{"claude"}, []string(config.Entrypoint))
-						assert.Equal(t, []string{"--dangerously-skip-permissions"}, []string(config.Cmd))
+						assert.Empty(t, config.Entrypoint)
+						assert.Equal(t, []string{"claude", "--dangerously-skip-permissions"}, []string(config.Cmd))
 						assert.Equal(t, "/work", config.WorkingDir)
 						assert.Contains(t, config.Env, "ANTHROPIC_API_KEY=sk-test")
 						assert.True(t, hostConfig.Privileged)
@@ -278,6 +278,183 @@ func TestStartAgent_Mounts(t *testing.T) {
 			assert.True(t, mountTargets["/home/user/.config/claude-forge"], "config dir mount missing")
 			assert.True(t, mountTargets["/home/user/CLAUDE.md"], "home CLAUDE.md mount missing")
 
+			return container.CreateResponse{ID: "c-123"}, nil
+		})
+
+	mockAPI.EXPECT().
+		ContainerStart(gomock.Any(), "c-123", container.StartOptions{}).
+		Return(nil)
+
+	client := newClientWithAPI(mockAPI)
+	ctx := context.Background()
+
+	_, err := client.StartAgent(ctx, opts)
+	require.NoError(t, err)
+}
+
+func TestStartAgent_UIDGIDEnvVars(t *testing.T) {
+	tests := []struct {
+		name       string
+		uid        int
+		gid        int
+		wantUID    bool
+		wantGID    bool
+		wantUIDVal string
+		wantGIDVal string
+	}{
+		{
+			name:       "sets FORGE_UID and FORGE_GID when both positive",
+			uid:        1000,
+			gid:        1000,
+			wantUID:    true,
+			wantGID:    true,
+			wantUIDVal: "FORGE_UID=1000",
+			wantGIDVal: "FORGE_GID=1000",
+		},
+		{
+			name:    "does not set FORGE_UID or FORGE_GID when both zero",
+			uid:     0,
+			gid:     0,
+			wantUID: false,
+			wantGID: false,
+		},
+		{
+			name:       "sets only FORGE_UID when GID is zero",
+			uid:        501,
+			gid:        0,
+			wantUID:    true,
+			wantGID:    false,
+			wantUIDVal: "FORGE_UID=501",
+		},
+		{
+			name:       "sets only FORGE_GID when UID is zero",
+			uid:        0,
+			gid:        20,
+			wantUID:    false,
+			wantGID:    true,
+			wantGIDVal: "FORGE_GID=20",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockAPI := NewMockDockerAPI(ctrl)
+
+			opts := AgentOptions{
+				Name:        "forge-agent-test-session",
+				Image:       "agent:latest",
+				NetworkName: "forge_net",
+				ProjectDir:  "/home/user/project",
+				UID:         tt.uid,
+				GID:         tt.gid,
+			}
+
+			mockAPI.EXPECT().
+				ContainerCreate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+				DoAndReturn(func(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, netConfig *network.NetworkingConfig, name string) (container.CreateResponse, error) {
+					if tt.wantUID {
+						assert.Contains(t, config.Env, tt.wantUIDVal)
+					} else {
+						for _, e := range config.Env {
+							assert.NotContains(t, e, "FORGE_UID=")
+						}
+					}
+					if tt.wantGID {
+						assert.Contains(t, config.Env, tt.wantGIDVal)
+					} else {
+						for _, e := range config.Env {
+							assert.NotContains(t, e, "FORGE_GID=")
+						}
+					}
+					return container.CreateResponse{ID: "c-123"}, nil
+				})
+
+			mockAPI.EXPECT().
+				ContainerStart(gomock.Any(), "c-123", container.StartOptions{}).
+				Return(nil)
+
+			client := newClientWithAPI(mockAPI)
+			ctx := context.Background()
+
+			_, err := client.StartAgent(ctx, opts)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestStartAgent_CacheDirMounts(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockAPI := NewMockDockerAPI(ctrl)
+
+	opts := AgentOptions{
+		Name:        "forge-agent-test-session",
+		Image:       "agent:latest",
+		NetworkName: "forge_net",
+		ProjectDir:  "/home/user/project",
+		CacheDirs: []CacheDir{
+			{Source: "/home/user/go/pkg/mod", Target: "/home/user/go/pkg/mod"},
+			{Source: "/home/user/.npm", Target: "/home/user/.npm"},
+		},
+	}
+
+	mockAPI.EXPECT().
+		ContainerCreate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, netConfig *network.NetworkingConfig, name string) (container.CreateResponse, error) {
+			// Verify cache dir mounts exist and are read-write
+			foundGoMod := false
+			foundNpm := false
+			for _, m := range hostConfig.Mounts {
+				if m.Source == "/home/user/go/pkg/mod" && m.Target == "/home/user/go/pkg/mod" {
+					foundGoMod = true
+					assert.False(t, m.ReadOnly, "go mod cache should be read-write")
+				}
+				if m.Source == "/home/user/.npm" && m.Target == "/home/user/.npm" {
+					foundNpm = true
+					assert.False(t, m.ReadOnly, "npm cache should be read-write")
+				}
+			}
+			assert.True(t, foundGoMod, "go mod cache mount not found")
+			assert.True(t, foundNpm, "npm cache mount not found")
+
+			return container.CreateResponse{ID: "c-123"}, nil
+		})
+
+	mockAPI.EXPECT().
+		ContainerStart(gomock.Any(), "c-123", container.StartOptions{}).
+		Return(nil)
+
+	client := newClientWithAPI(mockAPI)
+	ctx := context.Background()
+
+	_, err := client.StartAgent(ctx, opts)
+	require.NoError(t, err)
+}
+
+func TestStartAgent_NoCacheDirs(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockAPI := NewMockDockerAPI(ctrl)
+
+	opts := AgentOptions{
+		Name:        "forge-agent-test-session",
+		Image:       "agent:latest",
+		NetworkName: "forge_net",
+		ProjectDir:  "/home/user/project",
+		// No CacheDirs
+	}
+
+	mockAPI.EXPECT().
+		ContainerCreate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, netConfig *network.NetworkingConfig, name string) (container.CreateResponse, error) {
+			// Only the project dir mount should exist
+			assert.Len(t, hostConfig.Mounts, 1)
+			assert.Equal(t, "/work", hostConfig.Mounts[0].Target)
 			return container.CreateResponse{ID: "c-123"}, nil
 		})
 

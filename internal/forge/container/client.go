@@ -125,6 +125,12 @@ func (c *Client) RemoveNetwork(ctx context.Context, name string) error {
 	return nil
 }
 
+// CacheDir represents a host dependency cache directory to mount into the container.
+type CacheDir struct {
+	Source string // host path
+	Target string // container path
+}
+
 // AgentOptions holds configuration for starting an agent container.
 type AgentOptions struct {
 	Name        string            // container name: forge-agent-<project-id>-<session-id>
@@ -137,7 +143,10 @@ type AgentOptions struct {
 	HomeDir     string            // host home dir for CLAUDE.md paths
 	Env         map[string]string // environment variables
 	Privileged  bool
-	Cmd         []string // claude args: --dangerously-skip-permissions, --worktree, etc.
+	Cmd         []string   // claude args: --dangerously-skip-permissions, --worktree, etc.
+	UID         int        // host user UID (for file ownership mapping)
+	GID         int        // host user GID (for file ownership mapping)
+	CacheDirs   []CacheDir // host dependency cache directories to mount (rw)
 }
 
 // StartAgent creates and starts an agent container.
@@ -145,6 +154,12 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOptions) (string, err
 	env := make([]string, 0, len(opts.Env))
 	for k, v := range opts.Env {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+	if opts.UID > 0 {
+		env = append(env, fmt.Sprintf("FORGE_UID=%d", opts.UID))
+	}
+	if opts.GID > 0 {
+		env = append(env, fmt.Sprintf("FORGE_GID=%d", opts.GID))
 	}
 
 	mounts := []mount.Mount{
@@ -197,11 +212,20 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOptions) (string, err
 		})
 	}
 
+	// Cache directory mounts (read-write)
+	for _, cache := range opts.CacheDirs {
+		mounts = append(mounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: cache.Source,
+			Target: cache.Target,
+		})
+	}
+
 	containerConfig := &container.Config{
-		Image:      opts.Image,
-		Env:        env,
-		Cmd:        opts.Cmd,
-		Entrypoint: []string{"claude"},
+		Image: opts.Image,
+		Env:   env,
+		Cmd:   append([]string{"claude"}, opts.Cmd...),
+		// Entrypoint is set by the Dockerfile (entrypoint.sh handles UID/GID and user switching)
 		WorkingDir: "/work",
 	}
 

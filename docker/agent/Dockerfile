@@ -42,9 +42,13 @@ COPY claude-forge /usr/local/bin/claude-forge
 RUN ln -s /usr/local/bin/claude-forge /usr/local/bin/forge-gh \
     && ln -s /usr/local/bin/claude-forge /usr/local/bin/gh
 
-# Create non-root user
+# Create non-root user (entrypoint adjusts UID/GID at startup)
 RUN useradd -m -s /bin/bash user
-USER user
-WORKDIR /work
 
-ENTRYPOINT ["claude"]
+# Entrypoint handles UID/GID mapping and runs as the user
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+WORKDIR /work
+ENTRYPOINT ["entrypoint.sh"]
+CMD ["claude"]
