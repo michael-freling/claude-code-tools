@@ -47,9 +47,10 @@ jobs:
 
     - name: Check coverage threshold
       run: |
+        # Exclude generated mocks from coverage threshold.
         grep -v "mock_" coverage.txt > coverage_filtered.txt
         coverage=$(go tool cover -func=coverage_filtered.txt | grep total | awk '{print $3}' | sed 's/%//')
-        threshold=88.5
+        threshold=90.0
         echo "Total coverage (excluding generated mocks): ${coverage}%"
         echo "Threshold: ${threshold}%"
         if (( $(echo "$coverage < $threshold" | bc -l) )); then
@@ -79,5 +80,42 @@ jobs:
     - name: Check unit test timeout (2s)
       run: ./scripts/check-unit-test-timeout.sh
 
-  # E2E tests are run locally only (require real Claude CLI)
+  forge-e2e:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+        cache: true
+
+    - name: Forge E2E tests
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      run: go test -tags=forge_e2e -v -race -timeout 15m ./test/e2e/forge/...
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+        cache: true
+
+    - name: Build claude-forge binary for Linux amd64
+      run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o docker/agent/claude-forge ./cmd/claude-forge/
+
+    - name: Build gateway Docker image
+      run: docker build -t claude-forge-gateway-test -f docker/gateway/Dockerfile .
+
+    - name: Build agent Docker image
+      run: docker build -t claude-forge-agent-test docker/agent/
+
+  # Claude CLI E2E tests are run locally only (require real Claude CLI)
   # Run with: ./scripts/run-e2e-tests.sh

@@ -2,120 +2,147 @@
 
 A collection of CLI tools for working with Claude Code.
 
-## Tools
+## claude-forge
 
-- **Generator** - Generate prompts for creating Claude Code skills, agents, and commands
+`claude-forge` launches Claude Code inside isolated Docker containers with a secure gateway proxy for GitHub access. The gateway allows read operations (clone, pull, fetch) to any repository but restricts push and write operations to only the current project's repository.
 
-## Generator
+### Features
 
-The `generator` tool outputs prompts to stdout that you can give to Claude to create skills, agents, and commands.
+- Runs Claude Code in Docker with `--dangerously-skip-permissions` by default
+- Gateway proxy mediates all GitHub traffic (git + API) with per-repo write restrictions
+- Multiple instances can run in parallel across different projects
+- Session persistence — resume previous sessions by ID
+- Automatic auth detection from `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or `~/.claude/.credentials.json`
+- Dependency caching for Go, npm, pnpm, and pip
+- Host git identity and Claude Code configuration carried into the container
+
+### Prerequisites
+
+- Docker (daemon must be running)
+- Go 1.25+ (to build from source)
+- A Claude Code subscription or API key
 
 ### Installation
 
 ```bash
-go install github.com/michael-freling/claude-code-tools/cmd/generator@latest
+go install github.com/michael-freling/claude-code-tools/cmd/claude-forge@latest
 ```
 
 Or build from source:
 
 ```bash
-go build -o generator cmd/generator/main.go
+git clone https://github.com/michael-freling/claude-code-tools.git
+cd claude-code-tools
+go build -o claude-forge ./cmd/claude-forge/
 ```
+
+### Quick Start
+
+```bash
+# Navigate to your project directory
+cd ~/my-project
+
+# Start an interactive session
+claude-forge start
+
+# Start with a prompt (non-interactive, exits when done)
+claude-forge start -p "Add unit tests for the auth package"
+```
+
+On first run, `claude-forge build` is called automatically to pull the agent and gateway Docker images.
 
 ### Usage
 
-#### Agents
+#### Start a Session
 
 ```bash
-# List all available agents
-generator agents list
+# Interactive session (attaches to container TTY)
+claude-forge start
 
-# Generate prompt for a specific agent
-generator agents golang-engineer
-generator agents software-architect
+# Non-interactive with a prompt
+claude-forge start -p "Fix the flaky test in auth_test.go"
+
+# With worktree mode
+claude-forge start --worktree
+
+# Without --dangerously-skip-permissions
+claude-forge start --no-skip-permissions
 ```
 
-Available agents:
-- `golang-engineer` - Go development with full verification and testing
-- `golang-code-reviewer` - Review Go code for best practices
-- `typescript-engineer` - TypeScript/Next.js development with testing
-- `typescript-code-reviewer` - Review TypeScript code
-- `software-architect` - Design software architecture and API specifications
-- `architecture-reviewer` - Review architectural designs
-- `github-actions-workflow-engineer` - Create and test GitHub Actions workflows
-
-#### Commands
+#### Resume a Session
 
 ```bash
-# List all available commands
-generator commands list
+# Resume the most recent session
+claude-forge resume
 
-# Generate prompt for a specific command
-generator commands feature
-generator commands fix
+# List available sessions
+claude-forge resume --list
+
+# Resume a specific session by ID
+claude-forge resume <session-id>
 ```
 
-Available commands:
-- `feature` - Add or update a feature with architecture design and review
-- `fix` - Fix a bug by reproducing, understanding root cause, and planning fixes
-- `refactor` - Refactor code with structured workflow
-- `document-guideline` - Create comprehensive project guidelines
-- `document-guideline-monorepo` - Create guidelines for monorepo subprojects
-- `split-pr` - Split large PRs into smaller, reviewable child PRs
-
-#### Skills
+#### Manage Containers
 
 ```bash
-# List all available skills
-generator skills list
+# Show running containers
+claude-forge status
 
-# Generate prompt for a specific skill
-generator skills coding
-generator skills ci-error-fix
+# Stop containers for the current project
+claude-forge stop
 ```
 
-Available skills:
-- `coding` - Iterative development with Test-Driven Development (TDD)
-- `ci-error-fix` - Fix CI errors systematically
-
-#### Custom Templates
-
-Use your own templates by specifying a custom template directory:
+#### Other Commands
 
 ```bash
-generator agents --template-dir /path/to/templates golang-engineer
-generator commands -t /path/to/templates feature
+# Pull/rebuild Docker images
+claude-forge build
+
+# Verify authentication credentials
+claude-forge auth
+
+# Show version
+claude-forge version
 ```
 
-## Testing
+### Configuration
 
-### Unit Tests
+Configuration is stored in `~/.config/claude-forge/config.yaml`:
 
-```bash
-# Run all unit tests
-go test ./...
+```yaml
+# Override Docker images (defaults to GHCR.io images)
+images:
+  agent: ghcr.io/michael-freling/claude-forge-agent:latest
+  gateway: ghcr.io/michael-freling/claude-forge-gateway:latest
 
-# Run with coverage
-go test -coverprofile=coverage.txt ./...
-go tool cover -func=coverage.txt
+# Default flags
+defaults:
+  skip_permissions: true
+  worktree: false
 ```
 
-### E2E Tests
+### Authentication
 
-E2E tests use real git, gh, and claude CLI commands. They are separated using Go build tags.
+`claude-forge` resolves credentials in this order:
 
-```bash
-# Run e2e tests using the script (recommended)
-./scripts/run-e2e-tests.sh
+1. `ANTHROPIC_API_KEY` environment variable
+2. `CLAUDE_CODE_OAUTH_TOKEN` environment variable
+3. `~/.claude/.credentials.json` (written by `claude` CLI login)
 
-# Run e2e tests directly
-go test -tags=e2e ./test/e2e/...
+Run `claude-forge auth` to verify your credentials are detected.
 
-# Run with verbose output
-E2E_VERBOSE=true ./scripts/run-e2e-tests.sh
-```
+### How It Works
 
-See [test/e2e/README.md](test/e2e/README.md) for detailed e2e testing documentation.
+When you run `claude-forge start`, it:
+
+1. Detects the current project (git remote, directory)
+2. Resolves authentication credentials
+3. Creates a Docker network for the session
+4. Starts a **gateway** container that proxies GitHub traffic with write restrictions
+5. Starts an **agent** container running Claude Code with your project mounted at `/work`
+6. Attaches your terminal (interactive) or waits for completion (with `-p`)
+
+The gateway ensures Claude Code can freely read from any GitHub repository but can only push to or create PRs on the current project's repository.
 
 ## License
 

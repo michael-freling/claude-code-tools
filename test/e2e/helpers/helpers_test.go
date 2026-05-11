@@ -2,6 +2,7 @@ package helpers
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -270,4 +271,70 @@ func TestCleanupOnFailure(t *testing.T) {
 	})
 
 	assert.False(t, cleaned, "cleanup should not run immediately")
+}
+
+func TestCloneRepo(t *testing.T) {
+	RequireGit(t)
+
+	// Create a bare repository to serve as the remote
+	bareDir, err := os.MkdirTemp("", "bare-repo-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(bareDir)
+
+	// Initialize bare repo
+	cmd := exec.Command("git", "init", "--bare", bareDir)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "failed to init bare repo: %s", string(output))
+
+	repo := CloneRepo(t, bareDir)
+
+	require.NotEmpty(t, repo.Dir)
+	assert.DirExists(t, repo.Dir)
+	assert.DirExists(t, filepath.Join(repo.Dir, ".git"))
+}
+
+func TestRequireClaude(t *testing.T) {
+	// This test exercises the RequireClaude path. If claude is available,
+	// the function returns normally. If not, it skips the test.
+	RequireClaude(t)
+}
+
+func TestRequireGHAuth(t *testing.T) {
+	RequireGHAuth(t)
+}
+
+func TestClaudeVersion(t *testing.T) {
+	if !IsCLIAvailable() {
+		t.Skip("claude not available, skipping version test")
+	}
+
+	version := ClaudeVersion(t)
+	require.NotEmpty(t, version)
+}
+
+func TestTempRepo_Commit_NothingStaged(t *testing.T) {
+	RequireGit(t)
+
+	repo := NewTempRepo(t)
+
+	// Commit with nothing staged should fail
+	err := repo.Commit("empty commit")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to commit")
+}
+
+func TestCleanupDir_NonExistentDir(t *testing.T) {
+	// Cleaning up a non-existent directory should succeed (os.RemoveAll is idempotent)
+	CleanupDir(t, "/tmp/nonexistent-test-dir-abc123xyz")
+}
+
+func TestTempRepo_CreateBranch_InvalidName(t *testing.T) {
+	RequireGit(t)
+
+	repo := NewTempRepo(t)
+
+	// Branch names with spaces are invalid in git
+	err := repo.CreateBranch("invalid branch name")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create branch")
 }
