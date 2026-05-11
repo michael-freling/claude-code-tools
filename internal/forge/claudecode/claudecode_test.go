@@ -668,6 +668,75 @@ func TestReadHostTheme_EmptyThemeString(t *testing.T) {
 	assert.Equal(t, "dark", theme)
 }
 
+func TestReadHostModel(t *testing.T) {
+	t.Run("returns model from valid settings.json", func(t *testing.T) {
+		claudeDir := t.TempDir()
+		settings := `{"model": "claude-opus-4-6", "autoUpdaterStatus": "disabled"}`
+		require.NoError(t, os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(settings), 0o644))
+
+		model := ReadHostModel(claudeDir)
+		assert.Equal(t, "claude-opus-4-6", model)
+	})
+
+	t.Run("returns empty string when file missing", func(t *testing.T) {
+		claudeDir := t.TempDir()
+
+		model := ReadHostModel(claudeDir)
+		assert.Equal(t, "", model)
+	})
+
+	t.Run("returns empty string for invalid JSON", func(t *testing.T) {
+		claudeDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(`{invalid`), 0o644))
+
+		model := ReadHostModel(claudeDir)
+		assert.Equal(t, "", model)
+	})
+
+	t.Run("returns empty string when model key missing", func(t *testing.T) {
+		claudeDir := t.TempDir()
+		settings := `{"autoUpdaterStatus": "disabled"}`
+		require.NoError(t, os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(settings), 0o644))
+
+		model := ReadHostModel(claudeDir)
+		assert.Equal(t, "", model)
+	})
+
+	t.Run("returns empty string when model is empty string", func(t *testing.T) {
+		claudeDir := t.TempDir()
+		settings := `{"model": ""}`
+		require.NoError(t, os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(settings), 0o644))
+
+		model := ReadHostModel(claudeDir)
+		assert.Equal(t, "", model)
+	})
+}
+
+func TestBuildEnv_ModelEnvVar(t *testing.T) {
+	t.Run("sets ANTHROPIC_MODEL when model is set", func(t *testing.T) {
+		opts := Options{
+			AuthToken: "sk-test",
+			AuthType:  "api_key",
+			Model:     "claude-opus-4-6",
+		}
+
+		env := buildEnv(opts)
+		assert.Equal(t, "claude-opus-4-6", env["ANTHROPIC_MODEL"])
+	})
+
+	t.Run("does not set ANTHROPIC_MODEL when model is empty", func(t *testing.T) {
+		opts := Options{
+			AuthToken: "sk-test",
+			AuthType:  "api_key",
+			Model:     "",
+		}
+
+		env := buildEnv(opts)
+		_, exists := env["ANTHROPIC_MODEL"]
+		assert.False(t, exists, "ANTHROPIC_MODEL should not be set")
+	})
+}
+
 func TestDetectCacheDirs(t *testing.T) {
 	t.Run("go caches from host plus forge caches always present", func(t *testing.T) {
 		homeDir := t.TempDir()

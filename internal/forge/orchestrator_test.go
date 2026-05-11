@@ -536,6 +536,65 @@ func TestStart_ImageExistsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to check image")
 }
 
+func TestStart_HostModelPropagation(t *testing.T) {
+	t.Run("sets ANTHROPIC_MODEL when host has model configured", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+
+		mockCM := NewMockContainerManager(ctrl)
+		orch, homeDir := setupOrchestrator(t, mockCM)
+
+		projectDir := setupGitProject(t)
+		t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+
+		// Write model to host's ~/.claude/settings.json
+		settings := `{"model": "claude-opus-4-6"}`
+		require.NoError(t, os.WriteFile(filepath.Join(homeDir, ".claude", "settings.json"), []byte(settings), 0o644))
+
+		mockCM.EXPECT().ImageExists(gomock.Any(), gomock.Any()).Return(true, nil).Times(2)
+		mockCM.EXPECT().CreateNetwork(gomock.Any(), gomock.Any()).Return("net-id", nil)
+		mockCM.EXPECT().StartGateway(gomock.Any(), gomock.Any()).Return("gw-id", nil)
+		mockCM.EXPECT().StartAgent(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, opts container.AgentOptions) (string, error) {
+				assert.Equal(t, "claude-opus-4-6", opts.Env["ANTHROPIC_MODEL"])
+				return "agent-id", nil
+			})
+
+		sess, err := orch.Start(context.Background(), StartOptions{
+			ProjectDir: projectDir,
+		})
+
+		require.NoError(t, err)
+		assert.NotNil(t, sess)
+	})
+
+	t.Run("does not set ANTHROPIC_MODEL when host has no model", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+
+		mockCM := NewMockContainerManager(ctrl)
+		orch, _ := setupOrchestrator(t, mockCM)
+
+		projectDir := setupGitProject(t)
+		t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+
+		mockCM.EXPECT().ImageExists(gomock.Any(), gomock.Any()).Return(true, nil).Times(2)
+		mockCM.EXPECT().CreateNetwork(gomock.Any(), gomock.Any()).Return("net-id", nil)
+		mockCM.EXPECT().StartGateway(gomock.Any(), gomock.Any()).Return("gw-id", nil)
+		mockCM.EXPECT().StartAgent(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, opts container.AgentOptions) (string, error) {
+				_, exists := opts.Env["ANTHROPIC_MODEL"]
+				assert.False(t, exists, "ANTHROPIC_MODEL should not be set when host has no model")
+				return "agent-id", nil
+			})
+
+		sess, err := orch.Start(context.Background(), StartOptions{
+			ProjectDir: projectDir,
+		})
+
+		require.NoError(t, err)
+		assert.NotNil(t, sess)
+	})
+}
+
 func TestStop_ListContainersError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 

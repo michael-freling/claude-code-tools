@@ -219,6 +219,11 @@ func (o *Orchestrator) Start(ctx context.Context, opts StartOptions) (*Session, 
 		agentEnv["FORGE_GID"] = fmt.Sprintf("%d", opts.GID)
 	}
 
+	// Read host model preference and propagate to container
+	if model := claudecode.ReadHostModel(o.ClaudeDir); model != "" {
+		agentEnv["ANTHROPIC_MODEL"] = model
+	}
+
 	// Convert cache dirs
 	var containerCacheDirs []container.CacheDir
 	for _, cd := range cacheDirs {

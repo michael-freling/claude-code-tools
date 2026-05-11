@@ -29,6 +29,7 @@ type Options struct {
 	Prompt          string // Pass -p "<prompt>" to Claude Code
 	Resume          string // Pass --resume <session-id> to Claude Code
 	Continue        bool   // Pass --continue to Claude Code (resume most recent)
+	Model           string // Claude Code model override (e.g. "claude-opus-4-6")
 
 	// Paths
 	ProjectDir string // Host path to the project directory
@@ -105,6 +106,9 @@ func buildEnv(opts Options) map[string]string {
 	}
 	if opts.GID > 0 {
 		env["FORGE_GID"] = fmt.Sprintf("%d", opts.GID)
+	}
+	if opts.Model != "" {
+		env["ANTHROPIC_MODEL"] = opts.Model
 	}
 	return env
 }
@@ -324,6 +328,26 @@ func readHostTheme(homeDir string) string {
 		return theme
 	}
 	return "dark"
+}
+
+// ReadHostModel reads the model from the host's ~/.claude/settings.json.
+// Returns an empty string if the file doesn't exist, can't be parsed, or the model isn't set.
+func ReadHostModel(claudeDir string) string {
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return ""
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return ""
+	}
+
+	if model, ok := parsed["model"].(string); ok && model != "" {
+		return model
+	}
+	return ""
 }
 
 // CacheDir represents a host dependency cache directory to mount into the container.
