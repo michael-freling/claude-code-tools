@@ -298,19 +298,24 @@ func TestStartAgent_Mounts(t *testing.T) {
 	mockAPI.EXPECT().
 		ContainerCreate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		DoAndReturn(func(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, netConfig *network.NetworkingConfig, name string) (container.CreateResponse, error) {
-			mountTargets := make(map[string]bool)
+			mountsByTarget := make(map[string]string)
 			for _, m := range hostConfig.Mounts {
-				mountTargets[m.Target] = true
+				mountsByTarget[m.Target] = m.Source
 			}
 
-			assert.True(t, mountTargets["/work"], "project mount missing")
-			assert.True(t, mountTargets["/home/user/.claude/rules"], "claude rules mount missing")
-			assert.True(t, mountTargets["/home/user/.claude/agents"], "claude agents mount missing")
-			assert.True(t, mountTargets["/home/user/.claude/commands"], "claude commands mount missing")
-			assert.True(t, mountTargets["/home/user/.claude/skills"], "claude skills mount missing")
-			assert.True(t, mountTargets["/home/user/.claude/settings.json"], "settings.json mount missing")
-			assert.True(t, mountTargets["/home/user/.gitconfig"], "gitconfig mount missing")
-			assert.True(t, mountTargets["/home/user/CLAUDE.md"], "home CLAUDE.md mount missing")
+			assert.Contains(t, mountsByTarget, "/work", "project mount missing")
+			assert.Contains(t, mountsByTarget, "/home/user/.claude/rules", "claude rules mount missing")
+			assert.Contains(t, mountsByTarget, "/home/user/.claude/agents", "claude agents mount missing")
+			assert.Contains(t, mountsByTarget, "/home/user/.claude/commands", "claude commands mount missing")
+			assert.Contains(t, mountsByTarget, "/home/user/.claude/skills", "claude skills mount missing")
+			assert.Contains(t, mountsByTarget, "/home/user/.claude/settings.json", "settings.json mount missing")
+			assert.Contains(t, mountsByTarget, "/home/user/.gitconfig", "gitconfig mount missing")
+			assert.Contains(t, mountsByTarget, "/home/user/CLAUDE.md", "home CLAUDE.md mount missing")
+
+			// Session dir mounts at /home/user/.claude/projects (parent) so Claude Code's
+			// writes under -work/ and -work-.claude-worktrees-*/ both reach the host.
+			assert.Equal(t, sessionDir, mountsByTarget["/home/user/.claude/projects"],
+				"session dir mount missing or pointed at wrong source")
 
 			return container.CreateResponse{ID: "c-123"}, nil
 		})
@@ -1406,37 +1411,6 @@ func TestContainerLogs(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantLogs, logs)
-		})
-	}
-}
-
-func TestExtractProjectID(t *testing.T) {
-	tests := []struct {
-		name          string
-		containerName string
-		want          string
-	}{
-		{
-			name:          "agent container name",
-			containerName: "forge-agent-my-project-session1",
-			want:          "my-project-session1",
-		},
-		{
-			name:          "gateway container name",
-			containerName: "forge-gateway-my-project-session1",
-			want:          "my-project-session1",
-		},
-		{
-			name:          "unknown prefix",
-			containerName: "other-container",
-			want:          "other-container",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractProjectID(tt.containerName)
-			assert.Equal(t, tt.want, got)
 		})
 	}
 }

@@ -38,12 +38,12 @@ func TestList(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "multiple sessions sorted by most recent first",
+			name: "multiple sessions in -work subdir sorted by most recent first",
 			files: map[string]string{
-				"session-1.jsonl": `{"type":"system","timestamp":"2026-05-08T14:30:00Z","message":"init"}
+				"-work/session-1.jsonl": `{"type":"system","timestamp":"2026-05-08T14:30:00Z","message":"init"}
 {"type":"human","timestamp":"2026-05-08T14:30:01Z","message":"Hello world"}
 {"type":"assistant","timestamp":"2026-05-08T14:30:02Z","message":"Hi there"}`,
-				"session-2.jsonl": `{"type":"system","timestamp":"2026-05-09T10:00:00Z","message":"init"}
+				"-work/session-2.jsonl": `{"type":"system","timestamp":"2026-05-09T10:00:00Z","message":"init"}
 {"type":"human","timestamp":"2026-05-09T10:00:01Z","message":"Fix the bug"}`,
 			},
 			want: []Session{
@@ -56,6 +56,41 @@ func TestList(t *testing.T) {
 					ID:        "session-1",
 					CreatedAt: time.Date(2026, 5, 8, 14, 30, 0, 0, time.UTC),
 					FirstMsg:  "Hello world",
+				},
+			},
+		},
+		{
+			name: "sessions from worktree subdirs are also surfaced",
+			files: map[string]string{
+				"-work/main.jsonl": `{"type":"system","timestamp":"2026-05-08T14:30:00Z","message":"init"}
+{"type":"human","timestamp":"2026-05-08T14:30:01Z","message":"main work"}`,
+				"-work-.claude-worktrees-feature/wt.jsonl": `{"type":"system","timestamp":"2026-05-10T09:00:00Z","message":"init"}
+{"type":"human","timestamp":"2026-05-10T09:00:01Z","message":"worktree work"}`,
+			},
+			want: []Session{
+				{
+					ID:        "wt",
+					CreatedAt: time.Date(2026, 5, 10, 9, 0, 0, 0, time.UTC),
+					FirstMsg:  "worktree work",
+				},
+				{
+					ID:        "main",
+					CreatedAt: time.Date(2026, 5, 8, 14, 30, 0, 0, time.UTC),
+					FirstMsg:  "main work",
+				},
+			},
+		},
+		{
+			name: "jsonl files placed directly in sessionDir are still picked up",
+			files: map[string]string{
+				"legacy.jsonl": `{"type":"system","timestamp":"2026-05-08T14:30:00Z","message":"init"}
+{"type":"human","timestamp":"2026-05-08T14:30:01Z","message":"legacy session"}`,
+			},
+			want: []Session{
+				{
+					ID:        "legacy",
+					CreatedAt: time.Date(2026, 5, 8, 14, 30, 0, 0, time.UTC),
+					FirstMsg:  "legacy session",
 				},
 			},
 		},
@@ -112,8 +147,9 @@ func TestList(t *testing.T) {
 			tmpDir := t.TempDir()
 
 			for name, content := range tt.files {
-				err := os.WriteFile(filepath.Join(tmpDir, name), []byte(content), 0o644)
-				require.NoError(t, err)
+				full := filepath.Join(tmpDir, name)
+				require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
+				require.NoError(t, os.WriteFile(full, []byte(content), 0o644))
 			}
 
 			got, err := List(tmpDir)

@@ -192,15 +192,16 @@ Each container instance receives only the access token at startup via environmen
 | Host path | Container path | Mode | Purpose |
 |---|---|---|---|
 | Project dir | `/work` | `rw` | Workspace |
-| `~/.claude-forge/<project-id>/` | `/home/user/.claude/projects/<project-id>/` | `rw` | Per-project session history and memory |
+| `~/.claude-forge/<project-id>/` | `/home/user/.claude/projects/` | `rw` | Per-project session history and memory (covers both `-work/` and any `-work-.claude-worktrees-<name>/` buckets Claude Code creates) |
 | `~/CLAUDE.md` | `/home/user/CLAUDE.md` | `ro` | User-level instructions (if exists) |
 | `~/.claude/CLAUDE.md` | `/home/user/.claude/CLAUDE.md` | `ro` | User-level instructions (if exists) |
 | `~/.claude/rules/` | `/home/user/.claude/rules/` | `ro` | User-level rules |
 | `~/.claude/agents/` | `/home/user/.claude/agents/` | `ro` | User-level sub-agents |
 | `~/.claude/commands/` | `/home/user/.claude/commands/` | `ro` | User-level commands |
 | `~/.claude/skills/` | `/home/user/.claude/skills/` | `ro` | User-level skills |
+| `~/.claude/plugins/` | `/home/user/.claude/plugins/` | `ro` | User-level Claude Code plugins (if exists) |
 | `~/.config/claude-forge/settings.json` | `/home/user/.claude/settings.json` | `ro` | Claude Code config (if exists) |
-| `~/.config/claude-forge/gitconfig` | `/home/user/.gitconfig` | `ro` | Git config (user identity + proxy routing) |
+| `~/.config/claude-forge/gitconfig` | `/home/user/.gitconfig` | `ro` | Git config (user identity + proxy routing + `worktree.useRelativePaths`) |
 
 ### Environment Variables
 
@@ -332,24 +333,25 @@ Normalized to `owner=michael-freling`, `repo=claude-code-tools`. Passed to gatew
 
 ```
 ~/.claude-forge/
-└── <project-id>/
-    ├── <session-id>.jsonl        ← conversation transcript
-    ├── <session-id>/
-    │   └── tool-results/         ← large tool outputs
-    └── memory/
-        ├── MEMORY.md             ← auto memory
-        └── *.md                  ← topic files
+└── <project-id>/                 ← mangled host project path
+    ├── -work/                    ← Claude Code's bucket for cwd=/work
+    │   ├── <session-id>.jsonl    ← conversation transcript
+    │   └── memory/
+    │       ├── MEMORY.md         ← auto memory
+    │       └── *.md              ← topic files
+    └── -work-.claude-worktrees-<name>/   ← bucket for each --worktree cwd
+        └── <session-id>.jsonl
 ```
 
-**Project ID** is derived from the container's workspace path (`/work`), not the host path. Since the workspace is always mounted at `/work`, the project-id is always `-work`.
+`<project-id>` on the host is the mangled absolute path of the project on the host (e.g. `-home-user-foo`), which gives each project its own session directory.
 
-This directory is mounted into the container at `/home/user/.claude/projects/-work/` so Claude Code finds its sessions in the expected location.
+The host path `~/.claude-forge/<project-id>/` is mounted into the container at `/home/user/.claude/projects/` (the parent). Claude Code in the container writes session files under a subdirectory derived from its cwd — `-work/` for the main workspace and `-work-.claude-worktrees-<name>/` for each worktree — so all of those buckets persist to the host through a single bind mount.
 
 ### Session Listing for `resume`
 
-`claude-forge resume --list` reads `.jsonl` files from `~/.claude-forge/-work/`:
+`claude-forge resume --list` walks one level of subdirectories under `~/.claude-forge/<project-id>/` and reads every `.jsonl`:
 - Parses each file for session ID (filename), creation timestamp (first entry), and first user message
-- Displays as a table sorted by recency
+- Surfaces both main-workspace and worktree sessions in one table sorted by recency
 
 `claude-forge resume <id>` starts the container with `claude --resume <id>`.
 

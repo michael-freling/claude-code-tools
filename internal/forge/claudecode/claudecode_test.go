@@ -19,7 +19,7 @@ func TestBuildContainerConfig_FullOptions(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(homeDir, "CLAUDE.md"), []byte("# Home"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(homeDir, ".claude"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(homeDir, ".claude", "CLAUDE.md"), []byte("# DotClaude"), 0o644))
-	for _, subdir := range []string{"rules", "agents", "commands", "skills"} {
+	for _, subdir := range []string{"rules", "agents", "commands", "skills", "plugins"} {
 		require.NoError(t, os.MkdirAll(filepath.Join(homeDir, ".claude", subdir), 0o755))
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "settings.json"), []byte(`{}`), 0o644))
@@ -59,8 +59,8 @@ func TestBuildContainerConfig_FullOptions(t *testing.T) {
 	assert.Contains(t, cfg.Cmd, "hello world")
 
 	// Mounts: project dir + session dir + home CLAUDE.md + .claude/CLAUDE.md +
-	// 4 subdirs + settings.json + gitconfig = 10
-	assert.Len(t, cfg.Mounts, 10)
+	// 5 subdirs + settings.json + gitconfig = 11
+	assert.Len(t, cfg.Mounts, 11)
 
 	// Verify project dir mount
 	assert.Equal(t, projectDir, cfg.Mounts[0].Source)
@@ -82,8 +82,8 @@ func TestBuildContainerConfig_FullOptions(t *testing.T) {
 	assert.Equal(t, "/home/user/.claude/CLAUDE.md", cfg.Mounts[3].Target)
 	assert.True(t, cfg.Mounts[3].ReadOnly)
 
-	// Verify subdirectory mounts (rules, agents, commands, skills)
-	subdirs := []string{"rules", "agents", "commands", "skills"}
+	// Verify subdirectory mounts (rules, agents, commands, skills, plugins)
+	subdirs := []string{"rules", "agents", "commands", "skills", "plugins"}
 	for i, subdir := range subdirs {
 		idx := 4 + i
 		assert.Equal(t, filepath.Join(homeDir, ".claude", subdir), cfg.Mounts[idx].Source)
@@ -92,14 +92,14 @@ func TestBuildContainerConfig_FullOptions(t *testing.T) {
 	}
 
 	// Verify settings.json mount
-	assert.Equal(t, filepath.Join(configDir, "settings.json"), cfg.Mounts[8].Source)
-	assert.Equal(t, "/home/user/.claude/settings.json", cfg.Mounts[8].Target)
-	assert.True(t, cfg.Mounts[8].ReadOnly)
+	assert.Equal(t, filepath.Join(configDir, "settings.json"), cfg.Mounts[9].Source)
+	assert.Equal(t, "/home/user/.claude/settings.json", cfg.Mounts[9].Target)
+	assert.True(t, cfg.Mounts[9].ReadOnly)
 
 	// Verify gitconfig mount
-	assert.Equal(t, filepath.Join(configDir, "gitconfig"), cfg.Mounts[9].Source)
-	assert.Equal(t, "/home/user/.gitconfig", cfg.Mounts[9].Target)
-	assert.True(t, cfg.Mounts[9].ReadOnly)
+	assert.Equal(t, filepath.Join(configDir, "gitconfig"), cfg.Mounts[10].Source)
+	assert.Equal(t, "/home/user/.gitconfig", cfg.Mounts[10].Target)
+	assert.True(t, cfg.Mounts[10].ReadOnly)
 
 	// Gitconfig content
 	assert.Contains(t, cfg.Gitconfig, "Test User")
@@ -332,6 +332,8 @@ func TestGenerateGitconfig(t *testing.T) {
 	assert.Contains(t, result, `[user]`)
 	assert.Contains(t, result, `name = Jane Doe`)
 	assert.Contains(t, result, `email = jane@example.com`)
+	assert.Contains(t, result, `[worktree]`)
+	assert.Contains(t, result, `useRelativePaths = true`)
 }
 
 func TestGenerateGitconfig_EmptyUserInfo(t *testing.T) {

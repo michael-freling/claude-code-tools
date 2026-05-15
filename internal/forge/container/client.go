@@ -201,19 +201,22 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOptions) (string, err
 		},
 	}
 
-	// Session directory mount
+	// Session directory mount.
+	// Mounted at the projects parent so Claude Code's session JSONL files for both
+	// the main /work cwd (encoded as -work) and any worktree cwd (encoded as
+	// -work-.claude-worktrees-<name>) persist to the host.
 	if opts.SessionDir != "" {
 		mounts = append(mounts, mount.Mount{
 			Type:   mount.TypeBind,
 			Source: opts.SessionDir,
-			Target: "/home/user/.claude/projects/" + extractProjectID(opts.Name),
+			Target: "/home/user/.claude/projects",
 		})
 	}
 
-	// Claude dir mounts (read-only) for rules, agents, commands, skills, CLAUDE.md.
+	// Claude dir mounts (read-only) for rules, agents, commands, skills, plugins, CLAUDE.md.
 	// Resolve symlinks so Docker gets the real path, and skip dirs that don't exist.
 	if opts.ClaudeDir != "" {
-		claudeSubdirs := []string{"rules", "agents", "commands", "skills"}
+		claudeSubdirs := []string{"rules", "agents", "commands", "skills", "plugins"}
 		for _, subdir := range claudeSubdirs {
 			source := filepath.Join(opts.ClaudeDir, subdir)
 			resolved, err := filepath.EvalSymlinks(source)
@@ -510,15 +513,4 @@ func (c *Client) ImageExists(ctx context.Context, imageName string) (bool, error
 	}
 
 	return len(images) > 0, nil
-}
-
-// extractProjectID extracts the project ID portion from a container name.
-// Container names follow the pattern: forge-agent-<project-id>-<session-id>
-// or forge-gateway-<project-id>-<session-id>
-func extractProjectID(containerName string) string {
-	// Remove the prefix to get project-id-session-id
-	name := containerName
-	name = strings.TrimPrefix(name, "forge-agent-")
-	name = strings.TrimPrefix(name, "forge-gateway-")
-	return name
 }

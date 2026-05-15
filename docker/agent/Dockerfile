@@ -26,8 +26,13 @@ ENV PATH="${GOPATH}/bin:${PATH}"
 RUN apt-get update && apt-get install -y docker.io \
     && rm -rf /var/lib/apt/lists/*
 
-# Common CLIs used by Claude Code
-RUN apt-get update && apt-get install -y \
+# Common CLIs used by Claude Code.
+# Install git from ppa:git-core/ppa to get >= 2.48, which is needed for
+# worktree.useRelativePaths so Claude Code's --worktree creates a .git file that
+# resolves correctly both inside the container (cwd=/work) and on the host.
+RUN apt-get update && apt-get install -y software-properties-common \
+    && add-apt-repository -y ppa:git-core/ppa \
+    && apt-get update && apt-get install -y \
     bash git curl jq make ripgrep \
     tar unzip openssh-client \
     && rm -rf /var/lib/apt/lists/*

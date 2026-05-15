@@ -159,6 +159,43 @@ Reply with the raw command outputs only, no other text.`
 	for _, c := range containers {
 		t.Errorf("forge container still running after exit: %s (image=%s, status=%s)", c.Name, c.Image, c.Status)
 	}
+
+	// Step 8: Verify the session JSONL was persisted to the host so
+	// `claude-forge resume --list` can find it. Claude Code in the container
+	// (cwd=/work) writes sessions under the encoded path -work/.
+	projectID := strings.ReplaceAll(projectRoot, "/", "-")
+	hostSessionDir := filepath.Join(tempHome, ".claude-forge", projectID, "-work")
+	entries, err := os.ReadDir(hostSessionDir)
+	require.NoError(t, err, "expected session dir %s to exist on host", hostSessionDir)
+
+	var sessionFile string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
+			sessionFile = e.Name()
+			break
+		}
+	}
+	require.NotEmpty(t, sessionFile, "expected at least one .jsonl session file under %s", hostSessionDir)
+	t.Logf("session file persisted to host: %s", filepath.Join(hostSessionDir, sessionFile))
+
+	// Step 9: `claude-forge resume --list` must surface that session.
+	// resume reads from the host, so it does not need Docker or auth.
+	listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer listCancel()
+	listCmd := exec.CommandContext(listCtx, binaryPath, "resume", "--list")
+	listCmd.Dir = projectRoot
+	listCmd.Env = append(os.Environ(), "HOME="+tempHome)
+
+	listOutput, listErr := listCmd.CombinedOutput()
+	listOutStr := string(listOutput)
+	t.Logf("claude-forge resume --list output:\n%s", listOutStr)
+	require.NoError(t, listErr, "resume --list failed: %s", listOutStr)
+
+	assert.NotContains(t, listOutStr, "No sessions found.",
+		"resume --list should not be empty after a session was created")
+	expectedID := strings.TrimSuffix(sessionFile, ".jsonl")
+	assert.Contains(t, listOutStr, expectedID,
+		"resume --list should include the session ID %s", expectedID)
 }
 
 // TestForgeStart_NoGitHubAuth verifies that claude-forge fails with a clear
