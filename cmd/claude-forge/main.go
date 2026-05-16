@@ -95,7 +95,7 @@ func newOrchestrator() (*forge.Orchestrator, func(), error) {
 }
 
 // startSession runs the common logic for the start and resume commands.
-func startSession(skipPermissions, worktree bool, prompt, resumeID string, continueSession bool) error {
+func startSession(skipPermissions, worktree bool, prompt, resumeID string, continueSession bool, mounts []string) error {
 	orch, cleanup, err := createOrchestrator()
 	if err != nil {
 		return err
@@ -116,6 +116,7 @@ func startSession(skipPermissions, worktree bool, prompt, resumeID string, conti
 		Interactive:     interactive,
 		UID:             hostUID,
 		GID:             hostGID,
+		Mounts:          mounts,
 	})
 	if err != nil {
 		return err
@@ -163,6 +164,7 @@ func newStartCmd() *cobra.Command {
 		worktree          bool
 		noSkipPermissions bool
 		prompt            string
+		mounts            []string
 	)
 
 	cmd := &cobra.Command{
@@ -173,13 +175,14 @@ By default, --dangerously-skip-permissions is enabled. Use --no-skip-permissions
 to disable it.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			skipPermissions := !noSkipPermissions
-			return startSession(skipPermissions, worktree, prompt, "", false)
+			return startSession(skipPermissions, worktree, prompt, "", false, mounts)
 		},
 	}
 
 	cmd.Flags().BoolVar(&worktree, "worktree", false, "Enable worktree mode for Claude Code")
 	cmd.Flags().BoolVar(&noSkipPermissions, "no-skip-permissions", false, "Disable --dangerously-skip-permissions")
 	cmd.Flags().StringVarP(&prompt, "prompt", "p", "", "Initial prompt to send to Claude Code")
+	cmd.Flags().StringArrayVar(&mounts, "mount", nil, "Additional host directories to mount (format: host_path:container_path)")
 
 	return cmd
 }
@@ -235,10 +238,10 @@ is continued.`,
 			}
 
 			if len(args) == 1 {
-				return startSession(true, false, "", args[0], false)
+				return startSession(true, false, "", args[0], false, nil)
 			}
 
-			return startSession(true, false, "", "", true)
+			return startSession(true, false, "", "", true, nil)
 		},
 	}
 

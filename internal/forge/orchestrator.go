@@ -45,10 +45,11 @@ type StartOptions struct {
 	Prompt          string
 	ResumeID        string
 	Continue        bool
-	Interactive     bool   // allocate TTY for docker attach (false for prompt mode)
-	ProjectDir      string // working directory (defaults to cwd if empty)
-	UID             int    // host user UID
-	GID             int    // host user GID
+	Interactive     bool     // allocate TTY for docker attach (false for prompt mode)
+	ProjectDir      string   // working directory (defaults to cwd if empty)
+	UID             int      // host user UID
+	GID             int      // host user GID
+	Mounts          []string // additional host:container bind mounts
 }
 
 // Session holds information about a running session.
@@ -242,6 +243,26 @@ func (o *Orchestrator) Start(ctx context.Context, opts StartOptions) (*Session, 
 		})
 	}
 
+	// Parse extra mounts (host:container format)
+	var extraMounts []container.CacheDir
+	for _, m := range opts.Mounts {
+		parts := strings.SplitN(m, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid mount format %q: expected host_path:container_path", m)
+		}
+		source, err := filepath.Abs(parts[0])
+		if err != nil {
+			return nil, fmt.Errorf("invalid mount source path %q: %w", parts[0], err)
+		}
+		if _, err := os.Stat(source); err != nil {
+			return nil, fmt.Errorf("mount source path does not exist: %s", source)
+		}
+		extraMounts = append(extraMounts, container.CacheDir{
+			Source: source,
+			Target: parts[1],
+		})
+	}
+
 	// Start agent
 	o.Log("Starting agent: %s", sess.AgentName)
 	if _, err := o.Containers.StartAgent(ctx, container.AgentOptions{
@@ -259,6 +280,7 @@ func (o *Orchestrator) Start(ctx context.Context, opts StartOptions) (*Session, 
 		UID:         opts.UID,
 		GID:         opts.GID,
 		CacheDirs:   containerCacheDirs,
+		ExtraMounts: extraMounts,
 	}); err != nil {
 		o.Cleanup(ctx, sess)
 		return nil, fmt.Errorf("failed to start agent: %w", err)

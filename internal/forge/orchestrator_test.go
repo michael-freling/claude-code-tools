@@ -664,3 +664,95 @@ func TestStop_NonGitDirectory(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to identify project")
 }
+
+func TestStart_ExtraMounts(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	mockCM := NewMockContainerManager(ctrl)
+	orch, _ := setupOrchestrator(t, mockCM)
+
+	projectDir := setupGitProject(t)
+	mountSource := t.TempDir()
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+
+	mockCM.EXPECT().ImageExists(gomock.Any(), gomock.Any()).Return(true, nil).Times(2)
+	mockCM.EXPECT().CreateNetwork(gomock.Any(), gomock.Any()).Return("net-id", nil)
+	mockCM.EXPECT().StartGateway(gomock.Any(), gomock.Any()).Return("gw-id", nil)
+	mockCM.EXPECT().WaitForReady(gomock.Any(), "gw-id", gomock.Any()).Return(nil)
+	mockCM.EXPECT().StartAgent(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, opts container.AgentOptions) (string, error) {
+			require.Len(t, opts.ExtraMounts, 1)
+			assert.Equal(t, mountSource, opts.ExtraMounts[0].Source)
+			assert.Equal(t, "/data/shared", opts.ExtraMounts[0].Target)
+			return "agent-id", nil
+		})
+
+	sess, err := orch.Start(context.Background(), StartOptions{
+		SkipPermissions: true,
+		ProjectDir:      projectDir,
+		UID:             1000,
+		GID:             1000,
+		Mounts:          []string{mountSource + ":/data/shared"},
+	})
+
+	require.NoError(t, err)
+	assert.NotEmpty(t, sess.AgentName)
+}
+
+func TestStart_ExtraMounts_InvalidFormat(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	mockCM := NewMockContainerManager(ctrl)
+	orch, _ := setupOrchestrator(t, mockCM)
+
+	projectDir := setupGitProject(t)
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+
+	mockCM.EXPECT().ImageExists(gomock.Any(), gomock.Any()).Return(true, nil).Times(2)
+	mockCM.EXPECT().CreateNetwork(gomock.Any(), gomock.Any()).Return("net-id", nil)
+	mockCM.EXPECT().StartGateway(gomock.Any(), gomock.Any()).Return("gw-id", nil)
+	mockCM.EXPECT().WaitForReady(gomock.Any(), "gw-id", gomock.Any()).Return(nil)
+	mockCM.EXPECT().ContainerLogs(gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	mockCM.EXPECT().RemoveContainer(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	mockCM.EXPECT().RemoveNetwork(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	_, err := orch.Start(context.Background(), StartOptions{
+		SkipPermissions: true,
+		ProjectDir:      projectDir,
+		UID:             1000,
+		GID:             1000,
+		Mounts:          []string{"no-colon-separator"},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid mount format")
+}
+
+func TestStart_ExtraMounts_NonexistentSource(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	mockCM := NewMockContainerManager(ctrl)
+	orch, _ := setupOrchestrator(t, mockCM)
+
+	projectDir := setupGitProject(t)
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+
+	mockCM.EXPECT().ImageExists(gomock.Any(), gomock.Any()).Return(true, nil).Times(2)
+	mockCM.EXPECT().CreateNetwork(gomock.Any(), gomock.Any()).Return("net-id", nil)
+	mockCM.EXPECT().StartGateway(gomock.Any(), gomock.Any()).Return("gw-id", nil)
+	mockCM.EXPECT().WaitForReady(gomock.Any(), "gw-id", gomock.Any()).Return(nil)
+	mockCM.EXPECT().ContainerLogs(gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	mockCM.EXPECT().RemoveContainer(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	mockCM.EXPECT().RemoveNetwork(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	_, err := orch.Start(context.Background(), StartOptions{
+		SkipPermissions: true,
+		ProjectDir:      projectDir,
+		UID:             1000,
+		GID:             1000,
+		Mounts:          []string{"/nonexistent/path/abc123:/container/path"},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mount source path does not exist")
+}
