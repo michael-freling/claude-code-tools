@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,11 +24,13 @@ type ContainerManager interface {
 	RemoveNetwork(ctx context.Context, name string) error
 	StartAgent(ctx context.Context, opts AgentOptions) (string, error)
 	StartGateway(ctx context.Context, opts GatewayOptions) (string, error)
+	WaitForReady(ctx context.Context, containerID string, timeout time.Duration) error
 	StopContainer(ctx context.Context, name string) error
 	RemoveContainer(ctx context.Context, name string) error
 	ListForgeContainers(ctx context.Context) ([]ContainerInfo, error)
 	PullImage(ctx context.Context, image string) error
 	ImageExists(ctx context.Context, image string) (bool, error)
+	ContainerLogs(ctx context.Context, containerID string) (string, error)
 	Close() error
 }
 
@@ -41,6 +44,8 @@ type DockerAPI interface {
 	ContainerStop(ctx context.Context, containerID string, options container.StopOptions) error
 	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
 	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
+	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
+	ContainerLogs(ctx context.Context, containerID string, options container.LogsOptions) (io.ReadCloser, error)
 	NetworkCreate(ctx context.Context, name string, options network.CreateOptions) (network.CreateResponse, error)
 	NetworkRemove(ctx context.Context, networkID string) error
 	ImagePull(ctx context.Context, refStr string, options image.PullOptions) (io.ReadCloser, error)
@@ -73,6 +78,14 @@ func (w *dockerAPIWrapper) ContainerRemove(ctx context.Context, containerID stri
 
 func (w *dockerAPIWrapper) ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error) {
 	return w.client.ContainerList(ctx, options)
+}
+
+func (w *dockerAPIWrapper) ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error) {
+	return w.client.ContainerInspect(ctx, containerID)
+}
+
+func (w *dockerAPIWrapper) ContainerLogs(ctx context.Context, containerID string, options container.LogsOptions) (io.ReadCloser, error) {
+	return w.client.ContainerLogs(ctx, containerID, options)
 }
 
 func (w *dockerAPIWrapper) NetworkCreate(ctx context.Context, name string, options network.CreateOptions) (network.CreateResponse, error) {
@@ -188,22 +201,31 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOptions) (string, err
 		},
 	}
 
-	// Session directory mount
+	// Session directory mount.
+	// Mounted at the projects parent so Claude Code's session JSONL files for both
+	// the main /work cwd (encoded as -work) and any worktree cwd (encoded as
+	// -work-.claude-worktrees-<name>) persist to the host.
 	if opts.SessionDir != "" {
 		mounts = append(mounts, mount.Mount{
 			Type:   mount.TypeBind,
 			Source: opts.SessionDir,
-			Target: "/home/user/.claude/projects/" + extractProjectID(opts.Name),
+			Target: "/home/user/.claude/projects",
 		})
 	}
 
-	// Claude dir mounts (read-only) for rules, agents, commands, skills, CLAUDE.md
+	// Claude dir mounts (read-only) for rules, agents, commands, skills, plugins, CLAUDE.md.
+	// Resolve symlinks so Docker gets the real path, and skip dirs that don't exist.
 	if opts.ClaudeDir != "" {
-		claudeSubdirs := []string{"rules", "agents", "commands", "skills"}
+		claudeSubdirs := []string{"rules", "agents", "commands", "skills", "plugins"}
 		for _, subdir := range claudeSubdirs {
+			source := filepath.Join(opts.ClaudeDir, subdir)
+			resolved, err := filepath.EvalSymlinks(source)
+			if err != nil {
+				continue
+			}
 			mounts = append(mounts, mount.Mount{
 				Type:     mount.TypeBind,
-				Source:   opts.ClaudeDir + "/" + subdir,
+				Source:   resolved,
 				Target:   "/home/user/.claude/" + subdir,
 				ReadOnly: true,
 			})
@@ -231,14 +253,17 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOptions) (string, err
 		})
 	}
 
-	// Home CLAUDE.md mount (read-only)
+	// Home CLAUDE.md mount (read-only) — skip if file doesn't exist or is a broken symlink
 	if opts.HomeDir != "" {
-		mounts = append(mounts, mount.Mount{
-			Type:     mount.TypeBind,
-			Source:   opts.HomeDir + "/CLAUDE.md",
-			Target:   "/home/user/CLAUDE.md",
-			ReadOnly: true,
-		})
+		claudeMDSource := filepath.Join(opts.HomeDir, "CLAUDE.md")
+		if resolved, err := filepath.EvalSymlinks(claudeMDSource); err == nil {
+			mounts = append(mounts, mount.Mount{
+				Type:     mount.TypeBind,
+				Source:   resolved,
+				Target:   "/home/user/CLAUDE.md",
+				ReadOnly: true,
+			})
+		}
 	}
 
 	// Cache directory mounts (read-write)
@@ -351,6 +376,71 @@ func (c *Client) StartGateway(ctx context.Context, opts GatewayOptions) (string,
 	return resp.ID, nil
 }
 
+// WaitForReady polls the container state until it is running or exits.
+// After the container first appears running, it re-checks after a short
+// stabilization delay to catch processes that crash immediately on startup.
+// Returns an error if the container exits before the timeout.
+func (c *Client) WaitForReady(ctx context.Context, containerID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	pollInterval := 200 * time.Millisecond
+	stabilizeDelay := 500 * time.Millisecond
+
+	for time.Now().Before(deadline) {
+		info, err := c.docker.ContainerInspect(ctx, containerID)
+		if err != nil {
+			return fmt.Errorf("failed to inspect container %s: %w", containerID, err)
+		}
+
+		if info.State != nil {
+			if info.State.Running {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(stabilizeDelay):
+				}
+				info, err = c.docker.ContainerInspect(ctx, containerID)
+				if err != nil {
+					return fmt.Errorf("failed to inspect container %s: %w", containerID, err)
+				}
+				if info.State != nil && (info.State.Status == "exited" || info.State.Status == "dead") {
+					return fmt.Errorf("container %s exited with code %d", containerID, info.State.ExitCode)
+				}
+				return nil
+			}
+			if info.State.Status == "exited" || info.State.Status == "dead" {
+				return fmt.Errorf("container %s exited with code %d", containerID, info.State.ExitCode)
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+
+	return fmt.Errorf("timed out waiting for container %s to be ready", containerID)
+}
+
+// ContainerLogs returns the stdout/stderr logs from a container.
+func (c *Client) ContainerLogs(ctx context.Context, containerID string) (string, error) {
+	reader, err := c.docker.ContainerLogs(ctx, containerID, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       "20",
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to get logs for container %s: %w", containerID, err)
+	}
+	defer reader.Close()
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return "", fmt.Errorf("failed to read logs for container %s: %w", containerID, err)
+	}
+	return string(data), nil
+}
+
 // ContainerInfo holds information about a running container.
 type ContainerInfo struct {
 	Name    string
@@ -438,15 +528,4 @@ func (c *Client) ImageExists(ctx context.Context, imageName string) (bool, error
 	}
 
 	return len(images) > 0, nil
-}
-
-// extractProjectID extracts the project ID portion from a container name.
-// Container names follow the pattern: forge-agent-<project-id>-<session-id>
-// or forge-gateway-<project-id>-<session-id>
-func extractProjectID(containerName string) string {
-	// Remove the prefix to get project-id-session-id
-	name := containerName
-	name = strings.TrimPrefix(name, "forge-agent-")
-	name = strings.TrimPrefix(name, "forge-gateway-")
-	return name
 }

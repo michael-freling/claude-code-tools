@@ -37,9 +37,15 @@ type jsonLine struct {
 }
 
 // List reads JSONL session files from the project's session directory.
-// sessionDir is the path like ~/.claude-forge/<project-id>/
-// Each .jsonl file is a session. The filename (without extension) is the session ID.
-// It reads the first lines of each file to extract the timestamp and first user message.
+// sessionDir is the host path like ~/.claude-forge/<project-id>/, which is
+// bind-mounted to /home/user/.claude/projects in the container. Claude Code
+// stores sessions under <encoded-cwd>/<session-id>.jsonl — typically -work/ for
+// the main workspace and -work-.claude-worktrees-<name>/ for each worktree.
+//
+// To surface all of those in `resume --list`, List walks one level of
+// subdirectories. .jsonl files placed directly under sessionDir are also
+// included for backward compatibility.
+//
 // Returns sessions sorted by creation time (most recent first).
 func List(sessionDir string) ([]Session, error) {
 	entries, err := os.ReadDir(sessionDir)
@@ -51,24 +57,32 @@ func List(sessionDir string) ([]Session, error) {
 	}
 
 	var sessions []Session
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
-			continue
-		}
-
-		sessionID := strings.TrimSuffix(entry.Name(), ".jsonl")
-		filePath := filepath.Join(sessionDir, entry.Name())
-
-		session, err := parseSessionFile(sessionID, filePath)
+	collect := func(dir string) {
+		dirEntries, err := os.ReadDir(dir)
 		if err != nil {
-			// Skip malformed files
-			continue
+			return
 		}
-
-		sessions = append(sessions, *session)
+		for _, e := range dirEntries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+				continue
+			}
+			sessionID := strings.TrimSuffix(e.Name(), ".jsonl")
+			sess, err := parseSessionFile(sessionID, filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			sessions = append(sessions, *sess)
+		}
 	}
 
-	// Sort by creation time, most recent first
+	collect(sessionDir)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		collect(filepath.Join(sessionDir, entry.Name()))
+	}
+
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].CreatedAt.After(sessions[j].CreatedAt)
 	})

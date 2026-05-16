@@ -176,7 +176,7 @@ func buildMounts(opts Options) []MountConfig {
 	}
 
 	// ~/.claude/ subdirectories (read-only)
-	claudeSubdirs := []string{"rules", "agents", "commands", "skills"}
+	claudeSubdirs := []string{"rules", "agents", "commands", "skills", "plugins"}
 	if opts.HomeDir != "" {
 		for _, subdir := range claudeSubdirs {
 			source := filepath.Join(opts.HomeDir, ".claude", subdir)
@@ -221,6 +221,11 @@ func buildMounts(opts Options) []MountConfig {
 // through the gateway reverse proxy and sets the git user identity.
 // Uses url.insteadOf to rewrite https://github.com/ URLs to plain HTTP
 // requests to the gateway, avoiding CONNECT tunneling.
+//
+// worktree.useRelativePaths makes git worktree add (including the one Claude
+// Code runs for --worktree) emit a .git file whose gitdir is relative — so the
+// worktree resolves correctly both at /work in the container and at the host
+// project path. Requires git 2.48+ in the agent image.
 func generateGitconfig(opts Options) string {
 	return fmt.Sprintf(`[url "http://gateway:8080/github.com/"]
     insteadOf = https://github.com/
@@ -228,6 +233,9 @@ func generateGitconfig(opts Options) string {
 [user]
     name = %s
     email = %s
+
+[worktree]
+    useRelativePaths = true
 `, opts.GitUserName, opts.GitUserEmail)
 }
 

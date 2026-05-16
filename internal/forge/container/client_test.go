@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -253,34 +256,246 @@ func TestStartAgent_Mounts(t *testing.T) {
 
 	mockAPI := NewMockDockerAPI(ctrl)
 
+	// Create real temp directories so EvalSymlinks succeeds
+	homeDir := t.TempDir()
+	claudeDir := filepath.Join(homeDir, ".claude")
+	configDir := filepath.Join(homeDir, ".config", "claude-forge")
+	sessionDir := filepath.Join(homeDir, ".claude-forge", "project-id")
+	projectDir := filepath.Join(homeDir, "project")
+
+	for _, dir := range []string{
+		filepath.Join(claudeDir, "rules"),
+		filepath.Join(claudeDir, "agents"),
+		filepath.Join(claudeDir, "commands"),
+		filepath.Join(claudeDir, "skills"),
+		configDir,
+		sessionDir,
+		projectDir,
+	} {
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+	}
+	// Create required config files and CLAUDE.md
+	for _, f := range []string{
+		filepath.Join(configDir, "settings.json"),
+		filepath.Join(configDir, ".claude.json"),
+		filepath.Join(configDir, "gitconfig"),
+		filepath.Join(homeDir, "CLAUDE.md"),
+	} {
+		require.NoError(t, os.WriteFile(f, []byte("{}"), 0o644))
+	}
+
 	opts := AgentOptions{
 		Name:        "forge-agent-project-session",
 		Image:       "agent:latest",
 		NetworkName: "forge_net",
-		ProjectDir:  "/home/user/project",
-		SessionDir:  "/home/user/.claude-forge/project-id",
-		ClaudeDir:   "/home/user/.claude",
-		ConfigDir:   "/home/user/.config/claude-forge",
-		HomeDir:     "/home/user",
+		ProjectDir:  projectDir,
+		SessionDir:  sessionDir,
+		ClaudeDir:   claudeDir,
+		ConfigDir:   configDir,
+		HomeDir:     homeDir,
 	}
 
 	mockAPI.EXPECT().
 		ContainerCreate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		DoAndReturn(func(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, netConfig *network.NetworkingConfig, name string) (container.CreateResponse, error) {
-			// Verify key mounts exist
+			mountsByTarget := make(map[string]string)
+			for _, m := range hostConfig.Mounts {
+				mountsByTarget[m.Target] = m.Source
+			}
+
+			assert.Contains(t, mountsByTarget, "/work", "project mount missing")
+			assert.Contains(t, mountsByTarget, "/home/user/.claude/rules", "claude rules mount missing")
+			assert.Contains(t, mountsByTarget, "/home/user/.claude/agents", "claude agents mount missing")
+			assert.Contains(t, mountsByTarget, "/home/user/.claude/commands", "claude commands mount missing")
+			assert.Contains(t, mountsByTarget, "/home/user/.claude/skills", "claude skills mount missing")
+			assert.Contains(t, mountsByTarget, "/home/user/.claude/settings.json", "settings.json mount missing")
+			assert.Contains(t, mountsByTarget, "/home/user/.gitconfig", "gitconfig mount missing")
+			assert.Contains(t, mountsByTarget, "/home/user/CLAUDE.md", "home CLAUDE.md mount missing")
+
+			// Session dir mounts at /home/user/.claude/projects (parent) so Claude Code's
+			// writes under -work/ and -work-.claude-worktrees-*/ both reach the host.
+			assert.Equal(t, sessionDir, mountsByTarget["/home/user/.claude/projects"],
+				"session dir mount missing or pointed at wrong source")
+
+			return container.CreateResponse{ID: "c-123"}, nil
+		})
+
+	mockAPI.EXPECT().
+		ContainerStart(gomock.Any(), "c-123", container.StartOptions{}).
+		Return(nil)
+
+	client := newClientWithAPI(mockAPI)
+	ctx := context.Background()
+
+	_, err := client.StartAgent(ctx, opts)
+	require.NoError(t, err)
+}
+
+func TestStartAgent_SymlinkMounts(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockAPI := NewMockDockerAPI(ctrl)
+
+	homeDir := t.TempDir()
+	claudeDir := filepath.Join(homeDir, ".claude")
+	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
+
+	// Create real target directories outside claudeDir
+	realAgentsDir := filepath.Join(homeDir, "shared-agents")
+	realCommandsDir := filepath.Join(homeDir, "shared-commands")
+	require.NoError(t, os.MkdirAll(realAgentsDir, 0o755))
+	require.NoError(t, os.MkdirAll(realCommandsDir, 0o755))
+
+	// Create symlinks: ~/.claude/agents -> shared-agents, ~/.claude/commands -> shared-commands
+	require.NoError(t, os.Symlink(realAgentsDir, filepath.Join(claudeDir, "agents")))
+	require.NoError(t, os.Symlink(realCommandsDir, filepath.Join(claudeDir, "commands")))
+	// Create regular directories for rules and skills
+	require.NoError(t, os.MkdirAll(filepath.Join(claudeDir, "rules"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(claudeDir, "skills"), 0o755))
+
+	// Create symlinked CLAUDE.md
+	realCLAUDEmd := filepath.Join(homeDir, "real-claude.md")
+	require.NoError(t, os.WriteFile(realCLAUDEmd, []byte("# CLAUDE"), 0o644))
+	require.NoError(t, os.Symlink(realCLAUDEmd, filepath.Join(homeDir, "CLAUDE.md")))
+
+	opts := AgentOptions{
+		Name:        "forge-agent-project-session",
+		Image:       "agent:latest",
+		NetworkName: "forge_net",
+		ProjectDir:  homeDir,
+		ClaudeDir:   claudeDir,
+		HomeDir:     homeDir,
+	}
+
+	mockAPI.EXPECT().
+		ContainerCreate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, netConfig *network.NetworkingConfig, name string) (container.CreateResponse, error) {
+			mountsByTarget := make(map[string]string)
+			for _, m := range hostConfig.Mounts {
+				mountsByTarget[m.Target] = m.Source
+			}
+
+			// Symlinked dirs must resolve to real paths
+			assert.Equal(t, realAgentsDir, mountsByTarget["/home/user/.claude/agents"],
+				"agents symlink should resolve to real path")
+			assert.Equal(t, realCommandsDir, mountsByTarget["/home/user/.claude/commands"],
+				"commands symlink should resolve to real path")
+
+			// Regular dirs should still be mounted
+			assert.Contains(t, mountsByTarget, "/home/user/.claude/rules")
+			assert.Contains(t, mountsByTarget, "/home/user/.claude/skills")
+
+			// Symlinked CLAUDE.md should resolve to real path
+			assert.Equal(t, realCLAUDEmd, mountsByTarget["/home/user/CLAUDE.md"],
+				"CLAUDE.md symlink should resolve to real path")
+
+			return container.CreateResponse{ID: "c-123"}, nil
+		})
+
+	mockAPI.EXPECT().
+		ContainerStart(gomock.Any(), "c-123", container.StartOptions{}).
+		Return(nil)
+
+	client := newClientWithAPI(mockAPI)
+	ctx := context.Background()
+
+	_, err := client.StartAgent(ctx, opts)
+	require.NoError(t, err)
+}
+
+func TestStartAgent_NonExistentClaudeDirs(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockAPI := NewMockDockerAPI(ctrl)
+
+	homeDir := t.TempDir()
+	claudeDir := filepath.Join(homeDir, ".claude")
+	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
+
+	// Only create "rules" — agents, commands, skills don't exist
+	require.NoError(t, os.MkdirAll(filepath.Join(claudeDir, "rules"), 0o755))
+	// No CLAUDE.md either
+
+	opts := AgentOptions{
+		Name:        "forge-agent-project-session",
+		Image:       "agent:latest",
+		NetworkName: "forge_net",
+		ProjectDir:  homeDir,
+		ClaudeDir:   claudeDir,
+		HomeDir:     homeDir,
+	}
+
+	mockAPI.EXPECT().
+		ContainerCreate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, netConfig *network.NetworkingConfig, name string) (container.CreateResponse, error) {
 			mountTargets := make(map[string]bool)
 			for _, m := range hostConfig.Mounts {
 				mountTargets[m.Target] = true
 			}
 
-			assert.True(t, mountTargets["/work"], "project mount missing")
-			assert.True(t, mountTargets["/home/user/.claude/rules"], "claude rules mount missing")
-			assert.True(t, mountTargets["/home/user/.claude/agents"], "claude agents mount missing")
-			assert.True(t, mountTargets["/home/user/.claude/commands"], "claude commands mount missing")
-			assert.True(t, mountTargets["/home/user/.claude/skills"], "claude skills mount missing")
-			assert.True(t, mountTargets["/home/user/.claude/settings.json"], "settings.json mount missing")
-			assert.True(t, mountTargets["/home/user/.gitconfig"], "gitconfig mount missing")
-			assert.True(t, mountTargets["/home/user/CLAUDE.md"], "home CLAUDE.md mount missing")
+			// Only rules should be mounted (it's the only one that exists)
+			assert.True(t, mountTargets["/home/user/.claude/rules"], "rules mount should exist")
+			assert.False(t, mountTargets["/home/user/.claude/agents"], "agents mount should be skipped")
+			assert.False(t, mountTargets["/home/user/.claude/commands"], "commands mount should be skipped")
+			assert.False(t, mountTargets["/home/user/.claude/skills"], "skills mount should be skipped")
+			assert.False(t, mountTargets["/home/user/CLAUDE.md"], "CLAUDE.md mount should be skipped")
+
+			return container.CreateResponse{ID: "c-123"}, nil
+		})
+
+	mockAPI.EXPECT().
+		ContainerStart(gomock.Any(), "c-123", container.StartOptions{}).
+		Return(nil)
+
+	client := newClientWithAPI(mockAPI)
+	ctx := context.Background()
+
+	_, err := client.StartAgent(ctx, opts)
+	require.NoError(t, err)
+}
+
+func TestStartAgent_BrokenSymlinkMounts(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockAPI := NewMockDockerAPI(ctrl)
+
+	homeDir := t.TempDir()
+	claudeDir := filepath.Join(homeDir, ".claude")
+	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
+
+	// Create a broken symlink: agents -> non-existent target
+	require.NoError(t, os.Symlink("/non/existent/path", filepath.Join(claudeDir, "agents")))
+	// Create a working regular directory for rules
+	require.NoError(t, os.MkdirAll(filepath.Join(claudeDir, "rules"), 0o755))
+
+	// Create a broken symlink for CLAUDE.md
+	require.NoError(t, os.Symlink("/non/existent/claude.md", filepath.Join(homeDir, "CLAUDE.md")))
+
+	opts := AgentOptions{
+		Name:        "forge-agent-project-session",
+		Image:       "agent:latest",
+		NetworkName: "forge_net",
+		ProjectDir:  homeDir,
+		ClaudeDir:   claudeDir,
+		HomeDir:     homeDir,
+	}
+
+	mockAPI.EXPECT().
+		ContainerCreate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, netConfig *network.NetworkingConfig, name string) (container.CreateResponse, error) {
+			mountTargets := make(map[string]bool)
+			for _, m := range hostConfig.Mounts {
+				mountTargets[m.Target] = true
+			}
+
+			// Broken symlinks should be skipped
+			assert.False(t, mountTargets["/home/user/.claude/agents"], "broken agents symlink should be skipped")
+			assert.False(t, mountTargets["/home/user/CLAUDE.md"], "broken CLAUDE.md symlink should be skipped")
+			// Regular dir should still be mounted
+			assert.True(t, mountTargets["/home/user/.claude/rules"], "rules mount should exist")
 
 			return container.CreateResponse{ID: "c-123"}, nil
 		})
@@ -1019,33 +1234,206 @@ func TestClose(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestExtractProjectID(t *testing.T) {
+func TestWaitForReady(t *testing.T) {
 	tests := []struct {
-		name          string
-		containerName string
-		want          string
+		name        string
+		setupMock   func(*MockDockerAPI)
+		wantErr     bool
+		errContains string
 	}{
 		{
-			name:          "agent container name",
-			containerName: "forge-agent-my-project-session1",
-			want:          "my-project-session1",
+			name: "returns nil when container is running",
+			setupMock: func(m *MockDockerAPI) {
+				m.EXPECT().
+					ContainerInspect(gomock.Any(), "c-123").
+					Return(container.InspectResponse{
+						ContainerJSONBase: &container.ContainerJSONBase{
+							State: &container.State{Running: true},
+						},
+					}, nil).
+					Times(2)
+			},
 		},
 		{
-			name:          "gateway container name",
-			containerName: "forge-gateway-my-project-session1",
-			want:          "my-project-session1",
+			name: "returns error when container crashes after starting",
+			setupMock: func(m *MockDockerAPI) {
+				first := m.EXPECT().
+					ContainerInspect(gomock.Any(), "c-123").
+					Return(container.InspectResponse{
+						ContainerJSONBase: &container.ContainerJSONBase{
+							State: &container.State{Running: true},
+						},
+					}, nil)
+				m.EXPECT().
+					ContainerInspect(gomock.Any(), "c-123").
+					After(first).
+					Return(container.InspectResponse{
+						ContainerJSONBase: &container.ContainerJSONBase{
+							State: &container.State{Status: "exited", ExitCode: 1},
+						},
+					}, nil)
+			},
+			wantErr:     true,
+			errContains: "exited with code 1",
 		},
 		{
-			name:          "unknown prefix",
-			containerName: "other-container",
-			want:          "other-container",
+			name: "returns error when container exited",
+			setupMock: func(m *MockDockerAPI) {
+				m.EXPECT().
+					ContainerInspect(gomock.Any(), "c-123").
+					Return(container.InspectResponse{
+						ContainerJSONBase: &container.ContainerJSONBase{
+							State: &container.State{Status: "exited", ExitCode: 1},
+						},
+					}, nil)
+			},
+			wantErr:     true,
+			errContains: "exited with code 1",
+		},
+		{
+			name: "returns error when container is dead",
+			setupMock: func(m *MockDockerAPI) {
+				m.EXPECT().
+					ContainerInspect(gomock.Any(), "c-123").
+					Return(container.InspectResponse{
+						ContainerJSONBase: &container.ContainerJSONBase{
+							State: &container.State{Status: "dead", ExitCode: 137},
+						},
+					}, nil)
+			},
+			wantErr:     true,
+			errContains: "exited with code 137",
+		},
+		{
+			name: "returns error when inspect fails",
+			setupMock: func(m *MockDockerAPI) {
+				m.EXPECT().
+					ContainerInspect(gomock.Any(), "c-123").
+					Return(container.InspectResponse{}, fmt.Errorf("no such container"))
+			},
+			wantErr:     true,
+			errContains: "failed to inspect container",
+		},
+		{
+			name: "times out when container stays in created state",
+			setupMock: func(m *MockDockerAPI) {
+				m.EXPECT().
+					ContainerInspect(gomock.Any(), "c-123").
+					Return(container.InspectResponse{
+						ContainerJSONBase: &container.ContainerJSONBase{
+							State: &container.State{Status: "created"},
+						},
+					}, nil).
+					AnyTimes()
+			},
+			wantErr:     true,
+			errContains: "timed out waiting",
+		},
+		{
+			name: "returns error when context is cancelled",
+			setupMock: func(m *MockDockerAPI) {
+				m.EXPECT().
+					ContainerInspect(gomock.Any(), "c-123").
+					Return(container.InspectResponse{
+						ContainerJSONBase: &container.ContainerJSONBase{
+							State: &container.State{Status: "created"},
+						},
+					}, nil).
+					AnyTimes()
+			},
+			wantErr:     true,
+			errContains: "context canceled",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := extractProjectID(tt.containerName)
-			assert.Equal(t, tt.want, got)
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockAPI := NewMockDockerAPI(ctrl)
+			tt.setupMock(mockAPI)
+
+			client := newClientWithAPI(mockAPI)
+			ctx := context.Background()
+			if tt.name == "returns error when context is cancelled" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+
+			err := client.WaitForReady(ctx, "c-123", 1*time.Second)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestContainerLogs(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupMock   func(*MockDockerAPI)
+		wantLogs    string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "returns logs from container",
+			setupMock: func(m *MockDockerAPI) {
+				m.EXPECT().
+					ContainerLogs(gomock.Any(), "c-123", gomock.Any()).
+					Return(io.NopCloser(strings.NewReader("Error: no GITHUB_TOKEN set")), nil)
+			},
+			wantLogs: "Error: no GITHUB_TOKEN set",
+		},
+		{
+			name: "returns empty string for empty logs",
+			setupMock: func(m *MockDockerAPI) {
+				m.EXPECT().
+					ContainerLogs(gomock.Any(), "c-123", gomock.Any()).
+					Return(io.NopCloser(strings.NewReader("")), nil)
+			},
+			wantLogs: "",
+		},
+		{
+			name: "returns error when logs fail",
+			setupMock: func(m *MockDockerAPI) {
+				m.EXPECT().
+					ContainerLogs(gomock.Any(), "c-123", gomock.Any()).
+					Return(nil, fmt.Errorf("container not found"))
+			},
+			wantErr:     true,
+			errContains: "failed to get logs",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockAPI := NewMockDockerAPI(ctrl)
+			tt.setupMock(mockAPI)
+
+			client := newClientWithAPI(mockAPI)
+			ctx := context.Background()
+
+			logs, err := client.ContainerLogs(ctx, "c-123")
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantLogs, logs)
 		})
 	}
 }
