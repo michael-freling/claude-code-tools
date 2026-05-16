@@ -410,7 +410,10 @@ func TestStart_OAuthCredentials(t *testing.T) {
 	mockCM.EXPECT().WaitForReady(gomock.Any(), "gw-id", gomock.Any()).Return(nil)
 	mockCM.EXPECT().StartAgent(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(ctx context.Context, opts container.AgentOptions) (string, error) {
-			assert.Equal(t, "oauth-token-xyz", opts.Env["CLAUDE_CODE_OAUTH_TOKEN"])
+			// OAuth tokens are no longer passed as env vars; Claude Code reads
+			// the mounted ~/.claude/.credentials.json file directly for token refresh
+			_, hasOAuth := opts.Env["CLAUDE_CODE_OAUTH_TOKEN"]
+			assert.False(t, hasOAuth, "OAuth token should not be passed as env var")
 			_, hasAPIKey := opts.Env["ANTHROPIC_API_KEY"]
 			assert.False(t, hasAPIKey)
 			return "agent-id", nil

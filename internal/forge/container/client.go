@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -228,6 +229,16 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOptions) (string, err
 				Source:   resolved,
 				Target:   "/home/user/.claude/" + subdir,
 				ReadOnly: true,
+			})
+		}
+
+		// Credentials file mount (read-write so Claude Code can refresh OAuth tokens)
+		credentialsPath := opts.ClaudeDir + "/.credentials.json"
+		if _, err := os.Stat(credentialsPath); err == nil {
+			mounts = append(mounts, mount.Mount{
+				Type:   mount.TypeBind,
+				Source: credentialsPath,
+				Target: "/home/user/.claude/.credentials.json",
 			})
 		}
 	}

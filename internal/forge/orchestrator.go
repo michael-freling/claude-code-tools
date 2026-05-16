@@ -220,8 +220,6 @@ func (o *Orchestrator) Start(ctx context.Context, opts StartOptions) (*Session, 
 	}
 	if creds.AuthType == "api_key" {
 		agentEnv["ANTHROPIC_API_KEY"] = creds.Token
-	} else {
-		agentEnv["CLAUDE_CODE_OAUTH_TOKEN"] = creds.Token
 	}
 	if opts.UID > 0 {
 		agentEnv["FORGE_UID"] = fmt.Sprintf("%d", opts.UID)
