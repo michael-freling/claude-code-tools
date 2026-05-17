@@ -510,7 +510,7 @@ var pluginsSyncRun = func(cmd *cobra.Command, args []string) error {
 	}
 	installCmds = append(installCmds, "claude plugins marketplace update")
 	for _, plugin := range syncPlugins {
-		installCmds = append(installCmds, fmt.Sprintf("claude plugins install %s || true", plugin))
+		installCmds = append(installCmds, fmt.Sprintf("claude plugins install %s || true && claude plugins enable %s || true", plugin, plugin))
 	}
 	shellCmd := strings.Join(installCmds, " && ")
 
