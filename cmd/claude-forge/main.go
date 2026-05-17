@@ -573,6 +573,7 @@ func readHostMarketplaces(hostPluginsDir string) marketplaceInfo {
 		Source struct {
 			Source string `json:"source"`
 			Repo   string `json:"repo"`
+			Path   string `json:"path"`
 		} `json:"source"`
 	}
 	if err := json.Unmarshal(data, &marketplaces); err != nil {
@@ -580,12 +581,35 @@ func readHostMarketplaces(hostPluginsDir string) marketplaceInfo {
 	}
 
 	for name, m := range marketplaces {
-		if m.Source.Source == "github" && m.Source.Repo != "" {
-			info.Sources = append(info.Sources, m.Source.Repo)
-			info.Names[name] = true
+		switch m.Source.Source {
+		case "github":
+			if m.Source.Repo != "" {
+				info.Sources = append(info.Sources, m.Source.Repo)
+				info.Names[name] = true
+			}
+		case "directory":
+			if repo := extractGitHubRepo(m.Source.Path); repo != "" {
+				info.Sources = append(info.Sources, repo)
+				info.Names[name] = true
+			}
 		}
 	}
 	return info
+}
+
+// extractGitHubRepo parses "owner/repo" from a path containing "github.com/{owner}/{repo}".
+func extractGitHubRepo(path string) string {
+	const marker = "github.com/"
+	idx := strings.Index(path, marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := path[idx+len(marker):]
+	parts := strings.SplitN(rest, "/", 3)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return ""
+	}
+	return parts[0] + "/" + parts[1]
 }
 
 // newForgeGHCmd creates the "forge-gh" subcommand as an explicit alternative

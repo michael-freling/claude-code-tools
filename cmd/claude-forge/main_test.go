@@ -790,10 +790,26 @@ func TestReadHostMarketplaces(t *testing.T) {
 		assert.True(t, info.Names["custom"])
 	})
 
-	t.Run("skips non-github sources", func(t *testing.T) {
+	t.Run("extracts repo from directory path with github.com", func(t *testing.T) {
 		dir := t.TempDir()
 		content := `{
-			"local": {"source": {"source": "directory", "path": "/some/path"}},
+			"michael-freling": {"source": {"source": "directory", "path": "/home/user/src/github.com/michael-freling/claude-code-config/.claude/worktrees/main"}},
+			"remote": {"source": {"source": "github", "repo": "anthropics/claude-code"}}
+		}`
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "known_marketplaces.json"), []byte(content), 0o644))
+
+		info := readHostMarketplaces(dir)
+		assert.Len(t, info.Sources, 2)
+		assert.Contains(t, info.Sources, "michael-freling/claude-code-config")
+		assert.Contains(t, info.Sources, "anthropics/claude-code")
+		assert.True(t, info.Names["michael-freling"])
+		assert.True(t, info.Names["remote"])
+	})
+
+	t.Run("skips directory sources without github.com in path", func(t *testing.T) {
+		dir := t.TempDir()
+		content := `{
+			"local": {"source": {"source": "directory", "path": "/some/local/path"}},
 			"remote": {"source": {"source": "github", "repo": "anthropics/claude-code"}}
 		}`
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "known_marketplaces.json"), []byte(content), 0o644))
