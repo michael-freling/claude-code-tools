@@ -460,9 +460,9 @@ var pluginsSyncRun = func(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create plugins directory: %w", err)
 	}
 
-	// Copy marketplace data from host so the container can resolve plugins
+	// Read host marketplace sources to add them inside the container
 	hostPluginsDir := filepath.Join(homeDir, ".claude", "plugins")
-	syncMarketplaceData(hostPluginsDir, pluginsDir)
+	marketplaces := readHostMarketplaces(hostPluginsDir)
 
 	containerName := "forge-plugins-sync"
 	fmt.Printf("Syncing %d plugins...\n", len(plugins))
@@ -473,8 +473,11 @@ var pluginsSyncRun = func(cmd *cobra.Command, args []string) error {
 		"-v", pluginsDir + ":/home/user/.claude/plugins",
 	}
 
-	// Build install commands: update marketplaces first, then install each plugin
+	// Build commands: add marketplaces, update, then install each plugin
 	var installCmds []string
+	for _, m := range marketplaces {
+		installCmds = append(installCmds, fmt.Sprintf("claude plugins marketplace add %s || true", m))
+	}
 	installCmds = append(installCmds, "claude plugins marketplace update")
 	for _, plugin := range plugins {
 		installCmds = append(installCmds, fmt.Sprintf("claude plugins install %s || true", plugin))
@@ -521,53 +524,31 @@ func readHostPlugins(homeDir string) ([]string, error) {
 	return plugins, nil
 }
 
-// syncMarketplaceData copies marketplace config from host plugins dir to forge plugins dir.
-func syncMarketplaceData(hostPluginsDir, forgePluginsDir string) {
-	// Copy known_marketplaces.json
-	src := filepath.Join(hostPluginsDir, "known_marketplaces.json")
-	if data, err := os.ReadFile(src); err == nil {
-		os.WriteFile(filepath.Join(forgePluginsDir, "known_marketplaces.json"), data, 0o644)
+// readHostMarketplaces reads known_marketplaces.json and returns marketplace
+// source identifiers (GitHub repos) that can be passed to `claude plugins marketplace add`.
+func readHostMarketplaces(hostPluginsDir string) []string {
+	data, err := os.ReadFile(filepath.Join(hostPluginsDir, "known_marketplaces.json"))
+	if err != nil {
+		return nil
 	}
 
-	// Copy marketplaces directory
-	srcDir := filepath.Join(hostPluginsDir, "marketplaces")
-	dstDir := filepath.Join(forgePluginsDir, "marketplaces")
-	entries, err := os.ReadDir(srcDir)
-	if err != nil {
-		return
+	var marketplaces map[string]struct {
+		Source struct {
+			Source string `json:"source"`
+			Repo   string `json:"repo"`
+		} `json:"source"`
 	}
-	os.MkdirAll(dstDir, 0o755)
-	for _, entry := range entries {
-		if entry.IsDir() {
-			copyDir(filepath.Join(srcDir, entry.Name()), filepath.Join(dstDir, entry.Name()))
-		} else {
-			data, err := os.ReadFile(filepath.Join(srcDir, entry.Name()))
-			if err == nil {
-				os.WriteFile(filepath.Join(dstDir, entry.Name()), data, 0o644)
-			}
-		}
+	if err := json.Unmarshal(data, &marketplaces); err != nil {
+		return nil
 	}
-}
 
-// copyDir recursively copies a directory.
-func copyDir(src, dst string) {
-	os.MkdirAll(dst, 0o755)
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-		if entry.IsDir() {
-			copyDir(srcPath, dstPath)
-		} else {
-			data, err := os.ReadFile(srcPath)
-			if err == nil {
-				os.WriteFile(dstPath, data, 0o644)
-			}
+	var sources []string
+	for _, m := range marketplaces {
+		if m.Source.Source == "github" && m.Source.Repo != "" {
+			sources = append(sources, m.Source.Repo)
 		}
 	}
+	return sources
 }
 
 // newForgeGHCmd creates the "forge-gh" subcommand as an explicit alternative
