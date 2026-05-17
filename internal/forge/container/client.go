@@ -178,6 +178,7 @@ type AgentOptions struct {
 	Cmd         []string   // claude args: --dangerously-skip-permissions, --worktree, etc.
 	UID         int        // host user UID (for file ownership mapping)
 	GID         int        // host user GID (for file ownership mapping)
+	PluginsDir  string     // host path to forge plugins dir (mounted rw at ~/.claude/plugins)
 	CacheDirs   []CacheDir // host dependency cache directories to mount (rw)
 	ExtraMounts []CacheDir // additional user-specified bind mounts (rw)
 }
@@ -215,10 +216,10 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOptions) (string, err
 		})
 	}
 
-	// Claude dir mounts (read-only) for rules, agents, commands, skills, plugins, CLAUDE.md.
+	// Claude dir mounts (read-only) for rules, agents, commands, skills, CLAUDE.md.
 	// Resolve symlinks so Docker gets the real path, and skip dirs that don't exist.
 	if opts.ClaudeDir != "" {
-		claudeSubdirs := []string{"rules", "agents", "commands", "skills", "plugins"}
+		claudeSubdirs := []string{"rules", "agents", "commands", "skills"}
 		for _, subdir := range claudeSubdirs {
 			source := filepath.Join(opts.ClaudeDir, subdir)
 			resolved, err := filepath.EvalSymlinks(source)
@@ -242,6 +243,15 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOptions) (string, err
 				Target: "/home/user/.claude/.credentials.json",
 			})
 		}
+	}
+
+	// Plugins dir mount (read-write, managed separately from host's ~/.claude/plugins)
+	if opts.PluginsDir != "" {
+		mounts = append(mounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: opts.PluginsDir,
+			Target: "/home/user/.claude/plugins",
+		})
 	}
 
 	// Config dir file mounts for settings.json, .claude.json, gitconfig

@@ -123,6 +123,12 @@ func (o *Orchestrator) Start(ctx context.Context, opts StartOptions) (*Session, 
 		return nil, fmt.Errorf("failed to create session directory: %w", err)
 	}
 
+	// Create plugins directory (persists across sessions, managed from inside the container)
+	pluginsDir := filepath.Join(o.HomeDir, ".claude-forge", "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create plugins directory: %w", err)
+	}
+
 	// Write/update gitconfig
 	gitUserName := project.GitConfig("user.name")
 	gitUserEmail := project.GitConfig("user.email")
@@ -283,6 +289,7 @@ func (o *Orchestrator) Start(ctx context.Context, opts StartOptions) (*Session, 
 		ClaudeDir:   o.ClaudeDir,
 		ConfigDir:   o.ConfigDir,
 		HomeDir:     o.HomeDir,
+		PluginsDir:  pluginsDir,
 		Env:         agentEnv,
 		Interactive: opts.Interactive,
 		Cmd:         agentCmd,
