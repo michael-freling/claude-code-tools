@@ -1,43 +1,43 @@
 ---
-title: "Proposal: kubectl Support in claude-forge"
+title: "Proposal: Kubernetes Support in claude-forge"
 weight: 1
 ---
 
-# Proposal: kubectl Support in claude-forge
+# Proposal: Kubernetes Support in claude-forge
 
 **Status**: Draft
 **Depends on**: [Secure Sandbox Architecture]({{< relref "/docs/secure-sandbox/architecture/secure-sandbox-architecture" >}})
 
 ## 1. Motivation
 
-Claude Code users frequently need to inspect and modify Kubernetes state while developing — listing pods, viewing logs, scaling deployments, applying manifests. Today, `claude-forge` has no `kubectl` in the agent image, so users either:
+Claude Code users frequently need to inspect and modify Kubernetes state while developing — listing pods, viewing logs, scaling deployments, applying manifests. Today, `claude-forge` has no Kubernetes access in the agent, so users either:
 
 1. Drop out of the sandbox to run `kubectl` on the host (breaks the workflow), or
 2. Mount `~/.kube/config` into the container (violates Invariant 1 — agent must never have access to the underlying credentials).
 
-This proposal adds `kubectl` to the agent in a way that preserves Invariant 1, uses standard Kubernetes RBAC for what the agent is allowed to do, supports multiple cluster contexts in a single session, and offers a `claude-forge kube render` command that generates the necessary RBAC manifests against the user's actual cluster.
+This proposal adds Kubernetes access to the agent via an existing open-source MCP server ([containers/kubernetes-mcp-server](https://github.com/containers/kubernetes-mcp-server)), preserving Invariant 1 by running the MCP server in a separate shared container with the credentials. The agent interacts with Kubernetes through MCP tools — no `kubectl` binary or kubeconfig needed in the agent container.
 
 ## 2. Goals and Non-Goals
 
 ### Goals
 
-- The agent can run `kubectl` against one or more user-configured cluster contexts: `get`, `describe`, `logs`, `apply`, `scale`, `rollout`, `top`, `auth can-i`, `explain`, `api-resources`, etc.
-- The agent **cannot** read Secret objects (no `kubectl get secret`).
-- The agent **cannot** mint or read tokens via the TokenRequest API (`serviceaccounts/token`).
-- The agent **cannot** see its own credential — ServiceAccount tokens live only in the gateway container, not in the agent.
+- The agent can interact with one or more user-configured cluster contexts via MCP tools: get, describe, logs, apply, scale, rollout, etc.
+- The agent **cannot** read Secret objects.
+- The agent **cannot** mint or read tokens via the TokenRequest API.
+- The agent **cannot** see its own credential — ServiceAccount tokens live only in the K8s MCP container, not in the agent.
 - The agent **cannot** modify RBAC, register admission webhooks, or impersonate other identities.
 - The agent **cannot** delete cluster-scoped resources (namespaces, nodes, persistent volumes, CRDs).
-- The agent **cannot** `kubectl exec` or `kubectl attach` into pods.
+- The agent **cannot** exec or attach into pods.
 - Multiple cluster contexts can be exposed to a single session, each with its own RBAC scope and credential.
 - Failure mode is **deny** — RBAC is allow-only, so anything not explicitly granted is rejected by the API server.
+- Uses an existing OSS MCP server rather than building a custom one.
 
 ### Non-Goals
 
-- `kubectl exec` and `kubectl attach`. A pod shell can read pod-mounted secrets and run arbitrary processes inside the cluster network. Excluded.
-- `kubectl port-forward` is allowed (it's how developers reach pod ports; without `exec` the blast radius is limited to whatever the pod's port already exposes).
-- Cluster administration (`kubectl edit clusterrole`, namespace creation, node cordon).
-- Cloud-provider auth plugins (`gke-gcloud-auth-plugin`, `aws-iam-authenticator`). Cluster credentials live with the gateway, which uses static ServiceAccount bearer tokens.
-- Changes to the existing GitHub gateway. This proposal is K8s-only.
+- Building a custom K8s MCP server or reverse proxy. We reuse [containers/kubernetes-mcp-server](https://github.com/containers/kubernetes-mcp-server).
+- `pods/exec` and `pods/attach`. A pod shell can read pod-mounted secrets and run arbitrary processes inside the cluster network. Excluded via RBAC.
+- Cluster administration (edit clusterrole, namespace creation, node cordon).
+- Cloud-provider auth plugins (`gke-gcloud-auth-plugin`, `aws-iam-authenticator`). The MCP server uses static ServiceAccount bearer tokens.
 
 ## 3. Threat Model
 
@@ -45,45 +45,57 @@ The agent is an LLM running with `--dangerously-skip-permissions`. Assume any to
 
 | # | Harm | Example attack | Defense |
 |---|---|---|---|
-| 1 | Credential exfiltration via Secrets | `kubectl get secret -A -o yaml`, base64-decode, embed in commit | RBAC denies `secrets` resource |
-| 2 | Credential exfiltration via TokenRequest | `kubectl create token <sa>` to mint a token for a more privileged SA | RBAC denies `serviceaccounts/token` subresource |
-| 3 | Credential exfiltration via kubeconfig | `cat $KUBECONFIG`, `kubectl config view --raw` | Agent's kubeconfig only contains gateway URLs — no token, no CA, no real cluster URL |
-| 4 | Identity escalation | `kubectl --as=admin get …` | RBAC denies `impersonate` verb |
-| 5 | Destructive cluster ops | `kubectl delete namespace prod`, `kubectl delete node`, `kubectl delete crd` | RBAC grants only read on cluster-scoped resources |
-| 6 | Pod-level credential access | `kubectl exec -- cat /var/run/secrets/...` | RBAC denies `pods/exec` and `pods/attach` |
-| 7 | RBAC tampering | `kubectl create clusterrolebinding …` | RBAC denies the `rbac.authorization.k8s.io` group entirely |
-| 8 | Admission-webhook tampering | `kubectl apply -f malicious-webhook.yaml` | RBAC denies the `admissionregistration.k8s.io` group entirely |
-| 9 | Cross-context escalation | `kubectl --context=prod` from a session that should only see dev | Agent's kubeconfig only lists explicitly enabled contexts; gateway routes by URL prefix and an unknown prefix returns 404 |
+| 1 | Credential exfiltration via Secrets | MCP tool to get secrets, base64-decode, embed in commit | RBAC denies `secrets` resource |
+| 2 | Credential exfiltration via TokenRequest | MCP tool to create token for a more privileged SA | RBAC denies `serviceaccounts/token` subresource |
+| 3 | Credential exfiltration via kubeconfig | Agent reads MCP server's kubeconfig | Kubeconfig is in a separate container; agent cannot access it |
+| 4 | Identity escalation | MCP tool with impersonation | RBAC denies `impersonate` verb |
+| 5 | Destructive cluster ops | Delete namespace/node/CRD via MCP | RBAC grants only read on cluster-scoped resources |
+| 6 | Pod-level credential access | Exec into pod via MCP | RBAC denies `pods/exec` and `pods/attach` |
+| 7 | RBAC tampering | Create clusterrolebinding via MCP | RBAC denies the `rbac.authorization.k8s.io` group entirely |
+| 8 | Admission-webhook tampering | Apply malicious webhook via MCP | RBAC denies the `admissionregistration.k8s.io` group entirely |
+| 9 | Cross-context escalation | Use a context not configured for this host | MCP server's kubeconfig only lists explicitly enabled contexts |
 
 ## 4. Architecture
 
-### 4.1 Shared Service Model
+### 4.1 Using containers/kubernetes-mcp-server
 
-The K8s proxy runs as a **shared service** — a singleton container on the `forge-shared` Docker network, accessible to all agent sessions on the host. This is the right model because:
+[containers/kubernetes-mcp-server](https://github.com/containers/kubernetes-mcp-server) is a Go-based native implementation that speaks directly to the Kubernetes API server (not a kubectl wrapper). Key properties:
+
+- **Multi-context support**: When multiple clusters are defined in the kubeconfig, all tools include a `context` argument. This is exactly what we need.
+- **Service Account support**: Accepts any standard kubeconfig, including ones with SA bearer tokens.
+- **`--read-only` flag**: An additional safety layer on top of RBAC (useful as a defense-in-depth safeguard).
+- **MCP protocol**: Exposes K8s operations as MCP tools with typed schemas.
+- **Actively maintained**: By the Red Hat containers team.
+
+We run this server in a shared container with the credentials. The agent connects via MCP over HTTP. No custom proxy, no kubectl binary in the agent.
+
+### 4.2 Shared Service Model
+
+The K8s MCP server runs as a **shared service** — a singleton container on the `forge-shared` Docker network, accessible to all agent sessions on the host. This is the right model because:
 
 - K8s contexts are host-level configuration (same `~/.kube/config` regardless of which repo the agent works on).
 - RBAC scoping is done at the cluster level via the ServiceAccount, not per-repo.
-- Running one K8s proxy per session would waste resources and complicate token management.
+- Running one K8s MCP server per session would waste resources and complicate token management.
 
 This contrasts with per-session **sidecars** (like the GitHub MCP server) which must be scoped to a specific repo. See the [GitHub MCP Server proposal]({{< relref "/docs/secure-sandbox/proposals/github-mcp-server" >}}) for the full sidecar vs shared model.
 
-### 4.2 Network Topology
+### 4.3 Network Topology
 
 ```
 ┌─ forge-shared network ─────────────────────────────────────────────────────┐
 │                                                                            │
-│  k8s-mcp:8090  (shared, one instance serves all agents)                    │
-│    ├─ reads k8s-contexts.json (mounted read-only)                          │
-│    ├─ routes by /<ctx> prefix                                              │
-│    ├─ injects bearer token per context                                     │
-│    └─ forwards to real K8s API servers                                     │
+│  k8s-mcp  (containers/kubernetes-mcp-server)                               │
+│    ├─ reads generated kubeconfig (mounted read-only)                       │
+│    ├─ supports multiple contexts natively                                  │
+│    ├─ --read-only flag for defense-in-depth                                │
+│    └─ exposes MCP tools via Streamable HTTP                                │
 │                                                                            │
 ├────────────────────────────────────────────────────────────────────────────┤
 │                                                                            │
 │  ┌── Session A ── forge_net_repoa_abc ───────────────────────────────┐    │
 │  │                                                                    │    │
 │  │  agent-a                                                           │    │
-│  │    ├─ kubectl → http://k8s-mcp:8090/<ctx>/...  (via shared net)    │────┤
+│  │    ├─ MCP tools → http://k8s-mcp:8090/mcp  (via shared net)       │────┤
 │  │    └─ git push → gateway-a:8080  (via session net)                 │    │
 │  │                                                                    │    │
 │  │  gateway-a:8080  (git proxy, scoped repo-a)                        │    │
@@ -94,7 +106,7 @@ This contrasts with per-session **sidecars** (like the GitHub MCP server) which 
 │  ┌── Session B ── forge_net_repob_def ───────────────────────────────┐    │
 │  │                                                                    │    │
 │  │  agent-b                                                           │    │
-│  │    ├─ kubectl → http://k8s-mcp:8090/<ctx>/...  (via shared net)    │────┤
+│  │    ├─ MCP tools → http://k8s-mcp:8090/mcp  (via shared net)       │────┤
 │  │    └─ git push → gateway-b:8080  (via session net)                 │    │
 │  │                                                                    │    │
 │  │  gateway-b:8080  (git proxy, scoped repo-b)                        │    │
@@ -105,46 +117,40 @@ This contrasts with per-session **sidecars** (like the GitHub MCP server) which 
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The agent reaches the K8s proxy via Docker's multi-network support:
+The agent reaches the K8s MCP server via Docker's multi-network support:
 ```bash
-# Agent is on its session network + shared network
 docker network connect forge-shared agent-a
 ```
 
-No Kubernetes or Docker Compose required.
+No Kubernetes orchestrator or Docker Compose required.
 
-### 4.3 Components
-
-**Agent container** gains:
-- `kubectl` binary (latest stable from `dl.k8s.io`).
-- A generated kubeconfig at `/etc/forge/kubeconfig` with one cluster + context per enabled context, each cluster's `server` set to `http://k8s-mcp:8090/<ctx>`. No `token`, no `certificate-authority`, no real cluster URLs anywhere.
-- `KUBECONFIG=/etc/forge/kubeconfig` set in the container env.
-- **No** `~/.kube/`, no tokens, no CAs.
+### 4.4 How It Works
 
 **K8s MCP container** (shared, on `forge-shared` network):
-- A single HTTP listener on `:8090`.
-- A read-only mount of `k8s-contexts.json` (the per-context routing table the host writes).
-- The K8s handler reads the routing table on startup, then for each request:
-  1. Extract the first path segment as context name.
-  2. Look up `(upstream URL, CA, bearer token)` for that context. 404 if not found.
-  3. Strip the context prefix from the path.
-  4. Set `Authorization: Bearer <token>`, set `Host` to upstream, forward.
-  5. Pass through hijacked HTTP for log streaming and other long-lived connections.
-- The proxy is **dumb** — no method+path filtering. RBAC at the upstream API server is the policy point.
+- Runs `containers/kubernetes-mcp-server` with `--read-only` and `--transport http`.
+- A generated kubeconfig is mounted read-only, containing SA tokens for each enabled context.
+- The server natively handles multi-context — tools include a `context` parameter.
+- No credentials ever reach the agent container.
+
+**Agent container**:
+- No `kubectl` binary needed.
+- No kubeconfig needed.
+- Interacts with Kubernetes solely through MCP tools.
+- MCP config in settings.json points to `http://k8s-mcp:8090/mcp`.
 
 **Host-side `claude-forge start` flow:**
 1. Read the user's kubeconfig.
 2. For each context listed in `~/.config/claude-forge/config.yaml` under `kubernetes.contexts`:
    - Resolve `(server URL, CA data)`.
    - Call TokenRequest against the configured ServiceAccount → short-lived bound token.
-3. Write `k8s-contexts.json` (0600, host user-owned, regenerated each session) containing the per-context routing table.
-4. Start the K8s MCP container on `forge-shared` if not already running (or update its mounted config).
+3. Write a generated kubeconfig (0600, host user-owned) containing only the enabled contexts with their SA tokens.
+4. Start the K8s MCP container on `forge-shared` if not already running (mount the generated kubeconfig).
 5. Connect the agent to the `forge-shared` network.
-6. Generate the agent's stub kubeconfig with one entry per context and mount it.
+6. Write MCP config to agent's settings.json.
 
 The agent never receives any tokens, CAs, or real cluster URLs.
 
-### 4.4 Shared Service Lifecycle
+### 4.5 Shared Service Lifecycle
 
 The K8s MCP container is managed by the orchestrator with reference counting:
 
@@ -152,9 +158,18 @@ The K8s MCP container is managed by the orchestrator with reference counting:
 - **Subsequent sessions**: Connect the new agent to `forge-shared`. The K8s MCP container is already running.
 - **Stop**: When the last session with K8s enabled exits, optionally stop the K8s MCP container. (Or leave it running — a lightweight idle container costs almost nothing.)
 
-### 4.5 Why No Path Filter
+### 4.6 Agent MCP Configuration
 
-RBAC already enforces `(verb, resource, name, namespace)` natively at the API server, with audit logging and decades of production use. A custom Go filter would be a parallel, hand-maintained policy that can drift from RBAC and has its own bugs. The K8s proxy's job is reduced to exactly one thing: **inject the credential the agent must not see.** New CRDs added to the cluster work automatically with discovery-driven RBAC rendering; a path filter would need a code change for every new resource.
+```json
+{
+  "mcpServers": {
+    "kubernetes": {
+      "type": "url",
+      "url": "http://k8s-mcp:8090/mcp"
+    }
+  }
+}
+```
 
 ## 5. RBAC Model
 
@@ -296,6 +311,7 @@ claude-forge kube render --context staging \
 # ~/.config/claude-forge/config.yaml
 kubernetes:
   enabled: true
+  read_only: false  # pass --read-only to the MCP server (defense-in-depth)
   contexts:
     - host_context: dev          # name in user's ~/.kube/config
       service_account_name: claude-forge-agent
@@ -303,80 +319,65 @@ kubernetes:
     - host_context: staging
       service_account_name: claude-forge-agent
       service_account_namespace: claude-forge
-  default_context: dev           # which one is current-context in the agent's kubeconfig
+  default_context: dev           # which one is current-context in the MCP server's kubeconfig
 ```
 
-### 7.2 Generated Agent Kubeconfig
+### 7.2 Generated Kubeconfig (for the MCP server container)
 
 ```yaml
 apiVersion: v1
 kind: Config
 clusters:
   - name: dev
-    cluster: { server: http://gateway:8090/dev }
+    cluster:
+      server: https://dev-cluster.example.com
+      certificate-authority-data: <base64 CA>
   - name: staging
-    cluster: { server: http://gateway:8090/staging }
+    cluster:
+      server: https://staging-cluster.example.com
+      certificate-authority-data: <base64 CA>
 contexts:
   - name: dev
-    context: { cluster: dev,     namespace: default }
+    context: { cluster: dev, user: dev-sa }
   - name: staging
-    context: { cluster: staging, namespace: default }
+    context: { cluster: staging, user: staging-sa }
+users:
+  - name: dev-sa
+    user: { token: <short-lived SA token> }
+  - name: staging-sa
+    user: { token: <short-lived SA token> }
 current-context: dev
 ```
 
-The agent runs `kubectl --context=staging get pods`; kubectl sends the request to `http://gateway:8090/staging/api/v1/namespaces/default/pods`; the gateway peels `/staging` off the path, looks up `(upstream URL, CA, token)` for that context from `k8s-contexts.json`, sets the Authorization header, and forwards.
-
-### 7.3 Per-Context State at the Gateway
-
-The gateway holds, for each enabled context: upstream API server URL, upstream CA cert, bearer token. These are written by the host into a single file:
-
-```json
-[
-  {
-    "name": "dev",
-    "server": "https://dev-cluster.example.com",
-    "ca_data": "<PEM>",
-    "token": "<short-lived bound token>"
-  },
-  {
-    "name": "staging",
-    "server": "https://staging-cluster.example.com",
-    "ca_data": "<PEM>",
-    "token": "<short-lived bound token>"
-  }
-]
-```
-
-File is `0600` on the host, owned by the launching user, regenerated every session, mounted read-only into the gateway. The agent never sees this file.
+This file lives only in the K8s MCP container. The agent never sees it.
 
 ## 8. Implementation Sketch
 
 | Change | Location |
 |---|---|
-| Install `kubectl` in agent image | `docker/agent/Dockerfile` |
-| Generate stub multi-context kubeconfig at container start | `docker/agent/entrypoint.sh` (driven by env from `claude-forge`) |
-| K8s reverse proxy with prefix-based context routing | `internal/k8s-mcp/` (new package, standalone binary) |
-| K8s MCP Dockerfile | `docker/k8s-mcp/Dockerfile` (new) |
 | Shared service lifecycle (start/stop/connect) | `internal/forge/orchestrator.go` |
 | `forge-shared` network management | `internal/forge/container/client.go` |
-| Routing-table loader (reads `k8s-contexts.json`) | `internal/k8s-mcp/contexts.go` |
+| Generate kubeconfig for MCP server with SA tokens | `internal/forge/kube/` (new package) |
+| TokenRequest call(s) at session start | `internal/forge/kube/` |
 | `kube render` subcommand and discovery-based rule generator | `cmd/claude-forge/kube_render.go` (new) |
-| TokenRequest call(s) at session start, write `k8s-contexts.json` | `internal/forge/kube/` (new package), called from `internal/forge/orchestrator.go` |
-| Config struct fields | `internal/forge/config/config.go` |
+| Config struct fields for kubernetes section | `internal/forge/config/config.go` |
+| Write MCP config to agent settings | `internal/forge/claudecode/settings.go` |
 | User docs | update architecture docs |
+
+No custom MCP server code needed. We pull the `containers/kubernetes-mcp-server` image and run it.
 
 The render command's rule generator is pure-data (input: discovery output + carveout config; output: `[]rbacv1.PolicyRule`), so it's testable without a live cluster — feed it canned discovery fixtures.
 
 ## 9. Rejected Alternatives
 
-### 9.1 Gateway with Method+Path Filter
+### 9.1 Custom K8s Reverse Proxy
 
-The first version of this proposal had the gateway implement an allow/deny list keyed on `(HTTP method, URL path)` mirroring K8s API URL grammar. Rejected because:
+An earlier version of this proposal built a custom HTTP reverse proxy that injected credentials per-context. Rejected because:
 
-- Duplicates RBAC, which already exists, is audited, and is enforced at the API server.
-- Hand-maintained list drifts as Kubernetes adds resources; discovery-driven RBAC adapts automatically.
-- Required special-casing for WebSocket upgrades (watch, log follow) and hijacked connections.
-- A bug in the filter is a security hole; a bug in RBAC is a Kubernetes CVE.
+- `containers/kubernetes-mcp-server` already exists, is actively maintained, and handles multi-context natively.
+- A custom proxy requires handling WebSocket upgrades, long-lived connections, and K8s API URL grammar.
+- Using an existing MCP server means the agent doesn't need `kubectl` at all — pure MCP tools.
+- Less code to maintain and fewer security-critical surfaces to audit.
 
 ### 9.2 Mount Kubeconfig in the Agent (with RBAC scoping)
 
@@ -384,7 +385,7 @@ Mount a kubeconfig file in the agent that has the SA token embedded, RBAC-scoped
 
 - Violates Invariant 1: the agent has the credential and could exfiltrate it.
 - Even a scoped token, if leaked, can be used outside the sandbox until expiry.
-- The gateway architecture costs little extra (one container, one extra listener) and earns full Invariant 1 compliance.
+- The separate-container architecture earns full Invariant 1 compliance.
 
 ### 9.3 Per-Tier Roles (`view`, `edit`, `admin`)
 
@@ -394,19 +395,36 @@ Pre-built ClusterRoles for different "tiers" the user can choose from. Rejected 
 - The built-in `edit` ClusterRole grants secrets access; can't be used as-is.
 - Discovery-driven rendering with the carveouts in §5 covers the common case. Tiers can be added later if real demand appears.
 
+### 9.4 Run K8s MCP as a Per-Session Sidecar
+
+Run a separate K8s MCP server per agent session. Rejected because:
+
+- K8s contexts are host-level (same clusters regardless of which repo the agent works on).
+- A shared server avoids duplicate TokenRequest calls and duplicate containers.
+- RBAC scoping is per-cluster, not per-repo — no need for per-session policy isolation.
+
+### 9.5 Gateway with Method+Path Filter
+
+Add path-based filtering at the proxy layer. Rejected because:
+
+- Duplicates RBAC, which already exists, is audited, and is enforced at the API server.
+- Hand-maintained list drifts as Kubernetes adds resources; discovery-driven RBAC adapts automatically.
+- A bug in the filter is a security hole; a bug in RBAC is a Kubernetes CVE.
+
 ## 10. Open Questions
 
-1. **Token refresh for long-lived sessions.** TokenRequest tokens have a finite expiry. v1 uses one token per context per session. v2 should refresh in the gateway before expiry; needs a small refresh loop and a way for the host to participate (or for the gateway to re-read a regenerated `k8s-contexts.json`).
+1. **Token refresh for long-lived sessions.** TokenRequest tokens have a finite expiry. v1 uses one token per context per session. v2 should refresh by regenerating the kubeconfig and restarting/signaling the MCP server.
 2. **Audit visibility.** All cluster activity is audit-logged on the cluster as the SA, not as the user. Worth documenting so users can grep audit logs for `claude-forge-agent`.
-3. **CRDs that embed credentials in `spec`.** Most credential-adjacent CRDs are safe to read — `SealedSecret` holds only ciphertext, `ExternalSecret` holds only a reference to the upstream store, cert-manager `Certificate` writes the key material out to a Secret (which RBAC blocks). The narrower concern is CRDs that put plaintext credentials directly in `spec` — for example, some `Issuer`/`ClusterIssuer` configurations with inline ACME or webhook tokens, or backup-operator CRDs with embedded cloud credentials. The current model grants full CRUD on all CRDs. A future config could let users add per-CRD carveouts to render; v1 documents the limitation.
-4. **`port-forward` policy.** Currently allowed. If a pod exposes an admin port (database, redis) the agent can reach it. Accept the risk for v1; revisit if it bites.
+3. **CRDs that embed credentials in `spec`.** Most credential-adjacent CRDs are safe to read. The narrower concern is CRDs that put plaintext credentials directly in `spec` (e.g., some Issuer/ClusterIssuer configs). The current model grants full CRUD on all CRDs. A future config could let users add per-CRD carveouts to render; v1 documents the limitation.
+4. **MCP server version pinning.** Which version of `containers/kubernetes-mcp-server` to pin? Track latest stable or pin to a tested version in `config.yaml`?
+5. **Tool filtering.** If the MCP server exposes tools that bypass RBAC (unlikely given native API access), we may need a lightweight MCP proxy that filters `tools/list` and rejects disallowed `tools/call`. Verify this isn't needed before shipping.
 
 ## 11. Rollout
 
 1. Land this proposal doc.
 2. Implement shared service infrastructure in the orchestrator (`forge-shared` network, reference-counted container lifecycle, `docker network connect` for agents).
-3. Implement the K8s MCP container as a standalone binary in `internal/k8s-mcp/`, plus agent-side multi-context kubeconfig generation. Ship behind `kubernetes.enabled: false` default.
+3. Add K8s config to `config.yaml`, kubeconfig generation with SA tokens, and MCP config writing. Wire into orchestrator to pull and run `containers/kubernetes-mcp-server` image. Ship behind `kubernetes.enabled: false` default.
 4. Implement `claude-forge kube render` with discovery-driven rendering and carveouts.
-5. Add e2e test: spin up a `kind` cluster in CI, render → apply → start with one context → assert that `kubectl get pods` succeeds, `kubectl get secret` returns 403, `kubectl delete namespace default` returns 403, `kubectl exec` returns 403. Then add a second `kind` cluster and assert multi-context routing works end-to-end. Also test that two concurrent sessions share the same K8s MCP container.
+5. Add e2e test: spin up a `kind` cluster in CI, render → apply → start with one context → assert that listing pods succeeds via MCP, getting secrets fails, deleting namespace fails. Then add a second `kind` cluster and assert multi-context works. Also test that two concurrent sessions share the same K8s MCP container.
 6. Document the workflow in architecture docs.
 7. Flip default to enabled after the e2e suite is green for two weeks.
