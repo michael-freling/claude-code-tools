@@ -69,6 +69,7 @@ func TestForgeStart(t *testing.T) {
 	// Step 3: Build Docker images locally.
 	agentImageName := "forge-e2e-agent"
 	gatewayImageName := "forge-e2e-gateway"
+	githubMCPImageName := "forge-e2e-github-mcp"
 
 	buildGateway := exec.Command("docker", "build", "-t", gatewayImageName, "-f", "docker/gateway/Dockerfile", ".")
 	buildGateway.Dir = projectRoot
@@ -80,13 +81,18 @@ func TestForgeStart(t *testing.T) {
 	out, err = buildAgent.CombinedOutput()
 	require.NoError(t, err, "failed to build agent image: %s", out)
 
+	buildGitHubMCP := exec.Command("docker", "build", "-t", githubMCPImageName, "-f", "docker/github-mcp/Dockerfile", ".")
+	buildGitHubMCP.Dir = projectRoot
+	out, err = buildGitHubMCP.CombinedOutput()
+	require.NoError(t, err, "failed to build github-mcp image: %s", out)
+
 	// Step 4: Set up a temp HOME with proper config structure.
 	tempHome := t.TempDir()
 
 	// Write config.yaml pointing to locally-built images.
 	configDir := filepath.Join(tempHome, ".config", "claude-forge")
 	require.NoError(t, os.MkdirAll(configDir, 0o755))
-	configContent := "images:\n  agent: " + agentImageName + "\n  gateway: " + gatewayImageName + "\n"
+	configContent := "images:\n  agent: " + agentImageName + "\n  gateway: " + gatewayImageName + "\n  github_mcp: " + githubMCPImageName + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configContent), 0o644))
 
 	// Create .claude directory structure that the orchestrator expects to mount.
@@ -239,6 +245,7 @@ func TestForgeStart_NoGitHubAuth(t *testing.T) {
 
 	agentImageName := "forge-e2e-agent-noauth"
 	gatewayImageName := "forge-e2e-gateway-noauth"
+	githubMCPImageName := "forge-e2e-github-mcp-noauth"
 
 	buildGateway := exec.Command("docker", "build", "-t", gatewayImageName, "-f", "docker/gateway/Dockerfile", ".")
 	buildGateway.Dir = projectRoot
@@ -250,12 +257,17 @@ func TestForgeStart_NoGitHubAuth(t *testing.T) {
 	out, err = buildAgent.CombinedOutput()
 	require.NoError(t, err, "failed to build agent image: %s", out)
 
+	buildGitHubMCP := exec.Command("docker", "build", "-t", githubMCPImageName, "-f", "docker/github-mcp/Dockerfile", ".")
+	buildGitHubMCP.Dir = projectRoot
+	out, err = buildGitHubMCP.CombinedOutput()
+	require.NoError(t, err, "failed to build github-mcp image: %s", out)
+
 	// Set up temp HOME with NO GitHub auth (no GITHUB_TOKEN, no gh hosts.yml)
 	tempHome := t.TempDir()
 
 	configDir := filepath.Join(tempHome, ".config", "claude-forge")
 	require.NoError(t, os.MkdirAll(configDir, 0o755))
-	configContent := fmt.Sprintf("images:\n  agent: %s\n  gateway: %s\n", agentImageName, gatewayImageName)
+	configContent := fmt.Sprintf("images:\n  agent: %s\n  gateway: %s\n  github_mcp: %s\n", agentImageName, gatewayImageName, githubMCPImageName)
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configContent), 0o644))
 
 	claudeDir := filepath.Join(tempHome, ".claude")

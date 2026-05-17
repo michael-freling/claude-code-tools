@@ -37,12 +37,16 @@ defaults:
 `,
 			want: &Config{
 				Images: ImagesConfig{
-					Agent:   "custom-agent:v1",
-					Gateway: "custom-gateway:v2",
+					Agent:     "custom-agent:v1",
+					Gateway:   "custom-gateway:v2",
+					GitHubMCP: DefaultGitHubMCPImage,
 				},
 				Defaults: DefaultsConfig{
 					SkipPermissions: true,
 					Worktree:        true,
+				},
+				Kubernetes: KubernetesConfig{
+					Image: DefaultKubernetesMCPImage,
 				},
 			},
 		},
@@ -53,12 +57,16 @@ defaults:
 `,
 			want: &Config{
 				Images: ImagesConfig{
-					Agent:   DefaultAgentImage,
-					Gateway: DefaultGatewayImage,
+					Agent:     DefaultAgentImage,
+					Gateway:   DefaultGatewayImage,
+					GitHubMCP: DefaultGitHubMCPImage,
 				},
 				Defaults: DefaultsConfig{
 					SkipPermissions: true,
 					Worktree:        false,
+				},
+				Kubernetes: KubernetesConfig{
+					Image: DefaultKubernetesMCPImage,
 				},
 			},
 		},
@@ -69,8 +77,12 @@ defaults:
 `,
 			want: &Config{
 				Images: ImagesConfig{
-					Agent:   "my-agent:latest",
-					Gateway: DefaultGatewayImage,
+					Agent:     "my-agent:latest",
+					Gateway:   DefaultGatewayImage,
+					GitHubMCP: DefaultGitHubMCPImage,
+				},
+				Kubernetes: KubernetesConfig{
+					Image: DefaultKubernetesMCPImage,
 				},
 			},
 		},
