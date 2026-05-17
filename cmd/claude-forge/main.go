@@ -510,7 +510,7 @@ var pluginsSyncRun = func(cmd *cobra.Command, args []string) error {
 	}
 	installCmds = append(installCmds, "claude plugins marketplace update")
 	for _, plugin := range syncPlugins {
-		installCmds = append(installCmds, fmt.Sprintf("claude plugins install %s || true && claude plugins enable %s || true", plugin, plugin))
+		installCmds = append(installCmds, fmt.Sprintf("claude plugins install %s || true", plugin))
 	}
 	shellCmd := strings.Join(installCmds, " && ")
 
@@ -522,6 +522,11 @@ var pluginsSyncRun = func(cmd *cobra.Command, args []string) error {
 
 	if err := dockerCmd.Run(); err != nil {
 		return fmt.Errorf("plugin sync failed: %w", err)
+	}
+
+	// Write enabledPlugins to settings.json so the agent container picks them up
+	if err := enablePluginsInSettings(configDir, syncPlugins); err != nil {
+		return fmt.Errorf("failed to update settings: %w", err)
 	}
 
 	fmt.Println("Plugin sync complete.")
@@ -552,6 +557,33 @@ func readHostPlugins(homeDir string) ([]string, error) {
 		plugins = append(plugins, key)
 	}
 	return plugins, nil
+}
+
+// enablePluginsInSettings reads settings.json from configDir, adds an
+// enabledPlugins map for all synced plugins, and writes it back.
+func enablePluginsInSettings(configDir string, plugins []string) error {
+	settingsPath := filepath.Join(configDir, "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return err
+	}
+
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return err
+	}
+
+	enabled := make(map[string]bool)
+	for _, p := range plugins {
+		enabled[p] = true
+	}
+	settings["enabledPlugins"] = enabled
+
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(settingsPath, append(out, '\n'), 0o644)
 }
 
 // marketplaceInfo holds parsed marketplace data.
