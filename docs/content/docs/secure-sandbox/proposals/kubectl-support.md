@@ -1,12 +1,12 @@
 ---
 title: "Proposal: kubectl Support in claude-forge"
-weight: 3
+weight: 1
 ---
 
 # Proposal: kubectl Support in claude-forge
 
 **Status**: Draft
-**Depends on**: [Secure Sandbox Architecture]({{< relref "/docs/secure-sandbox/secure-sandbox-architecture" >}})
+**Depends on**: [Secure Sandbox Architecture]({{< relref "/docs/secure-sandbox/architecture/secure-sandbox-architecture" >}})
 
 ## 1. Motivation
 
@@ -57,56 +57,74 @@ The agent is an LLM running with `--dangerously-skip-permissions`. Assume any to
 
 ## 4. Architecture
 
+### 4.1 Shared Service Model
+
+The K8s proxy runs as a **shared service** — a singleton container on the `forge-shared` Docker network, accessible to all agent sessions on the host. This is the right model because:
+
+- K8s contexts are host-level configuration (same `~/.kube/config` regardless of which repo the agent works on).
+- RBAC scoping is done at the cluster level via the ServiceAccount, not per-repo.
+- Running one K8s proxy per session would waste resources and complicate token management.
+
+This contrasts with per-session **sidecars** (like the GitHub MCP server) which must be scoped to a specific repo. See the [GitHub MCP Server proposal]({{< relref "/docs/secure-sandbox/proposals/github-mcp-server" >}}) for the full sidecar vs shared model.
+
+### 4.2 Network Topology
+
 ```
-┌────────────────────────────────────────────────────────────────────────────┐
-│  Host                                                                      │
+┌─ forge-shared network ─────────────────────────────────────────────────────┐
 │                                                                            │
-│  ~/.kube/config (user's full kubeconfig)                                   │
-│        │                                                                   │
-│        │ on `claude-forge start`: for each enabled context,                │
-│        │ call TokenRequest against the rendered ServiceAccount             │
-│        ▼                                                                   │
-│  k8s-contexts.json (host file, 0600)                                       │
-│  [ {name: dev,     server, ca, token},                                     │
-│    {name: staging, server, ca, token} ]                                    │
-│        │                                                                   │
-│        │ mounted read-only into gateway container                          │
-│        ▼                                                                   │
-│  ┌────────────────────────┐    ┌────────────────────────────────────────┐  │
-│  │ Agent container        │    │ Gateway container                      │  │
-│  │                        │    │ (single binary: `claude-forge gateway`)│  │
-│  │ kubectl                │    │                                        │  │
-│  │                        │    │ :8080  git HTTP proxy                  │  │
-│  │ KUBECONFIG=            │    │ :8083  forge-gh REST API               │  │
-│  │   /etc/forge/kubeconfig│    │ :8090  k8s reverse proxy ◄────────┐    │  │
-│  │                        │    │         routes by /<ctx> prefix:  │    │  │
-│  │ contexts:              │    │           /dev/...     → dev      │    │  │
-│  │  dev → :8090/dev       │───►│           /staging/... → staging  │    │  │
-│  │  staging → :8090/staging│   │         injects bearer token      │    │  │
-│  │                        │    │         no path filter            │    │  │
-│  │ no token, no CA,       │    │                                   │    │  │
-│  │ no real cluster URL    │    │ ──────────► real K8s API server   │    │  │
-│  └────────────────────────┘    └────────────────────────────────────────┘  │
+│  k8s-mcp:8090  (shared, one instance serves all agents)                    │
+│    ├─ reads k8s-contexts.json (mounted read-only)                          │
+│    ├─ routes by /<ctx> prefix                                              │
+│    ├─ injects bearer token per context                                     │
+│    └─ forwards to real K8s API servers                                     │
+│                                                                            │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                            │
+│  ┌── Session A ── forge_net_repoa_abc ───────────────────────────────┐    │
+│  │                                                                    │    │
+│  │  agent-a                                                           │    │
+│  │    ├─ kubectl → http://k8s-mcp:8090/<ctx>/...  (via shared net)    │────┤
+│  │    └─ git push → gateway-a:8080  (via session net)                 │    │
+│  │                                                                    │    │
+│  │  gateway-a:8080  (git proxy, scoped repo-a)                        │    │
+│  │  github-mcp-a:8083  (GitHub MCP, scoped repo-a)                    │    │
+│  │                                                                    │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+│                                                                            │
+│  ┌── Session B ── forge_net_repob_def ───────────────────────────────┐    │
+│  │                                                                    │    │
+│  │  agent-b                                                           │    │
+│  │    ├─ kubectl → http://k8s-mcp:8090/<ctx>/...  (via shared net)    │────┤
+│  │    └─ git push → gateway-b:8080  (via session net)                 │    │
+│  │                                                                    │    │
+│  │  gateway-b:8080  (git proxy, scoped repo-b)                        │    │
+│  │  github-mcp-b:8083  (GitHub MCP, scoped repo-b)                    │    │
+│  │                                                                    │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
 │                                                                            │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 4.1 Single Gateway Binary
+The agent reaches the K8s proxy via Docker's multi-network support:
+```bash
+# Agent is on its session network + shared network
+docker network connect forge-shared agent-a
+```
 
-The gateway container today already runs one `claude-forge gateway` binary that hosts two listeners (`:8080` git proxy, `:8083` forge-gh API) inside one Go process via `internal/gateway.Server`. The K8s proxy is a **third listener on the same `Server` struct** — not a separate binary, not a separate container, not a sidecar. Adding it touches `internal/gateway/server.go` to register the new handler and a new `internal/gateway/k8sproxy/` package for the handler itself.
+No Kubernetes or Docker Compose required.
 
-### 4.2 Components
+### 4.3 Components
 
 **Agent container** gains:
 - `kubectl` binary (latest stable from `dl.k8s.io`).
-- A generated kubeconfig at `/etc/forge/kubeconfig` with one cluster + context per enabled context, each cluster's `server` set to `http://gateway:8090/<ctx>`. No `token`, no `certificate-authority`, no real cluster URLs anywhere.
+- A generated kubeconfig at `/etc/forge/kubeconfig` with one cluster + context per enabled context, each cluster's `server` set to `http://k8s-mcp:8090/<ctx>`. No `token`, no `certificate-authority`, no real cluster URLs anywhere.
 - `KUBECONFIG=/etc/forge/kubeconfig` set in the container env.
 - **No** `~/.kube/`, no tokens, no CAs.
 
-**Gateway container** (single binary, multiple listeners) gains:
-- A new HTTP listener on `:8090`.
-- A read-only mount of `k8s-contexts.json` (the per-context routing table the host writes at session start).
-- The K8s handler in `internal/gateway/k8sproxy/` reads the routing table on startup, then for each request:
+**K8s MCP container** (shared, on `forge-shared` network):
+- A single HTTP listener on `:8090`.
+- A read-only mount of `k8s-contexts.json` (the per-context routing table the host writes).
+- The K8s handler reads the routing table on startup, then for each request:
   1. Extract the first path segment as context name.
   2. Look up `(upstream URL, CA, bearer token)` for that context. 404 if not found.
   3. Strip the context prefix from the path.
@@ -120,14 +138,23 @@ The gateway container today already runs one `claude-forge gateway` binary that 
    - Resolve `(server URL, CA data)`.
    - Call TokenRequest against the configured ServiceAccount → short-lived bound token.
 3. Write `k8s-contexts.json` (0600, host user-owned, regenerated each session) containing the per-context routing table.
-4. Mount `k8s-contexts.json` read-only into the gateway container.
-5. Generate the agent's stub kubeconfig with one entry per context and mount it.
+4. Start the K8s MCP container on `forge-shared` if not already running (or update its mounted config).
+5. Connect the agent to the `forge-shared` network.
+6. Generate the agent's stub kubeconfig with one entry per context and mount it.
 
 The agent never receives any tokens, CAs, or real cluster URLs.
 
-### 4.3 Why No Path Filter
+### 4.4 Shared Service Lifecycle
 
-RBAC already enforces `(verb, resource, name, namespace)` natively at the API server, with audit logging and decades of production use. A custom Go filter would be a parallel, hand-maintained policy that can drift from RBAC and has its own bugs. The gateway's job is reduced to exactly one thing: **inject the credential the agent must not see.** New CRDs added to the cluster work automatically with discovery-driven RBAC rendering; a path filter would need a code change for every new resource.
+The K8s MCP container is managed by the orchestrator with reference counting:
+
+- **Start**: On first `claude-forge start` with `kubernetes.enabled: true`, create the `forge-shared` network (if not exists) and start the K8s MCP container.
+- **Subsequent sessions**: Connect the new agent to `forge-shared`. The K8s MCP container is already running.
+- **Stop**: When the last session with K8s enabled exits, optionally stop the K8s MCP container. (Or leave it running — a lightweight idle container costs almost nothing.)
+
+### 4.5 Why No Path Filter
+
+RBAC already enforces `(verb, resource, name, namespace)` natively at the API server, with audit logging and decades of production use. A custom Go filter would be a parallel, hand-maintained policy that can drift from RBAC and has its own bugs. The K8s proxy's job is reduced to exactly one thing: **inject the credential the agent must not see.** New CRDs added to the cluster work automatically with discovery-driven RBAC rendering; a path filter would need a code change for every new resource.
 
 ## 5. RBAC Model
 
@@ -328,13 +355,15 @@ File is `0600` on the host, owned by the launching user, regenerated every sessi
 |---|---|
 | Install `kubectl` in agent image | `docker/agent/Dockerfile` |
 | Generate stub multi-context kubeconfig at container start | `docker/agent/entrypoint.sh` (driven by env from `claude-forge`) |
-| K8s reverse proxy with prefix-based context routing | `internal/gateway/k8sproxy/` (new package) |
-| Wire third listener into existing gateway server | `internal/gateway/server.go` |
-| Routing-table loader (reads `k8s-contexts.json`) | `internal/gateway/k8sproxy/contexts.go` |
+| K8s reverse proxy with prefix-based context routing | `internal/k8s-mcp/` (new package, standalone binary) |
+| K8s MCP Dockerfile | `docker/k8s-mcp/Dockerfile` (new) |
+| Shared service lifecycle (start/stop/connect) | `internal/forge/orchestrator.go` |
+| `forge-shared` network management | `internal/forge/container/client.go` |
+| Routing-table loader (reads `k8s-contexts.json`) | `internal/k8s-mcp/contexts.go` |
 | `kube render` subcommand and discovery-based rule generator | `cmd/claude-forge/kube_render.go` (new) |
 | TokenRequest call(s) at session start, write `k8s-contexts.json` | `internal/forge/kube/` (new package), called from `internal/forge/orchestrator.go` |
 | Config struct fields | `internal/forge/config/config.go` |
-| User docs | new section in `secure-sandbox-architecture.md`; update `README.md` |
+| User docs | update architecture docs |
 
 The render command's rule generator is pure-data (input: discovery output + carveout config; output: `[]rbacv1.PolicyRule`), so it's testable without a live cluster — feed it canned discovery fixtures.
 
@@ -374,9 +403,10 @@ Pre-built ClusterRoles for different "tiers" the user can choose from. Rejected 
 
 ## 11. Rollout
 
-1. Land this proposal doc (current PR).
-2. Implement the gateway K8s proxy as a third listener on `internal/gateway.Server`, plus the agent-side multi-context kubeconfig generation. Ship behind `kubernetes.enabled: false` default.
-3. Implement `claude-forge kube render` with discovery-driven rendering and carveouts.
-4. Add e2e test: spin up a `kind` cluster in CI, render → apply → start with one context → assert that `kubectl get pods` succeeds, `kubectl get secret` returns 403, `kubectl delete namespace default` returns 403, `kubectl exec` returns 403. Then add a second `kind` cluster and assert multi-context routing works end-to-end.
-5. Document the workflow in `secure-sandbox-architecture.md` and `README.md`.
-6. Flip default to enabled after the e2e suite is green for two weeks.
+1. Land this proposal doc.
+2. Implement shared service infrastructure in the orchestrator (`forge-shared` network, reference-counted container lifecycle, `docker network connect` for agents).
+3. Implement the K8s MCP container as a standalone binary in `internal/k8s-mcp/`, plus agent-side multi-context kubeconfig generation. Ship behind `kubernetes.enabled: false` default.
+4. Implement `claude-forge kube render` with discovery-driven rendering and carveouts.
+5. Add e2e test: spin up a `kind` cluster in CI, render → apply → start with one context → assert that `kubectl get pods` succeeds, `kubectl get secret` returns 403, `kubectl delete namespace default` returns 403, `kubectl exec` returns 403. Then add a second `kind` cluster and assert multi-context routing works end-to-end. Also test that two concurrent sessions share the same K8s MCP container.
+6. Document the workflow in architecture docs.
+7. Flip default to enabled after the e2e suite is green for two weeks.
