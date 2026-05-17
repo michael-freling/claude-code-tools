@@ -774,7 +774,7 @@ func TestPluginsSyncCmd_WithPlugins(t *testing.T) {
 }
 
 func TestReadHostMarketplaces(t *testing.T) {
-	t.Run("reads github sources", func(t *testing.T) {
+	t.Run("reads github sources and names", func(t *testing.T) {
 		dir := t.TempDir()
 		content := `{
 			"claude-code-plugins": {"source": {"source": "github", "repo": "anthropics/claude-code"}},
@@ -782,10 +782,12 @@ func TestReadHostMarketplaces(t *testing.T) {
 		}`
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "known_marketplaces.json"), []byte(content), 0o644))
 
-		sources := readHostMarketplaces(dir)
-		assert.Len(t, sources, 2)
-		assert.Contains(t, sources, "anthropics/claude-code")
-		assert.Contains(t, sources, "org/custom-plugins")
+		info := readHostMarketplaces(dir)
+		assert.Len(t, info.Sources, 2)
+		assert.Contains(t, info.Sources, "anthropics/claude-code")
+		assert.Contains(t, info.Sources, "org/custom-plugins")
+		assert.True(t, info.Names["claude-code-plugins"])
+		assert.True(t, info.Names["custom"])
 	})
 
 	t.Run("skips non-github sources", func(t *testing.T) {
@@ -796,12 +798,15 @@ func TestReadHostMarketplaces(t *testing.T) {
 		}`
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "known_marketplaces.json"), []byte(content), 0o644))
 
-		sources := readHostMarketplaces(dir)
-		assert.Equal(t, []string{"anthropics/claude-code"}, sources)
+		info := readHostMarketplaces(dir)
+		assert.Equal(t, []string{"anthropics/claude-code"}, info.Sources)
+		assert.True(t, info.Names["remote"])
+		assert.False(t, info.Names["local"])
 	})
 
-	t.Run("returns nil when file missing", func(t *testing.T) {
-		sources := readHostMarketplaces(t.TempDir())
-		assert.Nil(t, sources)
+	t.Run("returns empty when file missing", func(t *testing.T) {
+		info := readHostMarketplaces(t.TempDir())
+		assert.Empty(t, info.Sources)
+		assert.Empty(t, info.Names)
 	})
 }

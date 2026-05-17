@@ -462,10 +462,36 @@ var pluginsSyncRun = func(cmd *cobra.Command, args []string) error {
 
 	// Read host marketplace sources to add them inside the container
 	hostPluginsDir := filepath.Join(homeDir, ".claude", "plugins")
-	marketplaces := readHostMarketplaces(hostPluginsDir)
+	mpInfo := readHostMarketplaces(hostPluginsDir)
+
+	// Filter plugins: skip those from unavailable marketplaces, deduplicate by name
+	var syncPlugins []string
+	seenNames := make(map[string]bool)
+	for _, plugin := range plugins {
+		parts := strings.SplitN(plugin, "@", 2)
+		name := parts[0]
+		marketplace := ""
+		if len(parts) == 2 {
+			marketplace = parts[1]
+		}
+		if marketplace != "" && !mpInfo.Names[marketplace] {
+			fmt.Printf("Skipping %s (marketplace %q not available remotely)\n", plugin, marketplace)
+			continue
+		}
+		if seenNames[name] {
+			continue
+		}
+		seenNames[name] = true
+		syncPlugins = append(syncPlugins, plugin)
+	}
+
+	if len(syncPlugins) == 0 {
+		fmt.Println("No syncable plugins found.")
+		return nil
+	}
 
 	containerName := "forge-plugins-sync"
-	fmt.Printf("Syncing %d plugins...\n", len(plugins))
+	fmt.Printf("Syncing %d plugins...\n", len(syncPlugins))
 
 	// Start a temporary container with the plugins dir mounted
 	uid := os.Getuid()
@@ -479,11 +505,11 @@ var pluginsSyncRun = func(cmd *cobra.Command, args []string) error {
 
 	// Build commands: add marketplaces, update, then install each plugin
 	var installCmds []string
-	for _, m := range marketplaces {
-		installCmds = append(installCmds, fmt.Sprintf("claude plugins marketplace add %s || true", m))
+	for _, src := range mpInfo.Sources {
+		installCmds = append(installCmds, fmt.Sprintf("claude plugins marketplace add %s || true", src))
 	}
 	installCmds = append(installCmds, "claude plugins marketplace update")
-	for _, plugin := range plugins {
+	for _, plugin := range syncPlugins {
 		installCmds = append(installCmds, fmt.Sprintf("claude plugins install %s || true", plugin))
 	}
 	shellCmd := strings.Join(installCmds, " && ")
@@ -528,12 +554,19 @@ func readHostPlugins(homeDir string) ([]string, error) {
 	return plugins, nil
 }
 
-// readHostMarketplaces reads known_marketplaces.json and returns marketplace
-// source identifiers (GitHub repos) that can be passed to `claude plugins marketplace add`.
-func readHostMarketplaces(hostPluginsDir string) []string {
+// marketplaceInfo holds parsed marketplace data.
+type marketplaceInfo struct {
+	Sources []string          // GitHub repos to add
+	Names   map[string]bool   // names of available (GitHub-sourced) marketplaces
+}
+
+// readHostMarketplaces reads known_marketplaces.json and returns marketplace info.
+func readHostMarketplaces(hostPluginsDir string) marketplaceInfo {
+	info := marketplaceInfo{Names: make(map[string]bool)}
+
 	data, err := os.ReadFile(filepath.Join(hostPluginsDir, "known_marketplaces.json"))
 	if err != nil {
-		return nil
+		return info
 	}
 
 	var marketplaces map[string]struct {
@@ -543,16 +576,16 @@ func readHostMarketplaces(hostPluginsDir string) []string {
 		} `json:"source"`
 	}
 	if err := json.Unmarshal(data, &marketplaces); err != nil {
-		return nil
+		return info
 	}
 
-	var sources []string
-	for _, m := range marketplaces {
+	for name, m := range marketplaces {
 		if m.Source.Source == "github" && m.Source.Repo != "" {
-			sources = append(sources, m.Source.Repo)
+			info.Sources = append(info.Sources, m.Source.Repo)
+			info.Names[name] = true
 		}
 	}
-	return sources
+	return info
 }
 
 // newForgeGHCmd creates the "forge-gh" subcommand as an explicit alternative
