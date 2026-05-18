@@ -15,6 +15,7 @@ import (
 	"github.com/michael-freling/claude-code-tools/internal/forge/auth"
 	forgeconfig "github.com/michael-freling/claude-code-tools/internal/forge/config"
 	"github.com/michael-freling/claude-code-tools/internal/forge/container"
+	"github.com/michael-freling/claude-code-tools/internal/forge/kube"
 	"github.com/michael-freling/claude-code-tools/internal/forge/project"
 	"github.com/michael-freling/claude-code-tools/internal/forge/session"
 	"github.com/michael-freling/claude-code-tools/internal/forgegh"
@@ -77,6 +78,7 @@ containers, Docker networks, and session state.`,
 		newVersionCmd(),
 		newGatewayCmd(),
 		newForgeGHCmd(),
+		newKubeCmd(),
 	)
 
 	return rootCmd
@@ -642,6 +644,62 @@ func extractGitHubRepo(path string) string {
 		return ""
 	}
 	return parts[0] + "/" + parts[1]
+}
+
+// newKubeCmd creates the "kube" subcommand group for Kubernetes integration.
+func newKubeCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "kube",
+		Short: "Kubernetes integration commands",
+	}
+	cmd.AddCommand(newKubeRenderCmd())
+	return cmd
+}
+
+// newKubeRenderCmd creates the "kube render" subcommand that generates RBAC
+// manifests for the Kubernetes MCP server's service account.
+func newKubeRenderCmd() *cobra.Command {
+	var (
+		clusterRoleName         string
+		serviceAccountName      string
+		serviceAccountNamespace string
+		kubeconfig              string
+		kubeContext             string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "render",
+		Short: "Generate RBAC manifests for Kubernetes MCP access",
+		Long: `Discovers API resources from the target cluster and generates
+ServiceAccount, ClusterRole, and ClusterRoleBinding YAML manifests with
+safe carveouts (no secrets, no exec, no RBAC tampering).
+
+The output can be piped directly to kubectl apply:
+
+  claude-forge kube render --context dev | kubectl apply -f -`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			output, err := kube.Render(kube.RenderOptions{
+				ClusterRoleName:         clusterRoleName,
+				ServiceAccountName:      serviceAccountName,
+				ServiceAccountNamespace: serviceAccountNamespace,
+				Kubeconfig:              kubeconfig,
+				Context:                 kubeContext,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Print(output)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&clusterRoleName, "cluster-role-name", "claude-forge-agent", "Name for the generated ClusterRole and ClusterRoleBinding")
+	cmd.Flags().StringVar(&serviceAccountName, "service-account-name", "claude-forge-agent", "Name for the generated ServiceAccount")
+	cmd.Flags().StringVar(&serviceAccountNamespace, "service-account-namespace", "default", "Namespace for the ServiceAccount")
+	cmd.Flags().StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig (defaults to $KUBECONFIG or ~/.kube/config)")
+	cmd.Flags().StringVar(&kubeContext, "context", "", "Kubeconfig context to use for API discovery")
+
+	return cmd
 }
 
 // newForgeGHCmd creates the "forge-gh" subcommand as an explicit alternative

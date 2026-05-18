@@ -27,7 +27,7 @@ func TestNewRootCmd(t *testing.T) {
 
 	expectedSubcommands := []string{
 		"start", "resume", "stop", "status",
-		"build", "auth", "plugins", "version", "gateway", "forge-gh",
+		"build", "auth", "plugins", "version", "gateway", "forge-gh", "kube",
 	}
 
 	subcommandNames := make(map[string]bool)
@@ -186,6 +186,21 @@ func (s *stubContainerManager) ImageExists(_ context.Context, _ string) (bool, e
 }
 func (s *stubContainerManager) ContainerLogs(_ context.Context, _ string) (string, error) {
 	return "", nil
+}
+func (s *stubContainerManager) StartGitHubMCP(_ context.Context, _ container.GitHubMCPOptions) (string, error) {
+	return "mcp-id", nil
+}
+func (s *stubContainerManager) EnsureSharedNetwork(_ context.Context, _ string) (string, error) {
+	return "shared-net-id", nil
+}
+func (s *stubContainerManager) ConnectNetwork(_ context.Context, _, _ string, _ []string) error {
+	return nil
+}
+func (s *stubContainerManager) IsContainerRunning(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+func (s *stubContainerManager) StartSharedService(_ context.Context, _ container.SharedServiceOptions) (string, error) {
+	return "shared-id", nil
 }
 func (s *stubContainerManager) Close() error { return nil }
 
