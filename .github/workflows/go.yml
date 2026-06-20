@@ -1,0 +1,82 @@
+# This workflow will build a golang project
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
+
+name: Go
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+        cache: true
+
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v7
+      with:
+        version: v2.6.2
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+        cache: true
+
+    - name: Build
+      run: go build -v ./...
+
+    - name: Test
+      run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+    - name: Calculate coverage
+      run: go tool cover -func=coverage.txt
+
+    # NEVER lower this threshold. Coverage must stay at or above 90%.
+    - name: Check coverage threshold
+      run: |
+        # Exclude generated mocks from coverage threshold.
+        grep -v "mock_" coverage.txt > coverage_filtered.txt
+        coverage=$(go tool cover -func=coverage_filtered.txt | grep total | awk '{print $3}' | sed 's/%//')
+        threshold=90.0
+        echo "Total coverage (excluding generated mocks): ${coverage}%"
+        echo "Threshold: ${threshold}%"
+        if (( $(echo "$coverage < $threshold" | bc -l) )); then
+          echo "Error: Coverage ${coverage}% is below threshold ${threshold}%"
+          exit 1
+        else
+          echo "Coverage ${coverage}% meets threshold ${threshold}%"
+        fi
+
+    - name: Upload coverage artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: coverage.txt
+
+  unit-test-timeout:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+        cache: true
+
+    - name: Check unit test timeout
+      run: ./scripts/check-unit-test-timeout.sh

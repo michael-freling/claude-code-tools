@@ -1,0 +1,9 @@
+# Binaries for programs and plugins
+/claude-hooks
+/update-ci-secrets
+
+# Coverage files
+coverage*.txt
+
+# Claude Code state
+.claude/
