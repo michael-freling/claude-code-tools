@@ -42,8 +42,9 @@ Wire it into Claude Code's `settings.json` as a `PreToolUse` hook:
 ## update-ci-secrets
 
 Sets the `CLAUDE_CODE_OAUTH_TOKEN` GitHub Actions secret so the Claude Code PR
-review workflow can authenticate. It resolves the OAuth token from your local
-Claude Code credentials (or `--oauth-token`) and stores it via the `gh` CLI.
+review workflow can authenticate. By default it mints a **long-lived** token
+(valid ~1 year) with `claude setup-token` and stores it via the `gh` CLI, so the
+CI secret does not go stale.
 
 ### Installation
 
@@ -54,20 +55,31 @@ go install github.com/michael-freling/claude-code-tools/cmd/update-ci-secrets@la
 ### Usage
 
 ```bash
-# Resolve the token from ~/.claude/.credentials.json (or the
-# ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN env vars) and set the secret
-# on the current repository.
-update-ci-secrets --from-credentials
+# Default: run `claude setup-token` and upload the resulting ~1-year token
+# to the current repository. This runs an interactive OAuth authorization
+# flow, so complete the browser login when prompted.
+update-ci-secrets
 
-# Set a token explicitly on a specific repository.
+# Upload a token you already have to a specific repository.
 update-ci-secrets --repo owner/name --oauth-token "$TOKEN"
 ```
 
-Token resolution order (via `internal/auth`):
+### Why not the local subscription token?
 
-1. `ANTHROPIC_API_KEY` environment variable
-2. `CLAUDE_CODE_OAUTH_TOKEN` environment variable
-3. `~/.claude/.credentials.json`
+`~/.claude/.credentials.json` holds the **interactive Claude subscription access
+token**, which Claude Code rotates roughly hourly. Uploading that would make the
+`CLAUDE_CODE_OAUTH_TOKEN` secret expire within the hour and the PR review
+workflow would start failing until you re-ran the command. `claude setup-token`
+instead mints a separate token valid for ~1 year, which is what CI needs.
+
+`claude setup-token` prints the token to the terminal and never writes it to
+`.credentials.json`. The default path runs it for you and captures the token; if
+you already have one, upload it directly with `--oauth-token`.
+
+> **Note:** because `claude setup-token` requires an interactive browser login,
+> `update-ci-secrets` cannot mint a token unattended — run it from a terminal.
+> Requires the `gh` CLI (authenticated with repo admin access) and, for the
+> default path, the `claude` CLI.
 
 ## Development
 
