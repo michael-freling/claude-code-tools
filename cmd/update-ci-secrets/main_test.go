@@ -11,12 +11,11 @@ import (
 )
 
 type fakeUpdater struct {
-	masked        string
-	err           error
-	gotToken      string
-	gotClaudeDir  string
-	updateCalled  bool
-	fromCredsCall bool
+	masked         string
+	err            error
+	gotToken       string
+	updateCalled   bool
+	setupTokenCall bool
 }
 
 func (f *fakeUpdater) Update(_ context.Context, token string) (string, error) {
@@ -25,9 +24,8 @@ func (f *fakeUpdater) Update(_ context.Context, token string) (string, error) {
 	return f.masked, f.err
 }
 
-func (f *fakeUpdater) UpdateFromCredentials(_ context.Context, claudeDir string) (string, error) {
-	f.fromCredsCall = true
-	f.gotClaudeDir = claudeDir
+func (f *fakeUpdater) UpdateFromSetupToken(_ context.Context) (string, error) {
+	f.setupTokenCall = true
 	return f.masked, f.err
 }
 
@@ -54,46 +52,29 @@ func runCmd(args ...string) (string, error) {
 	return out.String(), err
 }
 
-func TestRun_DefaultsToCredentials(t *testing.T) {
+func TestRun_DefaultsToSetupToken(t *testing.T) {
 	f := &fakeUpdater{masked: "sk-ant-o...wxyz"}
 	withFakeUpdater(t, f)
 
 	out, err := runCmd()
 	require.NoError(t, err)
-	assert.True(t, f.fromCredsCall)
+	assert.True(t, f.setupTokenCall)
 	assert.False(t, f.updateCalled)
-	assert.Contains(t, f.gotClaudeDir, ".claude")
 	assert.Contains(t, out, "Set CLAUDE_CODE_OAUTH_TOKEN")
 }
 
-func TestRun_FromCredentialsDisabledWithoutToken(t *testing.T) {
-	_, err := runCmd("--from-credentials=false")
-	assert.ErrorContains(t, err, "--oauth-token or enable --from-credentials")
-}
-
-func TestRun_FromCredentialsDefaultValue(t *testing.T) {
-	cmd := newRootCmd()
-	flag := cmd.Flags().Lookup("from-credentials")
-	assert.NotNil(t, flag)
-	assert.Equal(t, "true", flag.DefValue)
-}
-
-func TestRun_MutuallyExclusiveFlags(t *testing.T) {
-	_, err := runCmd("--oauth-token", "tok", "--from-credentials")
-	assert.ErrorContains(t, err, "mutually exclusive")
-}
-
-func TestRun_OAuthTokenWithDefaultCredentialsFlag(t *testing.T) {
-	// --oauth-token alone must work even though --from-credentials now
-	// defaults to true (it's only a conflict when explicitly set).
-	f := &fakeUpdater{masked: "sk-ant-o...abcd"}
+func TestRun_SetupTokenError(t *testing.T) {
+	f := &fakeUpdater{err: errors.New("claude boom")}
 	withFakeUpdater(t, f)
 
-	_, err := runCmd("--oauth-token", "sk-ant-oat-token")
-	require.NoError(t, err)
-	assert.True(t, f.updateCalled)
-	assert.False(t, f.fromCredsCall)
-	assert.Equal(t, "sk-ant-oat-token", f.gotToken)
+	_, err := runCmd()
+	assert.ErrorContains(t, err, "claude boom")
+}
+
+func TestRun_NoFromCredentialsFlag(t *testing.T) {
+	// The credentials path was removed; the flag should no longer exist.
+	cmd := newRootCmd()
+	assert.Nil(t, cmd.Flags().Lookup("from-credentials"))
 }
 
 func TestRun_RepoFlagDefaultsEmpty(t *testing.T) {
@@ -120,32 +101,10 @@ func TestRun_OAuthTokenSuccess(t *testing.T) {
 	out, err := runCmd("--oauth-token", "sk-ant-oat-token", "--repo", "owner/repo")
 	require.NoError(t, err)
 	assert.True(t, f.updateCalled)
+	assert.False(t, f.setupTokenCall)
 	assert.Equal(t, "sk-ant-oat-token", f.gotToken)
 	assert.Equal(t, "owner/repo", *gotRepo)
 	assert.Contains(t, out, "Set CLAUDE_CODE_OAUTH_TOKEN (sk-ant-o...abcd) on owner/repo")
-}
-
-func TestRun_FromCredentialsSuccess(t *testing.T) {
-	f := &fakeUpdater{masked: "sk-ant-o...wxyz"}
-	withFakeUpdater(t, f)
-
-	out, err := runCmd("--from-credentials")
-	require.NoError(t, err)
-	assert.True(t, f.fromCredsCall)
-	assert.Contains(t, f.gotClaudeDir, ".claude")
-	assert.Contains(t, out, "Set CLAUDE_CODE_OAUTH_TOKEN")
-}
-
-func TestRun_OAuthTokenWithCredentialsExplicitlyDisabled(t *testing.T) {
-	// Explicitly disabling credentials while supplying a token is valid.
-	f := &fakeUpdater{masked: "sk-ant-o...abcd"}
-	withFakeUpdater(t, f)
-
-	_, err := runCmd("--from-credentials=false", "--oauth-token", "sk-ant-oat-token")
-	require.NoError(t, err)
-	assert.True(t, f.updateCalled)
-	assert.False(t, f.fromCredsCall)
-	assert.Equal(t, "sk-ant-oat-token", f.gotToken)
 }
 
 func TestRun_UpdaterError(t *testing.T) {

@@ -3,8 +3,6 @@ package cisecrets
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -67,41 +65,67 @@ func TestUpdate(t *testing.T) {
 	})
 }
 
-func TestUpdateFromCredentials(t *testing.T) {
-	// auth.Resolve checks env vars first; clear them so the file is used.
-	t.Setenv("ANTHROPIC_API_KEY", "")
-	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
-
-	t.Run("oauth token from file", func(t *testing.T) {
-		dir := t.TempDir()
-		writeCreds(t, dir, `{"claudeAiOauth":{"accessToken":"sk-ant-oat-abcdefgh1234"}}`)
-
+func TestUpdateFromSetupToken(t *testing.T) {
+	t.Run("mints and uploads the token", func(t *testing.T) {
 		var gotValue string
-		u := &Updater{Repo: "owner/repo", setter: func(_ context.Context, _, _, value string) error {
-			gotValue = value
-			return nil
-		}}
-		masked, err := u.UpdateFromCredentials(context.Background(), dir)
+		u := &Updater{
+			Repo:   "owner/repo",
+			minter: func(context.Context) (string, error) { return "  sk-ant-oat01-longlivedtoken1234  ", nil },
+			setter: func(_ context.Context, _, _, value string) error {
+				gotValue = value
+				return nil
+			},
+		}
+		masked, err := u.UpdateFromSetupToken(context.Background())
 		require.NoError(t, err)
-		assert.Equal(t, "sk-ant-oat-abcdefgh1234", gotValue)
+		assert.Equal(t, "sk-ant-oat01-longlivedtoken1234", gotValue)
 		assert.Equal(t, "sk-ant-o...1234", masked)
 	})
 
-	t.Run("api key rejected", func(t *testing.T) {
-		t.Setenv("ANTHROPIC_API_KEY", "sk-ant-api-key")
-		u := &Updater{Repo: "owner/repo", setter: func(context.Context, string, string, string) error {
-			t.Fatal("setter must not run for api_key credential")
-			return nil
-		}}
-		_, err := u.UpdateFromCredentials(context.Background(), t.TempDir())
-		assert.ErrorContains(t, err, "not an OAuth token")
+	t.Run("minter error is wrapped", func(t *testing.T) {
+		u := &Updater{
+			Repo:   "owner/repo",
+			minter: func(context.Context) (string, error) { return "", errors.New("claude boom") },
+			setter: func(context.Context, string, string, string) error {
+				t.Fatal("setter must not run when minting fails")
+				return nil
+			},
+		}
+		_, err := u.UpdateFromSetupToken(context.Background())
+		assert.ErrorContains(t, err, "claude boom")
+		assert.ErrorContains(t, err, "setup-token")
+	})
+}
+
+func TestExtractToken(t *testing.T) {
+	t.Run("bare token", func(t *testing.T) {
+		assert.Equal(t, "sk-ant-oat01-abcdefghijklmnop-qrstuv_wxyz", extractToken("sk-ant-oat01-abcdefghijklmnop-qrstuv_wxyz\n"))
 	})
 
-	t.Run("resolve error", func(t *testing.T) {
-		u := &Updater{Repo: "owner/repo", setter: func(context.Context, string, string, string) error { return nil }}
-		_, err := u.UpdateFromCredentials(context.Background(), filepath.Join(t.TempDir(), "missing"))
-		assert.ErrorContains(t, err, "--oauth-token")
+	t.Run("token amid surrounding output", func(t *testing.T) {
+		out := "Visit https://claude.ai/oauth to authorize.\n" +
+			"Paste code: xyz\n" +
+			"Your token: sk-ant-oat01-abcdefghijklmnop1234\n" +
+			"Done.\n"
+		assert.Equal(t, "sk-ant-oat01-abcdefghijklmnop1234", extractToken(out))
 	})
+
+	t.Run("returns the last match", func(t *testing.T) {
+		out := "old sk-ant-oat01-aaaaaaaaaaaaaaaa11\nnew sk-ant-oat01-bbbbbbbbbbbbbbbb22\n"
+		assert.Equal(t, "sk-ant-oat01-bbbbbbbbbbbbbbbb22", extractToken(out))
+	})
+
+	t.Run("no token", func(t *testing.T) {
+		assert.Equal(t, "", extractToken("nothing to see here"))
+	})
+}
+
+func TestClaudeSetupToken_CommandError(t *testing.T) {
+	// Point PATH at an empty dir so claude cannot be found, exercising the
+	// error path without running the real interactive flow.
+	t.Setenv("PATH", t.TempDir())
+	_, err := claudeSetupToken(context.Background())
+	assert.ErrorContains(t, err, "claude setup-token failed")
 }
 
 func TestGhSecretSet_CommandError(t *testing.T) {
@@ -109,9 +133,4 @@ func TestGhSecretSet_CommandError(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	err := ghSecretSet(context.Background(), "owner/repo", SecretName, "value")
 	assert.Error(t, err)
-}
-
-func writeCreds(t *testing.T, dir, content string) {
-	t.Helper()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(content), 0o600))
 }
